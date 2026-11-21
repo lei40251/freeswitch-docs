@@ -1,0 +1,251 @@
+---
+sidebar_position: 3
+id: recipe-time-routing
+slug: /recipes/time-routing
+title: "第 35 章：营业时间与分时路由"
+description: "使用 XML 拨号计划时间条件，在营业时段路由到话务员或 IVR，在非营业时段和节假日播放休息提示并转入语音信箱。"
+sidebar_label: "35. 营业时间与分时路由"
+---
+
+# 第 35 章：营业时间与分时路由 {#chapter-35-business-hours-and-time-of-day-routing}
+
+## 目标 {#goal}
+
+营业时将主叫接到人工目的地，非营业时播放休息提示并提供语音信箱。营业时间为周一至周五上午 9 点到下午 5 点，呼叫到达话务员或 IVR 自动话务台；其他时段、周末和节假日播放“已休息”提示，并允许留言。
+
+决策完全使用 XML 拨号计划的 `<condition>` 时间属性，无需脚本，每次呼叫重新判断。通道变量 `open` 保存营业或休息的决策，路由条目读取它并分派呼叫。
+
+呼叫流程如下：
+
+```
+Inbound call ──▶ holiday check ──┬─ holiday today? ──▶ set open=false
+                                 │
+                 business-hours check ──┬─ Mon-Fri 9-17 & not a holiday? ──▶ open=true
+                                        │
+                          route on ${open} ──┬─ open=true  ──▶ operator / ivr
+                                             └─ open=false ──▶ closed greeting ──▶ voicemail
+```
+
+## 前置条件 {#prerequisites}
+
+本例组合参考章节中已有介绍的功能。不熟悉的步骤请先阅读：
+
+- [第 15 章：时间与条件路由](../dialplan/time-and-condition-routing.mdx)：`<condition>` 时间属性、取值范围和时区处理的完整参考。
+- [第 12 章：XML 拨号计划](../dialplan/xml-dialplan.mdx)：条目、条件、动作，以及 `continue` / `break` 标志的求值方式。
+- [第 21 章：IVR 菜单](../applications/ivr-menus.mdx)：营业时段目的地使用的 `<menu>` 结构和 `ivr` 应用。
+- [第 19 章：语音信箱](../applications/voicemail.mdx)：`voicemail` 应用及休息分支写入的用户信箱。
+
+本例假定使用 vanilla 配置：`ivr.conf.xml` 包含 `ivr_menus` 目录，存在 `default` 语音信箱配置实例和 `default` 拨号计划上下文。示例参照随附 `default.xml` 的 `tod_example` 和 `holiday_example`，可与现有配置并列添加。
+
+## 实现步骤 {#build-it}
+
+此模式使用三个协作条目，均设置 `continue="true"`，使求值依次继续：
+
+1. **节假日覆盖**：首先运行，当天为节假日则强制 `open=false`。
+2. **营业时间窗口**：仅在营业窗口内设置 `open=true`。
+3. **路由器**：读取 `${open}`，送往话务员/IVR，或休息提示与语音信箱。
+
+按此顺序将它们添加到 `conf/dialplan/default.xml` 的 `default` 上下文，或随附 `default.xml` 所包含的 `conf/dialplan/default/` 文件中。
+
+### 1. 默认休息，营业时段开放 {#1-default-to-closed-then-open-during-business-hours}
+
+先建立安全默认值与营业窗口。首个条目无条件设置 `open=false`，让所有未显式开放的路径保持休息。第二个条目匹配营业时段，并将 `open` 改为 `true`：
+
+```xml
+<extension name="set_closed_default" continue="true">
+  <condition>
+    <action application="set" data="open=false"/>
+  </condition>
+</extension>
+
+<extension name="business_hours" continue="true">
+  <condition wday="2-6" hour="9-17">
+    <action application="set" data="open=true"/>
+  </condition>
+</extension>
+```
+
+`wday="2-6"` 匹配周一至周五（`wday` 范围 `1`-`7`，周日为 1）；`hour="9-17"` 包含 9 至 17 时，即 9:00:00 到 17:59:59。若要恰好下午 5 点结束，改用按秒比较的 `time-of-day="09:00-17:00"`。两个属性均接受逗号分隔的列表和范围，例如 `wday="2-6"`、`hour="9-17"` 是范围，`hour="9,13,14"` 是列表。
+
+### 2. 节假日覆盖（优先匹配） {#2-override-for-holidays-matched-first}
+
+在营业时间检查可能开放之前，必须先决定节假日，因此将此条目放在文件中 `business_hours` 的**上方**。每个 `<condition>` 匹配一个节假日并强制 `open=false`；节假日条目先执行，使落在工作日的节假日不会被后续营业规则重新开放。以下条件复制自随附 `default.xml` 的 `holiday_example`：
+
+```xml
+<extension name="holiday_override" continue="true">
+  <condition mday="1" mon="1">
+    <!-- New Year's Day -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="2" mweek="3" mon="1">
+    <!-- Martin Luther King Jr. Day: 3rd Monday in January -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition mday="4" mon="7">
+    <!-- Independence Day -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="5-6" mweek="4" mon="11">
+    <!-- Thanksgiving: 4th Thursday in November (plus the Friday after) -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition mday="25" mon="12">
+    <!-- Christmas Day -->
+    <action application="set" data="open=false"/>
+  </condition>
+</extension>
+```
+
+每个节假日使用独立 `<condition>`，分别判断，而非合并为一个测试。`mday="1" mon="1"` 为固定日期节假日；`wday="2" mweek="3" mon="1"` 则组合星期（`wday="2"` 为周一）和月内周次（`mweek="3"`），匹配一月第三个周一。请按实际日历增删节假日。
+
+文件顺序很重要，完整序列如下：
+
+```xml
+<!-- 1. holiday_override  (forces open=false on holidays) -->
+<!-- 2. set_closed_default (open=false unless a later rule opens) -->
+<!-- 3. business_hours     (open=true only inside the window) -->
+```
+
+`set_closed_default` 放在 `holiday_override` 之后没有影响，因为两者都设置 `open=false`。关键是 `business_hours` 最后执行，只有它能设置 `open=true`，而节假日不能留下一个继续生效的 true 值供营业窗口使用。若要明确表达优先级，可让营业规则受节假日结果控制，见下方变体。
+
+### 3. 根据营业或休息决策路由 {#3-route-on-the-openclosed-decision}
+
+路由器读取 `${open}` 并分派。营业时转到话务员分机或调用 IVR；休息时播放提示并送入语音信箱：
+
+```xml
+<extension name="time_router">
+  <condition field="${open}" expression="^true$" break="never">
+    <!-- OPEN: send to the operator IVR (or transfer to a live extension) -->
+    <action application="answer"/>
+    <action application="sleep" data="500"/>
+    <action application="ivr" data="demo_ivr"/>
+  </condition>
+  <condition field="${open}" expression="^false$">
+    <!-- CLOSED: play the closed greeting, then take a message -->
+    <action application="answer"/>
+    <action application="sleep" data="500"/>
+    <action application="playback" data="ivr/ivr-thank_you_for_calling.wav"/>
+    <action application="playback" data="voicemail/vm-not_available_no_voicemail.wav"/>
+    <action application="voicemail" data="default ${domain_name} 1000"/>
+  </condition>
+</extension>
+```
+
+营业分支使用 `break="never"`，使 `open=true` 的动作执行后仍继续测试 `open=false` 条件，该条件失败并被跳过。这样两个分支可放在同一条目中而互不吞掉。若要呼叫人工话务员，将 `ivr demo_ivr` 改为 `transfer 1000 XML default`；将休息分支的 `playback` 文件替换为自己的提示录音。`voicemail default ${domain_name} 1000` 在 `default` 配置实例中为信箱 `1000` 以留言模式运行 `voicemail`；可改为实际收集非营业时段留言的信箱。
+
+### 4. 应用更改 {#4-apply-the-changes}
+
+通过 `fs_cli` 重新加载拨号计划：
+
+```
+reloadxml
+```
+
+无需重启。启用时间条件调试后，可以观察拨号计划日志确认分支：每个 `<condition>` 求值时记录 `Date/Time Match (PASS)` 或 `(FAIL)`。
+
+## 工作原理 {#how-it-works}
+
+1. **条件自上而下求值。** 条目中各 `<condition>` 按顺序测试。不含 `field`/`expression` 的时间条件是纯日期时间测试：当前时间匹配标签中的所有时间属性时通过，否则失败。完整模型见[第 15 章](../dialplan/time-and-condition-routing.mdx)。
+
+2. **`continue="true"` 串联条目。** 三个设置条目均使用此属性，因此一个完成后，引擎继续下一个，而非在首次匹配时停止。节假日、营业时间和路由器由此通过共享 `open` 变量协作。
+
+3. **`break` 控制条目内部的继续求值。** 时间 `<condition>` 的默认值为 `on-false`：时间条件失败时停止计算该条目剩余条件。这适合节假日与营业时间规则：当天不是节假日时，条件失败，跳过对应 `set`。路由器的营业分支使用 `break="never"`，避免已通过的营业分支在测试休息分支前停止条目；休息分支随后无法通过自身的 `^false$` 检查而被跳过。
+
+4. **节假日检查有意先执行。** 条目按文件顺序运行，因此节假日覆盖先设置 `open=false`，之后 `business_hours` 才有机会设置 `open=true`。使用下方显式门控变体时，营业时间规则还会拒绝在已标为休息的日期开放，使工作日节假日即便落在 9–5 点窗口内，也保持休息。
+
+5. **路由器使用普通字段条件分派。** `time_router` 不再检查时间，而是测试前面条目计算出的 `${open}`。这样将*日程*（何时营业）与*路由*（营业或休息时如何处理）分离，可独立修改。
+
+## 时区处理 {#timezone-handling}
+
+除非通道提供时区，否则按服务器本地时间计算时间属性。若无论服务器在哪里都要按指定时区路由，应在时间条件求值前设置 `timezone` 通道变量，使用 `timezones.conf.xml` 中的时区名称：
+
+```xml
+<extension name="set_tz" continue="true">
+  <condition>
+    <action application="set" data="timezone=America/New_York"/>
+  </condition>
+</extension>
+```
+
+将它放在节假日和营业时间条目之前，使日程按该时区计算。也可用数值通道变量 `tod_tz_offset` 表示相对 UTC 的小时偏移，代替命名时区。使用命名 `timezone` 会自动处理夏令时，固定 `tod_tz_offset` 不随夏令时改变。见时间路由章节的[时区选择](../dialplan/time-and-condition-routing.mdx#timezone-selection)。
+
+## 变体 {#variations}
+
+### 显式节假日门控 {#explicit-holiday-gate}
+
+为明确节假日与营业时间的优先级，使用独立 `holiday` 标志，并要求该标志未设置才能开放。节假日条目设置 `holiday=true`，营业条件额外检查字段，仅在非节假日的工作日开放：
+
+```xml
+<!-- holiday extension sets: <action application="set" data="holiday=true"/> -->
+
+<extension name="business_hours" continue="true">
+  <condition field="${holiday}" expression="^true$" break="on-true">
+    <!-- a holiday: do nothing, leave open=false -->
+  </condition>
+  <condition wday="2-6" hour="9-17">
+    <action application="set" data="open=true"/>
+  </condition>
+</extension>
+```
+
+此处 `break="on-true"` 在 `holiday` 为 `true` 时停止条目，因此节假日不会再执行营业时间条件。
+
+### 独立的午休时段 {#a-separate-lunch-hour-break}
+
+如需午休关闭线路，添加一个在午间窗口重新设为休息的条件。它在 `business_hours` 之后运行，仅在该时段覆盖营业决策：
+
+```xml
+<extension name="lunch_break" continue="true">
+  <condition wday="2-6" time-of-day="12:00-13:00">
+    <action application="set" data="open=false"/>
+  </condition>
+</extension>
+```
+
+放在 `business_hours` **之后**，使午休窗口内 `open=false` 生效。`time-of-day` 按秒比较，因此 `12:00-13:00` 在下午 1:00:00 重新开放。
+
+### 每个 DID 独立的日程 {#per-did-schedules}
+
+若每个入站号码需要独立日程，先按 DID 分支，再路由到对应 DID 路由器。在 `public` 上下文匹配 `destination_number`，设置标识线路的变量，并在营业与休息分支用它选择目标：
+
+```xml
+<extension name="did_sales" continue="true">
+  <condition field="destination_number" expression="^(\+?1?5551112222)$">
+    <action application="set" data="vm_box=2000"/>
+    <action application="set" data="open_dest=sales_ivr"/>
+  </condition>
+</extension>
+```
+
+然后在时间路由器中将营业分支转到 `${open_dest}`，休息分支的 `voicemail` 数据使用 `${vm_box}`。这样多个号码共享一个日程，但各自保留话务菜单和信箱。不同线路还可携带不同的 `timezone`，使每个 DID 按自己的时区运行。
+
+<SignalWireCallout
+  title="在 SignalWire 上实现相同流程"
+  href="https://signalwire.com/docs/server-sdks"
+  page="recipe-time-routing"
+  linkText="查看 SignalWire SDK">
+
+SignalWire 将逐次呼叫的决策放在代码中。SDK 的 `SWMLService` 为每次呼叫构建并提供呼叫控制文档，与 `mod_xml_curl` 模式类似，使营业时间逻辑成为普通 Python：
+
+```python
+from signalwire import SWMLService
+
+class BusinessHours(SWMLService):
+    def on_request(self, request_data=None, callback_path=None):
+        if open_now():  # Mon-Fri 9-5, holidays: plain Python you can unit test
+            return {"sections": {"main": [
+                {"answer": {}},
+                {"connect": {"to": "+15550100"}},
+            ]}}
+        return {"sections": {"main": [
+            {"answer": {}},
+            {"play": {"url": "say:We are closed. Please leave a message."}},
+            {"record": {"beep": True}},
+        ]}}
+
+BusinessHours(name="business-hours").run()
+```
+
+`on_request` 在每次呼叫时运行，因此节假日列表是数据结构，营业与休息规则是可测试函数，无需使用 `strftime` 条件语法。同一 SDK 也提供 TypeScript 版本。
+
+</SignalWireCallout>

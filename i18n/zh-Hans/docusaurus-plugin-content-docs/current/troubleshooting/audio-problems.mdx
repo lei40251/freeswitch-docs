@@ -1,0 +1,145 @@
+---
+sidebar_position: 3
+id: audio-problems
+slug: /troubleshooting/audio
+title: "第 41 章：无音频与单向音频"
+description: "通过 SIP 跟踪和会话变量，诊断 NAT、防火墙、媒体地址、编解码器不匹配和媒体超时导致的无声或单向音频。"
+sidebar_label: "41. 无音频与单向音频"
+---
+
+# 第 41 章：无音频与单向音频 {#chapter-41-no-audio-and-one-way-audio}
+
+呼叫接通却没有音频，或只有单向音频，几乎总意味着 SIP 信令成功而 RTP 媒体失败。两条路径彼此独立：SIP 可以完成端到端会话协商，但承载音频的 RTP 报文可能被防火墙丢弃、发往不可达的私网地址，或双方始终未能协商出共同编解码器。
+
+本章侧重诊断，不重复介绍媒体子系统。参数参考见[第 17 章：媒体处理](../media/media-handling.mdx)和[第 16 章：编解码器与协商](../media/codecs-and-negotiation.mdx)，配置实例模型见[第 7 章：Sofia SIP 配置实例](../users-endpoints/sip-profiles-sofia.mdx)。这里关注面对无声呼叫时应查看什么、如何确认原因，以及应如何修改。
+
+最有用的诊断资料是呼叫的 SIP 跟踪，因为 INVITE 及其应答的 SDP 正文包含宣告的媒体地址，以及提议和接受的编解码器。拨打测试呼叫前，为对应配置实例启用跟踪：
+
+```
+sofia profile internal siptrace on
+```
+
+也可使用 `sofia global siptrace on` 全局启用，完成后使用 `off` 关闭。每段 SDP 中，连接行（`c=`）给出对端应向其发送 RTP 的 IP 地址，一条或多条媒体行（`m=`）给出端口及提议的编解码器载荷类型。读取两条呼叫腿中的这些行，是诊断下列所有症状的核心技能。
+
+<SignalWireCallout
+  title="单向音频是自托管时常见的问题"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="audio-problems"
+  linkText="查看托管平台">
+
+多数单向音频问题可追溯到服务器与对端之间的 NAT。SignalWire 托管平台代为运维媒体边缘，此类故障由平台负责解决。
+
+</SignalWireCallout>
+
+## 常见根因：RTP 无法流通 {#rtp-cannot-flow}
+
+FreeSWITCH 与端点交换 SDP 时，双方分别宣告用于接收 RTP 的 IP 和端口。如果宣告的是 NAT 后的私网地址，或防火墙阻止 UDP 端口范围，信令仍能完成，呼叫显示已接听，但媒体无法到达。
+
+**症状。** 呼叫接通后双方都无声，或一方能听到另一方，而反向无声。
+
+**原因。** FreeSWITCH 宣告了对端无法访问的地址，对端宣告了 FreeSWITCH 无法访问的地址，或防火墙丢弃 RTP UDP 流。处于 NAT 后时，FreeSWITCH 绑定 RTP 的私网 `rtp-ip`，并非远程端点应发送到的公网地址。FreeSWITCH 使用独立的外部地址参数，控制写入 SDP `c=` 行的地址。
+
+以下 Sofia 配置实例参数均已依据 `mod_sofia` 核实：
+
+| 参数 | 作用 | vanilla 默认值 |
+| --- | --- | --- |
+| `rtp-ip` | RTP 套接字绑定的本地 IP | `$${local_ip_v4}` |
+| `sip-ip` | SIP 传输绑定的本地 IP | `$${local_ip_v4}` |
+| `ext-rtp-ip` | 在 SDP `c=` 行宣告的媒体公网 IP | `$${external_rtp_ip}`（external 配置实例） |
+| `ext-sip-ip` | 在 SIP `Contact`/`Via` 中宣告的公网 IP | `$${external_sip_ip}`（external 配置实例） |
+| `apply-nat-acl` | 将远程联系地址标记为位于 NAT 后的 ACL | `nat.auto`（internal 配置实例） |
+| `local-network-acl` | 定义无需 NAT 处理的本地网络的 ACL | `localnet.auto` |
+
+`ext-rtp-ip` 接受直接指定的 IP、`auto`（使用推测的本地 IP）、`auto-nat`（使用 NAT-PMP 或 UPnP 获得的地址）、`stun:<server>`（通过 STUN 解析公网 IP）或 `host:<name>`（通过 DNS 解析）。vanilla 的 `external.xml` 将 `ext-rtp-ip` 和 `ext-sip-ip` 指向 `$${external_rtp_ip}` 与 `$${external_sip_ip}` 预处理变量，`conf/vanilla/vars.xml` 默认通过 `stun.freeswitch.org` 的 STUN 查询解析它们。`internal.xml` 的 TLS/替代绑定也采用相同方式。
+
+**确认。** 查看 FreeSWITCH 发出的 SDP `c=` 行。如果呼叫跨越公网，该行却是 RFC 1918 私网地址，说明宣告了不可路由的媒体地址。然后读取运行中配置实例的实际值：
+
+```
+sofia status profile internal
+```
+
+XML/状态输出包含当前 `rtp-ip`、`ext-rtp-ip`、`sip-ip` 和 `ext-sip-ip`，反映 FreeSWITCH 实际宣告的值。预处理变量或 STUN 查询解析结果不符合预期时，此视图尤其有用。
+
+**修复。** 将 `ext-rtp-ip`，通常也包括 `ext-sip-ip`，设为公网地址：静态部署直接指定 IP，动态公网 IP 使用 `stun:`。在防火墙开放 RTP UDP 端口范围，该范围由全局 `rtp-start-port`/`rtp-end-port` 控制，与 SIP 信令端口独立。确认 `local-network-acl` 正确识别 LAN，避免对本地呼叫应用外部 NAT 处理。
+
+## 单向音频的具体情况 {#one-way-audio}
+
+单向音频是上述问题的不对称形式：RTP 只在一个方向流动。常见于一个端点处于 NAT 后、另一个不处于 NAT 后的场景。
+
+**症状。** 主叫能听到被叫，被叫却听不到主叫，或相反。SIP 已完全建立，仅一个 RTP 方向失败。
+
+**原因。** 通常是 NAT 后端点在 SDP 中宣告私网地址，FreeSWITCH 发出的 RTP 无法到达，而该端点的出站 RTP 可以正常到达 FreeSWITCH。其他原因包括：两个配置实例只有一个设置了 `ext-rtp-ip`，导致一条腿宣告公网地址、另一条宣告私网地址；或端点需要的自动调整/时序修正被禁用。
+
+FreeSWITCH 默认学习入站 RTP 的真实源地址，并据此调整返回媒体的目标，使多数对称 NAT 后的电话无需逐设备配置即可工作。两个配置实例参数控制此行为，其默认值和逐呼叫覆盖变量见[第 17 章](../media/media-handling.mdx)：
+
+- `disable-rtp-auto-adjust`：为 `true` 时，禁止根据观察到的报文源地址调整出站 RTP 目标。自动调整**默认启用**，禁用后会破坏许多 NAT 后端点的单向媒体。逐呼叫覆盖变量为 `disable_rtp_auto_adjust`。
+- `rtp-autofix-timing`：修正报文发送节奏不规律的端点 RTP，**默认启用**。逐呼叫覆盖变量为 `rtp_media_autofix_timing`。
+
+媒体模式同样重要。**媒体旁路**让两个端点直接交换 RTP，FreeSWITCH 无法协助其穿越 NAT；**代理媒体**或完整媒体路径模式则由 FreeSWITCH 终结 RTP，可应用自动调整。媒体模式见[第 17 章](../media/media-handling.mdx)。单向呼叫使用 `bypass_media=true` 时，应重点怀疑端点无法直接访问彼此宣告的地址。
+
+**确认。** 对比跟踪中两条腿的 `c=`/`m=` 行，失败方向对应其宣告的 RTP 地址无法从另一侧到达的呼叫腿。检查 `bypass_media` 通道变量，并将配置实例的自动调整与时序修正设置和默认值对照。
+
+**修复。** 跨 NAT 呼叫应让 FreeSWITCH 保持在媒体路径中，不设置 `bypass_media`；保持自动调整启用，并为*所有*面向公网的配置实例一致设置 `ext-rtp-ip`，不要只设置其中一个。
+
+## 编解码器不匹配：没有共同编解码器 {#codec-mismatch}
+
+双方没有共同编解码器时，协商可能直接失败，也可能受转码限制使某条腿没有可用媒体格式，导致无声。
+
+**症状。** 无音频，有时在应答时失败，有时接通却无声。对端仅提供配置实例列表中没有的编解码器，或反之。
+
+**原因。** 提议的编解码器与配置实例偏好列表没有交集，或强制编解码器字符串排除了唯一共同格式。控制设置如下：
+
+| 设置 | 位置 | 作用 |
+| --- | --- | --- |
+| `inbound-codec-prefs` | Sofia 配置实例参数 | 用于入站 INVITE 的有序编解码器列表 |
+| `outbound-codec-prefs` | Sofia 配置实例参数 | 构建出站提议的有序编解码器列表 |
+| `absolute_codec_string` | 通道变量 | 强制使用精确列表，忽略配置实例偏好 |
+| `codec_string` | 通道变量 | 设置偏好列表，优先级低于 `absolute_codec_string` |
+
+vanilla 的两个配置实例均通过 `$${global_codec_prefs}` 设置 `inbound-codec-prefs` 和 `outbound-codec-prefs`，该变量在 `vars.xml` 中定义为 `OPUS,G722,PCMU,PCMA,H264,VP8`。偏好顺序、入站策略及 offer/answer 交换等完整协商逻辑见[第 16 章](../media/codecs-and-negotiation.mdx)。
+
+**确认。** 读取跟踪中提议 SDP 的 `m=` 和 `a=rtpmap`，与 `inbound-codec-prefs` 对比；没有交集即为原因。对于已建立呼叫，转储会话并读取 FreeSWITCH 设置的已协商编解码器变量：
+
+```
+uuid_dump <uuid>
+```
+
+相关变量包括 `rtp_use_codec_name`（协商的音频编解码器，例如 `PCMU`）、`rtp_use_codec_rate`、`rtp_use_codec_ptime` 和 `rtp_use_codec_string`。若应答后使用双方都不期望的编解码器，或这些值为空，应检查协商过程。
+
+**修复。** 将需要的编解码器加入 `inbound-codec-prefs`/`outbound-codec-prefs`，或加载提供该编解码器的模块。若要为某路由强制编解码器，在拨号计划设置 `absolute_codec_string`；注意它完全覆盖配置实例列表，过于严格的值本身就可能导致不匹配。
+
+## RTP 与媒体超时 {#media-timeouts}
+
+通话中媒体停止到达后，FreeSWITCH 可在配置的 RTP 无活动时限后拆除呼叫。接通时有音频，随后无声，并在固定间隔后断开，是典型媒体超时表现。
+
+**症状。** 音频先正常，随后中断，经过一致的秒数后呼叫结束，挂断原因为 `MEDIA_TIMEOUT`。
+
+**原因。** RTP 停止流动，通常仍是前述 NAT/防火墙问题，但在通话中途触发，例如 re-INVITE 改变了媒体路径，随后无活动定时器到期。控制设置包括：
+
+- `media_timeout`：通道变量，活动呼叫挂断前允许 RTP 无活动的毫秒数，是当前机制。
+- `media_hold_timeout`：通道变量，保持状态下允许无活动的毫秒数；未设置时默认是 `media_timeout` 的 10 倍。
+- `rtp_timeout_sec` / `rtp_hold_timeout_sec`：**已弃用**的通道变量，单位为*秒*。使用时记录 `rtp_timeout_sec deprecated use media_timeout variable.`。对应配置实例参数 `rtp-timeout-sec` / `rtp-hold-timeout-sec` 也已弃用，但 vanilla 仍将 `rtp-timeout-sec` 设为 `300`。
+
+准确优先级、毫秒与秒的区别，以及 `execute_on_media_timeout` 钩子见[第 17 章](../media/media-handling.mdx)。诊断关键是：`MEDIA_TIMEOUT` 表示媒体确实停止，定时器是在报告问题，而非制造问题。
+
+**确认。** 查看日志或 CDR 是否为 `MEDIA_TIMEOUT`。若呼叫恰好经过超时时限后结束，说明定时器因媒体流无活动而触发。
+
+**修复。** 将超时视为症状，按前述方法修复底层 RTP 路径，包括 NAT、防火墙和 re-INVITE 处理。只有阈值确实不适合业务时才调整 `media_timeout`，不要提高阈值掩盖真实媒体故障。
+
+## 确认 RTP 是否流动 {#confirming-rtp-flow}
+
+两种独立观察可以判断媒体是否实际传输，以及发送到哪里。
+
+**读取 SIP 跟踪中的 SDP。** 启用 `siptrace` 后，每段 SDP 展示：
+
+- `c=IN IP4 <address>`：对端将向其发送 RTP 的地址。公网呼叫中若为私网地址，RTP 无法到达。
+- `m=audio <port> RTP/AVP <payload-types>`：接收端口和提议的编解码器载荷类型。对比提议与应答的载荷类型，可确定协商的编解码器。
+
+读取**两条**腿的这些行，可将单向故障定位到宣告不可达地址的具体呼叫腿。
+
+**读取会话变量。** 活动呼叫上，`uuid_dump <uuid>` 打印通道变量。媒体诊断常用项为：
+
+- `rtp_use_codec_name`、`rtp_use_codec_string`、`rtp_use_codec_rate`、`rtp_use_codec_ptime`：已协商的音频编解码器及参数。
+- `rtp_local_sdp_str`：FreeSWITCH 生成的完整本地 SDP，包含实际宣告的 `c=`/`m=`，可直接与跟踪对照。
+
+结合跟踪和变量，即可确定无声或单向呼叫中各方的发送地址和已协商编解码器，进而归因于 NAT/防火墙、非对称地址宣告或编解码器协商。

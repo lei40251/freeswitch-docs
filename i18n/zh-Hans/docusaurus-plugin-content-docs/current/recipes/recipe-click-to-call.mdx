@@ -1,0 +1,150 @@
+---
+sidebar_position: 6
+id: recipe-click-to-call
+slug: /recipes/click-to-call
+title: "第 38 章：使用 originate 实现点击呼叫"
+description: "通过 fs_cli 或事件套接字发起出站呼叫，用户应答后使用 originate API 桥接到另一分机、IVR 或 PSTN 号码。"
+sidebar_label: "38. 使用 originate 实现点击呼叫"
+---
+
+# 第 38 章：使用 originate 实现点击呼叫 {#chapter-38-click-to-call-with-originate}
+
+## 目标 {#goal}
+
+在现有呼叫之外，从 `fs_cli` 控制台、脚本或事件套接字呼叫一方，并在其应答后立即连接到第二个目的地。这是点击呼叫按钮、回拨服务和话务员主动拨号的基础。
+
+整个流程由 `originate` API 命令驱动：
+
+1. FreeSWITCH 向 **A 方**发起出站呼叫腿，即先振铃的一方，通常是坐席或点击按钮的用户。
+2. A 方应答后，FreeSWITCH 在该呼叫腿上执行指定操作：运行 `bridge` 等内联应用以连接 **B 方**，或转入拨号计划决定后续处理。
+
+应答后的 A 腿成为普通会话，因此 B 方可以是另一分机、IVR、会议，也可以是经网关到达的 PSTN 号码。
+
+## 前置条件 {#prerequisites}
+
+本示例组合参考章节中的功能。不熟悉的部分请先阅读：
+
+- [命令行与 API / `originate`](/reference/cli-and-api)：命令语法、位置参数，以及 `fs_cli` 与事件套接字共享命令集合的方式。
+- [dptools / `bridge`](/dialplan/dptools)：连接两条呼叫腿的应用，以及与 `originate` 共用的拨号字符串语法，包括端点前缀、多腿分隔符和通道变量语法。
+- [XML 拨号计划](/dialplan/xml)：将 A 方路由到拨号计划条目而非内联应用时需要使用。
+- [用户目录](/users-and-endpoints/user-directory)：定义 `user/<ext>` 用户及其 `dial-string`，拨打 `user/...` URL 时由 `originate` 解析。
+
+下例假定使用随附的 `conf/vanilla/` 配置，目录中定义了 `1000`-`1019` 用户，`default` 上下文中包含 `30XX` 会议分机。
+
+## 实现步骤 {#build-it}
+
+所有命令在 `fs_cli` 提示符下运行，也可通过事件套接字的 `api` 方法执行。命令自身用法字符串给出的通用形式为：
+
+```
+originate <call url> <exten>|&<application_name>(<app_args>) [<dialplan>] [<context>] [<cid_name>] [<cid_num>] [<timeout_sec>]
+```
+
+第一个参数是 **A 方**的拨号字符串，第二个参数为以下两种形式之一：
+
+- `&<application>(<args>)`：A 腿应答后，在其上运行内联应用。
+- `<exten>`：将已应答的 A 腿转入拨号计划分机 `<exten>`；可选的 `<dialplan>` 和 `<context>` 默认为 `XML` 和 `default`。
+
+### 直接桥接双方 {#bridge-two-parties-directly}
+
+呼叫用户 `1001`，应答后桥接到用户 `1002`。`&bridge(...)` 内联形式在已应答的 A 腿上运行 `bridge`，以 B 方拨号字符串作为参数。
+
+```console
+freeswitch@fs> originate user/1001 &bridge(user/1002)
++OK 4a3e6c1e-...-uuid
+```
+
+`originate` 成功时输出 `+OK` 和 A 腿 UUID；失败时输出 `-ERR` 和挂断原因，例如 `-ERR NO_ANSWER` 或 `-ERR USER_BUSY`。
+
+若 B 方是 PSTN 号码，将内联 `bridge` 改为网关拨号字符串：
+
+```console
+freeswitch@fs> originate user/1001 &bridge(sofia/gateway/mycarrier/15551234567)
+```
+
+### 将 A 方送入拨号计划 {#send-party-a-into-the-dialplan}
+
+可以不运行内联应用，而将已应答的 A 腿转入拨号计划分机。此例将 A 方（用户 `1001`）送到 `XML` 拨号计划、`default` 上下文中的分机 `9999`，由路由规则决定后续处理，例如 IVR、轮询组或语音信箱：
+
+```console
+freeswitch@fs> originate user/1001 9999 XML default
+```
+
+`XML` 和 `default` 为默认值，因此 `originate user/1001 9999` 等效。当应答后需要多个应用时可使用此形式，拨号计划能够判断条件、设置变量并串联应用。
+
+### 添加发起呼叫变量 {#add-origination-variables}
+
+在 A 方拨号字符串前添加 `{key=value,...}`，为发起的呼叫腿设置通道变量。这些变量在创建呼叫腿之前解析，常见项如下：
+
+```console
+freeswitch@fs> originate {origination_caller_id_name='Front Desk',origination_caller_id_number=5550100,ignore_early_media=true}user/1001 &bridge(user/1002)
+```
+
+- `origination_caller_id_name` / `origination_caller_id_number`：设置向 A 方显示的主叫信息。
+- `ignore_early_media=true`：忽略早期媒体（回铃音、“您拨打的号码……”等提示），仅将真正应答视为接通，避免过早桥接。
+- `originate_timeout=20`：等待 A 方 20 秒后放弃。这是本次 `originate` 的超时，也可通过最后一个位置参数指定。
+
+`{...}` 中的变量适用于拨号字符串中的所有呼叫腿。若需逐腿设置不同值，使用[拨号字符串语法](/dialplan/dptools)介绍的 `[...]` 形式。
+
+### 使用 bgapi 非阻塞执行 {#run-it-non-blocking-with-bgapi}
+
+`originate` 会**阻塞**到 A 方应答、失败或超时，最长到超时期限（默认 60 秒）。在 `fs_cli` 或事件套接字上，这会一直占用连接。可用 `bgapi` 在后台线程中启动并立即返回：
+
+```console
+freeswitch@fs> bgapi originate user/1001 &bridge(user/1002)
++OK Job-UUID: 7c9f2a40-...-uuid
+```
+
+`bgapi` 立即返回 Job-UUID，最终的 `+OK`/`-ERR` 结果稍后通过 `BACKGROUND_JOB` 事件投递。点击呼叫的 Web 后端应采用此形式，避免电话振铃期间持续占用 HTTP 请求。
+
+## 工作原理 {#how-it-works}
+
+**两条呼叫腿。** `originate` 首先调用核心呼叫发起引擎，为 `<call url>` 创建 A 腿；该调用仅在呼叫腿到达最终状态后返回。若 A 腿应答，FreeSWITCH 根据第二个参数继续处理：
+
+- 以 `&` 开头时，内容被解析为 `application` 和 `(args)`，应用排队在已应答的 A 腿执行。因此 `&bridge(user/1002)` 使已应答的 A 方运行 `bridge user/1002`，发起 **B 腿**并连接双方。
+- 否则，将参数视为分机号，把 A 腿转入指定拨号计划和上下文中的该分机。
+
+**发起呼叫时的通道变量。** 拨号字符串前的 `{key=value,...}` 在 A 腿创建前初始化其变量。`origination_caller_id_name` 和 `origination_caller_id_number` 覆盖显示的主叫信息，`ignore_early_media` 控制应答前的回铃音或媒体是否算作接通，`originate_timeout` 限制等待 A 方应答的时间。
+
+**早期媒体。** 不设置 `ignore_early_media=true` 时，真正应答前到达的回铃音或网关提示可能被视为已接通，导致过早桥接 B 方。启用后会等到 A 方真正应答再桥接，这通常符合点击呼叫的需求。
+
+**内联 `&application` 与拨号计划。** `&app(args)` 紧凑且独立，所需信息都在命令行中，适合一次性桥接。转入拨号计划（`<exten> [<dialplan>] [<context>]`）则可使用完整 XML 路由能力，包括条件、变量操作和多步骤流程，适用于应答后需执行多个应用的情况。
+
+完整命令参考、位置参数及 `fs_cli`/事件套接字共享命令集合见[命令行与 API 章节](/reference/cli-and-api)。
+
+## 变体 {#variations}
+
+**呼叫加入会议。** 使用内联 `&conference(...)` 应用，使 A 方应答后进入会议室。随附配置的会议室名称采用 `<name>@<profile>` 形式，`30XX` 分机映射到 `default` 配置实例：
+
+```console
+freeswitch@fs> originate user/1001 &conference(3001@default)
+```
+
+分别执行多次 `originate` 将多方加入同一房间，即可组成由话务员召集的会议。
+
+**通过事件套接字触发。** 所有命令均可原样通过事件套接字使用：ESL 的 `api` 方法阻塞执行，`bgapi` 方法非阻塞执行并通过 `BACKGROUND_JOB` 返回结果。Web 点击呼叫按钮通常向后端提交请求，后端打开 ESL 连接并发送 `bgapi originate ...`。连接方法、入站与出站模式及任务结果事件处理见[事件套接字章节](/integration/event-socket)。
+
+<SignalWireCallout
+  title="在 SignalWire 上实现相同流程"
+  href="https://signalwire.com/docs/apis/rest/calls"
+  page="recipe-click-to-call"
+  linkText="查看呼叫 API">
+
+`originate` 对应 SignalWire REST Calling API 的一次 POST：创建到 A 方的呼叫，并提供在 A 方应答后连接 B 方的文档。
+
+```bash
+curl "https://example.signalwire.com/api/calling/calls" \
+  -u "$PROJECT_ID:$API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "dial",
+    "params": {
+      "from": "+15550100",
+      "to": "+15550111",
+      "url": "https://example.com/connect-to-b.swml"
+    }
+  }'
+```
+
+`url` 对应的文档在已应答呼叫腿上执行，通过一个 `connect` 方法到达 B 方。点击呼叫按钮成为任意后端发起的 HTTP 请求，无需管理事件套接字会话。
+
+</SignalWireCallout>

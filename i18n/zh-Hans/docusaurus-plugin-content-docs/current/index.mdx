@@ -1,0 +1,44 @@
+---
+sidebar_position: 0
+id: index
+title: "FreeSWITCH 用户手册"
+description: "配置、部署和运行 FreeSWITCH；所有参数值均依据源码和默认配置核实。"
+slug: /
+---
+
+# FreeSWITCH 用户手册 {#freeswitch-users-manual}
+
+本手册面向具有相应技术基础的运维人员，介绍如何配置、部署和运行 FreeSWITCH。内容涵盖 XML 配置系统、用户目录、SIP 配置实例（Profile）、拨号计划、编解码器选择与协商、媒体处理、内置应用、WebRTC 和集成接口。此外还提供逐模块参考、完整示例、故障排查与诊断，以及使用事件套接字和内嵌脚本编程的指南。
+
+本手册中的每个参数、取值和默认值均依据 FreeSWITCH 源码及随附的默认配置核实。
+
+<SignalWireCallout
+  variant="hero"
+  title="相同引擎，无需服务器"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="index"
+  linkText="开始使用托管平台">
+
+由 FreeSWITCH 团队创立的 SignalWire 将该引擎作为托管平台运行，通过 REST API 和 SWML（JSON/YAML 呼叫控制标记语言）提供号码、路由、会议、录音和 AI 智能体。本手册中的每项能力都有对应的托管能力，[附录 D](reference/appendix-signalwire-map.mdx) 按章节给出映射。
+
+</SignalWireCallout>
+
+## FreeSWITCH 版本与下载 {#freeswitch-editions-and-downloads}
+
+FreeSWITCH 提供两个版本，本手册均适用：
+
+- **FreeSWITCH 开源版**：免费且开源。源码和发布构建见 [FreeSWITCH 发布页面](https://github.com/signalwire/freeswitch/releases)。
+- **FreeSWITCH Enterprise**：SignalWire 提供商业支持的版本，包含专业支持与服务。发布版本见 [FreeSWITCH Enterprise 发布页面](https://github.com/signalwire/stack/releases)（私有仓库，需要 FreeSWITCH Enterprise 订阅才能访问）。详情请联系 [sales@signalwire.com](mailto:sales@signalwire.com)。
+
+## 如何使用本手册 {#how-to-use-this-manual}
+
+请先阅读第 1 和第 2 部分，了解后续章节依赖的基本模型和配置机制。之后各部分基本独立，可直接阅读所配置子系统对应的章节。
+
+第 1–8 部分为配置参考。**第 9 部分**为逐模块参考索引，**第 10 部分**提供完整示例，**第 11 部分**介绍故障排查与诊断，**第 12 部分**介绍通过事件套接字和内嵌脚本编程。
+
+本手册采用以下约定：
+
+- 使用行内代码表示文件名、参数和取值，例如 `sofia.conf.xml`、`auth-calls` 和 `true`。
+- 围栏代码块包含适用于默认配置的配置片段。
+- 参数参考表列出参数名称、用途、允许值，以及存在时的默认值。
+- 配置路径均相对于 FreeSWITCH 配置根目录，即包含 `freeswitch.xml` 的目录，通常为 `/etc/freeswitch` 或 `/usr/local/freeswitch/conf`。

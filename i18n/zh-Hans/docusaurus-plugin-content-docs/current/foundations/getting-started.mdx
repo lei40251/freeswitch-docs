@@ -1,0 +1,271 @@
+---
+sidebar_position: 2
+id: getting-started
+slug: /foundations/getting-started
+title: "第 2 章：快速入门"
+description: "从全新安装到可用的 PBX：启动 FreeSWITCH、连接控制台、注册 SIP 客户端并拨打首次呼叫。"
+sidebar_label: "2. 快速入门"
+---
+
+# 第 2 章：快速入门 {#chapter-2-getting-started}
+
+本章带你从基础安装走到可用的 FreeSWITCH PBX，介绍默认配置提供的功能、启动 FreeSWITCH 并连接控制台的方法、使用 SIP 客户端注册内置测试分机，以及如何拨打首次呼叫。本章使用的所有目的号码均在默认拨号计划中定义。
+
+<SignalWireCallout
+  title="相同引擎，托管运行"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="getting-started"
+  linkText="通过平台处理首次呼叫">
+
+本章安装的引擎也由 FreeSWITCH 团队创立的 SignalWire 作为托管平台运行。注册、领取号码后，即可通过简短的标记文档处理首次呼叫，无需搭建服务器。本手册的后续内容会注明各项能力对应的托管服务。
+
+</SignalWireCallout>
+
+## 前置条件 {#prerequisites}
+
+需要一台运行受支持 Linux 发行版的主机（本文介绍 Debian 和 Ubuntu），并具有 root 或 `sudo` 权限。通过下文介绍的 SignalWire 软件包仓库或源码构建安装 FreeSWITCH。两种方式均提供本手册所需的二进制程序、默认配置和声音文件。
+
+## 通过软件包安装 {#installing-from-packages}
+
+在 Debian 和 Ubuntu 上，使用 SignalWire 软件包仓库是最快的方式。该仓库需要认证，必须提供 SignalWire 个人访问令牌。
+
+### 获取 SignalWire 个人访问令牌 {#obtaining-a-signalwire-personal-access-token}
+
+下载预编译的 FreeSWITCH 二进制程序需要 SignalWire 账户。此要求仅适用于软件包中的二进制程序。GitHub 上的开源代码仍可自由获取，下一节介绍的源码构建不需要令牌。
+
+1. 在 [signalwire.com](https://signalwire.com) 创建 SignalWire Space 并登录。
+2. 在控制面板右上角的下拉菜单中打开 `Personal Access Tokens`：https://my.signalwire.com/?page=personal_access_tokens&utm_source=freeswitch-docs&utm_medium=install&utm_campaign=same-engine&utm_content=personal-access-token
+3. 创建新的个人访问令牌并复制其值。
+
+在以下命令中用令牌替换 `TOKEN`。以后若需撤销令牌，可返回 `Personal Access Tokens`，其中列出了现有令牌及对应的撤销选项。
+
+```bash
+TOKEN=YOUR_SIGNALWIRE_TOKEN
+
+apt-get update && apt-get install -y gnupg2 wget lsb-release
+
+# Add the repository signing key, authenticated with your token
+wget --http-user=signalwire --http-password="$TOKEN" \
+  -O /usr/share/keyrings/signalwire-freeswitch-repo.gpg \
+  https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg
+
+# Store the repository credentials for apt
+echo "machine freeswitch.signalwire.com login signalwire password $TOKEN" \
+  > /etc/apt/auth.conf.d/freeswitch.conf
+chmod 600 /etc/apt/auth.conf.d/freeswitch.conf
+
+# Register the package source for this distribution release
+echo "deb [signed-by=/usr/share/keyrings/signalwire-freeswitch-repo.gpg] https://freeswitch.signalwire.com/repo/deb/debian-release/ $(lsb_release -sc) main" \
+  > /etc/apt/sources.list.d/freeswitch.list
+
+apt-get update
+```
+
+FreeSWITCH 将每个模块拆分为独立软件包，并提供安装预选模块集合的元软件包。请选择其中一种。
+
+| 元软件包 | 安装内容 |
+| --- | --- |
+| `freeswitch-meta-all` | 全部模块及依赖 |
+| `freeswitch-meta-vanilla` | 默认（vanilla）配置使用的模块 |
+| `freeswitch-meta-default` | 通用默认模块集合 |
+| `freeswitch-meta-bare` | 核心及最小模块集合 |
+| `freeswitch-meta-codecs` | 内置编解码器模块 |
+| `freeswitch-meta-lang` | 语言与短语软件包 |
+
+要获得与本手册一致的系统，请安装 vanilla 模块集合，以及默认配置引用的声音软件包：
+
+```bash
+apt-get install -y freeswitch-meta-vanilla \
+  freeswitch-sounds-en-us-callie freeswitch-sounds-music
+```
+
+生产软件包将默认配置安装到 `/etc/freeswitch`，并注册 systemd 服务。启用并启动服务：
+
+```bash
+systemctl enable --now freeswitch
+```
+
+如果软件包仅在 `/usr/share/freeswitch/conf` 下安装了示例配置，请在启动前将 vanilla 配置复制到实际位置：
+
+```bash
+cp -a /usr/share/freeswitch/conf/vanilla/. /etc/freeswitch/
+```
+
+## 从源码构建 {#building-from-source}
+
+需要未打包的模块或特定构建配置时，可以从 Git 仓库构建。构建入口为 `bootstrap.sh` 和 `configure`。
+
+```bash
+git clone https://github.com/signalwire/freeswitch.git
+cd freeswitch
+
+# Generate the configure script and the module build list
+./bootstrap.sh -j
+
+# Optionally edit modules.conf to select which modules compile, then configure
+./configure
+
+# Compile and install the binaries
+make
+make install
+
+# Install the sound files: prompts and music on hold
+make cd-sounds-install cd-moh-install
+```
+
+关键事项：
+
+- `bootstrap.sh` 生成 `configure` 脚本和 `modules.conf`；`-j` 选项并行运行生成任务。
+- `modules.conf` 选择编译哪些模块。注释某一行即可跳过对应模块。它是“模块加载”章节介绍的运行时配置 `modules.conf.xml` 在构建阶段的对应文件。
+- 源码构建需要 C 工具链及 FreeSWITCH 构建依赖。运行 `./configure` 前，使用发行版的软件包管理器安装这些依赖。
+- 默认安装前缀为 `/usr/local/freeswitch`，因此配置根目录为 `/usr/local/freeswitch/conf`。
+
+## 配置根目录 {#the-configuration-root}
+
+配置根目录包含 `freeswitch.xml` 以及 `autoload_configs/`、`dialplan/`、`directory/`、`sip_profiles/` 子目录。具体位置取决于安装方式。
+
+| 安装方式 | 常见配置根目录 |
+| --- | --- |
+| 发行版软件包 | `/etc/freeswitch` |
+| 源码构建（默认前缀） | `/usr/local/freeswitch/conf` |
+
+本手册中的所有配置路径均相对于该根目录。
+
+## 默认配置提供的功能 {#what-the-default-configuration-provides}
+
+默认配置是一套完整的 SIP PBX，开箱即包含：
+
+- `default` 域中的 20 个测试用户，分机号为 `1000` 至 `1019`。
+- 这些用户共享一个密码，由预处理变量 `default_password` 设置为 `1234`。
+- 两个 SIP 配置实例：`internal` 在 UDP/TCP 端口 `5060` 上服务已注册用户；`external` 在端口 `5080` 上接收来自网关的未认证入站呼叫。
+- `default` 拨号计划上下文，用于测试分机之间的呼叫，以及到演示目的号码的路由。
+- 可通过拨号计划访问的语音信箱、会议和 IVR 演示。
+
+若未另行设置，域默认使用主机的主要 IPv4 地址。该行为由 `vars.xml` 中的 `domain` 变量控制，详见[第 4 章](../configuration-system/variables-and-core-settings.mdx)。
+
+## 启动 FreeSWITCH {#starting-freeswitch}
+
+可以使用安装方式提供的服务管理器启动 FreeSWITCH，也可以直接运行二进制程序。两种常见启动方式如下：
+
+```bash
+# Run in the foreground, attached to the console
+freeswitch
+
+# Run in the background as a daemon
+freeswitch -nc
+```
+
+启动时，FreeSWITCH 加载 `modules.conf.xml` 中列出的模块，启动 SIP 配置实例，并开始接受注册和呼叫。
+
+## 使用 fs_cli 连接 {#connecting-with-fs_cli}
+
+`fs_cli` 是命令行客户端，通过默认加载、在 `event_socket.conf.xml` 中配置的事件套接字连接到正在运行的 FreeSWITCH 进程。
+
+```bash
+fs_cli
+```
+
+在提示符下可以执行 API 命令。可以先尝试：
+
+```
+status
+sofia status
+show registrations
+reloadxml
+```
+
+默认控制台还为常用命令绑定了按键。这些绑定在 `switch.conf.xml` 中定义：
+
+| 按键 | 命令 |
+| --- | --- |
+| F1 | `help` |
+| F2 | `status` |
+| F5 | `sofia status` |
+| F6 | `reloadxml` |
+| F9 | `sofia status profile internal` |
+
+完整命令集合见[第 31 章](../reference/cli-and-api.mdx)。
+
+## 注册软电话 {#registering-a-softphone}
+
+使用其中一个测试账户配置 SIP 软电话。
+
+| 设置 | 值 |
+| --- | --- |
+| 用户名 / 认证用户名 | `1000`（至 `1019`） |
+| 密码 | `1234`（即 `default_password`） |
+| 域 / SIP 服务器 | FreeSWITCH 主机的 IP 地址 |
+| 端口 | `5060` |
+| 传输协议 | UDP 或 TCP |
+
+再将第二个客户端注册为 `1001`，以便两个端点互相呼叫。确认二者均已注册：
+
+```
+show registrations
+sofia status profile internal reg
+```
+
+## 拨打首次呼叫 {#placing-your-first-calls}
+
+从注册为 `1000` 的客户端拨打 `1001`。呼叫经过 `default` 上下文中的 `Local_Extension` 条目，使分机 `1001` 的已注册设备振铃；无人接听时进入语音信箱。
+
+没有第二台设备时，可拨打回声测试号码验证音频。
+
+```
+9196   Echo test: your audio is played back to you
+```
+
+## 演示目的号码 {#demo-destinations}
+
+默认拨号计划定义了以下演示目的号码。可从已注册客户端拨打。
+
+| 号码 | 目的功能 |
+| --- | --- |
+| `9196` | 回声测试 |
+| `9195` | 延迟回声（250 ms） |
+| `9197` | 毫瓦音（1004 Hz 参考音） |
+| `9198` | 音调流演示 |
+| `9664` | 保持音乐 |
+| `5000` | IVR 演示菜单 |
+| `5001` | 动态会议 |
+| `3000`-`3099` | 具名会议室 |
+| `4000` 或 `*98` | 语音信箱主菜单 |
+| `9191` | ClueCon 信息播放 |
+| `0` 或 `operator` | 话务员 |
+| `1000`-`1019` | 已注册的测试分机 |
+
+## 重新加载配置 {#reloading-configuration}
+
+编辑配置文件后，无需重启即可重新加载：
+
+```
+reloadxml
+```
+
+`reloadxml` 重新读取 XML 文档，使用户目录和拨号计划的更改在下一次呼叫时生效。有些模块需要针对性地重新加载，才能读取自身配置的更改，例如：
+
+```
+sofia profile internal rescan
+reload mod_voicemail
+```
+
+各子系统的重新加载行为见其对应章节。
+
+## 修改默认密码以确保安全 {#securing-the-default-password}
+
+默认配置为所有测试分机使用同一个共享密码 `1234`。将 FreeSWITCH 暴露到任何不可信网络前，请先修改它。该值在 `vars.xml` 中设置：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="default_password=1234"/>
+```
+
+修改后运行 `reloadxml`。各用户独立密码的设置见[第 6 章](../users-endpoints/user-directory.mdx)。
+
+## 后续步骤 {#next-steps}
+
+现在你已有可运行的 PBX 和已注册端点。接下来可按需要：
+
+- 阅读[第 3 章](../configuration-system/xml-configuration.mdx)，理解配置文件和预处理器。
+- 阅读[第 6 章](../users-endpoints/user-directory.mdx)，添加和编辑用户。
+- 阅读[第 8 章](../users-endpoints/gateways.mdx)，连接上游 SIP 服务商。
+- 阅读[第 12 章](../dialplan/xml-dialplan.mdx)，编写呼叫路由规则。

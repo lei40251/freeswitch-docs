@@ -1,0 +1,199 @@
+---
+sidebar_position: 1
+id: recipe-did-ivr-voicemail
+slug: /recipes/did-ivr-voicemail
+title: "第 33 章：入站 DID、IVR 与语音信箱"
+description: "将 PSTN DID 经 public 上下文路由到自动话务台 IVR，再将无人应答的选项转入用户语音信箱。"
+sidebar_label: "33. 入站 DID、IVR 与语音信箱"
+---
+
+# 第 33 章：入站 DID、IVR 与语音信箱 {#chapter-33-inbound-did-to-ivr-to-voicemail}
+
+## 目标 {#goal}
+
+用自动话务台菜单应答 PSTN 号码，将各选项路由到正确位置，并将无人接听的呼叫送入语音信箱。呼叫到达 `external` SIP 配置实例，在 `public` 上下文按 DID 匹配，再转入 IVR 菜单。菜单提供“销售请按 1，支持请按 2”等选项。每个选项桥接到内部分机，未应答则进入对应用户的语音信箱。
+
+呼叫流程如下：
+
+```
+PSTN ──▶ external profile ──▶ public context ──▶ ivr (auto_attendant)
+                                                       │
+                          ┌────────────────────────────┼────────────────────────┐
+                          ▼                             ▼                         ▼
+                    1: Sales ext 1000           2: Support ext 1001        9: repeat menu
+                          │                             │
+                    no answer ──▶ voicemail       no answer ──▶ voicemail
+```
+
+## 前置条件 {#prerequisites}
+
+本例组合参考章节中的功能。不熟悉的部分请先阅读：
+
+- [第 13 章：入站呼叫与 public 上下文](../dialplan/inbound-public-context.mdx)：未认证的 PSTN 呼叫如何经 `external` 配置实例进入 `public`。
+- [第 12 章：XML 拨号计划](../dialplan/xml-dialplan.mdx)：条目、条件和动作的求值方式。
+- [第 14 章：拨号计划应用参考](../dialplan/dptools-reference.mdx)：下文使用的 `transfer`、`bridge`、`set`、`export`、`answer` 和 `sleep`。
+- [第 21 章：IVR 菜单](../applications/ivr-menus.mdx)：`<menu>` 结构、菜单项动作和 `ivr` 应用。
+- [第 19 章：语音信箱](../applications/voicemail.mdx)：`voicemail` 应用及其写入的用户信箱。
+
+还假定采用 vanilla 用户目录：`directory/default/` 下存在 `1000` 和 `1001`，并包含随附的 `vm-password`。DID `+15551234567` 为占位号码，应替换为运营商在 SIP Request-URI 中传入的号码。
+
+## 实现步骤 {#build-it}
+
+### 1. 在 public 上下文匹配 DID {#1-match-the-did-in-the-public-context}
+
+在 `conf/dialplan/public.xml` 添加条目，或在随附 `public.xml` 已包含的 `conf/dialplan/public/` 目录放置文件。匹配入站 DID 后，在 `default` 上下文中按名称转入 IVR 菜单：
+
+```xml
+<extension name="did_auto_attendant">
+  <condition field="destination_number" expression="^(\+?1?5551234567)$">
+    <action application="set" data="domain_name=$${domain}"/>
+    <action application="answer"/>
+    <action application="sleep" data="500"/>
+    <action application="ivr" data="auto_attendant"/>
+  </condition>
+</extension>
+```
+
+将该条目放在 `public.xml` 底部通用匹配块之前。前缀 `\+?1?` 兼容运营商传入带或不带 `+1` 的号码。`set domain_name` 固定域，使后续 `voicemail` 查询使用正确用户目录；`answer` 在播放提示前应答呼叫。
+
+### 2. 定义 IVR 菜单 {#2-define-the-ivr-menu}
+
+创建 `conf/ivr_menus/auto_attendant.xml`。随附 `ivr.conf.xml` 已通过 `<X-PRE-PROCESS cmd="include" data="../ivr_menus/*.xml"/>` 包含该目录所有文件，无需其他修改。此菜单使用 `say:` 前缀生成提示，无需录音；有正式问候语后，可替换为 `phrase:` 或 `.wav` 路径。
+
+```xml
+<include>
+  <menu name="auto_attendant"
+      greet-long="say:Thank you for calling. Press 1 for sales, 2 for support, or 0 for the operator."
+      greet-short="say:Press 1 for sales, 2 for support, or 0 for the operator."
+      invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+      exit-sound="voicemail/vm-goodbye.wav"
+      tts-engine="flite"
+      tts-voice="rms"
+      timeout="10000"
+      inter-digit-timeout="2000"
+      max-failures="3"
+      max-timeouts="3"
+      digit-len="1"
+      exec-on-max-failures="transfer 1001 XML default"
+      exec-on-max-timeouts="transfer 1001 XML default">
+
+    <entry action="menu-exec-app" digits="1" param="transfer 1000 XML default"/>
+    <entry action="menu-exec-app" digits="2" param="transfer 1001 XML default"/>
+    <entry action="menu-exec-app" digits="0" param="transfer 1001 XML default"/>
+    <entry action="menu-top"      digits="9"/>
+  </menu>
+</include>
+```
+
+`say:` 提示需要 TTS 引擎；vanilla 安装随附 `mod_flite`，由 `tts-engine`/`tts-voice` 属性选择。没有按键或始终输入无效按键的主叫，通过 `exec-on-max-timeouts` / `exec-on-max-failures` 退出菜单；本例转到支持分机，也可改为其他分机。
+
+### 3. 将菜单选项路由到分机和语音信箱 {#3-route-the-menu-options-to-extensions-and-voicemail}
+
+菜单将按键 1 转到 `1000`，按键 2 和 0 转到 `1001`，均在 `default` 上下文。vanilla 的 `default.xml` 已提供匹配 `^(10[01][0-9])$` 的 `Local_Extension` 块，桥接到用户，无人应答则进入语音信箱，因此 `1000` 和 `1001` 开箱可用。若不依赖随附块而要使用独立、最小化实现，核心模式如下：
+
+```xml
+<extension name="ring_then_voicemail">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="export" data="dialed_extension=$1"/>
+    <action application="set" data="call_timeout=30"/>
+    <action application="set" data="hangup_after_bridge=true"/>
+    <action application="set" data="continue_on_fail=true"/>
+    <action application="bridge" data="user/${dialed_extension}@${domain_name}"/>
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="default ${domain_name} ${dialed_extension}"/>
+  </condition>
+</extension>
+```
+
+`continue_on_fail=true` 使 `bridge` 因无人应答、忙线或超时失败时继续执行拨号计划，而非挂断，从而运行后续 `voicemail`。`voicemail default ${domain_name} ${dialed_extension}` 在 `default` 语音信箱配置实例中，以留言模式运行目标信箱。
+
+### 4. 应用更改 {#4-apply-the-changes}
+
+通过 `fs_cli` 重新加载拨号计划和 IVR 配置：
+
+```
+reloadxml
+```
+
+`reloadxml` 将拨号计划和 IVR 菜单重新读入 XML 注册表，无需重启。
+
+## 工作原理 {#how-it-works}
+
+1. **DID 进入 `public` 上下文。** 运营商将呼叫发送到绑定 `public` 上下文的 `external` 配置实例，端口为 5080。正如[第 13 章](../dialplan/inbound-public-context.mdx)介绍的，该上下文是不可信流量的安全边界，绝不能路由到运营商网关。本例 `did_auto_attendant` 在 `destination_number` 字段匹配 DID 并应答。
+
+2. **拨号计划调用 IVR。** `ivr` 应用（[第 14 章](../dialplan/dptools-reference.mdx)）从已加载的 IVR 配置查找并运行 `auto_attendant` 菜单。负责 DID 匹配的 XML 拨号计划引擎见[第 12 章](../dialplan/xml-dialplan.mdx)。
+
+3. **菜单收集数字。** IVR 引擎（[第 21 章](../applications/ivr-menus.mdx)）播放 `greet-long`，然后最多等待 `timeout` 毫秒接收按键。由于 `digit-len="1"`，收到一个数字即匹配。动作是 `menu-exec-app` 的匹配 `<entry>` 将其 `param` 作为拨号计划应用执行，并使主叫离开菜单；`menu-top` 则重播菜单。
+
+4. **选项转到分机。** 每个 `menu-exec-app` 运行 `transfer <ext> XML default`，将主叫送回拨号计划，这次进入 `default` 上下文的所选分机。
+
+5. **无人应答则进入语音信箱。** 分机桥接到 `user/<ext>@domain`。设置 `continue_on_fail=true` 后，桥接失败不会结束呼叫，而是继续运行 `voicemail`（[第 19 章](../applications/voicemail.mdx)），将留言录入 `default` 配置实例中的该用户信箱。
+
+6. **没有交互也有路由。** 若主叫始终未按有效键，菜单的 `exec-on-max-failures` 和 `exec-on-max-timeouts` 钩子会转发呼叫，而非直接丢弃。
+
+## 变体 {#variations}
+
+**直接进入语音信箱。** 若要让主叫向部门留言而不使电话振铃，可添加直接调用 `voicemail` 的选项。定义一个简单的 `default` 上下文条目，再将某个按键指向它：
+
+```xml
+<!-- in conf/ivr_menus/auto_attendant.xml -->
+<entry action="menu-exec-app" digits="3" param="transfer vm_sales XML default"/>
+```
+
+```xml
+<!-- in the default context -->
+<extension name="vm_sales">
+  <condition field="destination_number" expression="^vm_sales$">
+    <action application="answer"/>
+    <action application="sleep" data="500"/>
+    <action application="voicemail" data="default ${domain_name} 1000"/>
+  </condition>
+</extension>
+```
+
+**按分机号拨号。** `digits` 属性接受由 `/` 包围的 PCRE 正则表达式，捕获组在 `param` 中以 `$1` 引用。以下允许主叫直接拨打任意四位分机：
+
+```xml
+<entry action="menu-exec-app" digits="/^(10[01][0-9])$/" param="transfer $1 XML default"/>
+```
+
+仅在互不重叠时，才将单数字菜单选项和此正则放在同一菜单中；将 `digit-len` 提高到最长模式长度，使引擎等待完整分机号。
+
+**营业时间门控。** 为转入 IVR 的操作添加时间条件，让非营业时段直接播放休息提示或进入语音信箱。`public` 条目可在运行 `ivr` 前测试 `hour`、`wday` 或 `minute-of-day`，与随附 `default.xml` 的 `tod_example` 使用相同时间字段。非营业分支应路由到 `voicemail` 条目或专用休息提示菜单，而非 `auto_attendant`。
+
+<SignalWireCallout
+  title="在 SignalWire 上实现相同流程"
+  href="https://signalwire.com/docs/swml"
+  page="recipe-did-ivr-voicemail"
+  linkText="使用 SWML 构建">
+
+本章的自动话务台在 SignalWire 的 JSON/YAML 呼叫控制标记语言 SWML 中只需一个文档，并在控制面板分配给号码，无需配置实例、上下文或菜单 XML：
+
+```yaml
+version: 1.0.0
+sections:
+  main:
+    - answer: {}
+    - prompt:
+        play: "say:Thanks for calling. Press 1 for sales, 2 for support."
+        max_digits: 1
+    - switch:
+        variable: prompt_value
+        case:
+          "1":
+            - connect:
+                to: "+15550100"
+          "2":
+            - connect:
+                to: "+15550101"
+        default:
+          - play:
+              url: "say:Please leave a message after the tone."
+          - record:
+              beep: true
+```
+
+`connect` 后的 `connect_result` 变量报告桥接是否成功，因此无人应答的路径同样可继续执行 `record`。
+
+</SignalWireCallout>

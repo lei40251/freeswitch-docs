@@ -1,0 +1,212 @@
+---
+sidebar_position: 4
+id: call-setup-failures
+slug: /troubleshooting/call-setup
+title: "第 42 章：呼叫建立失败"
+description: "通过 FreeSWITCH 控制台读取 Q.850 挂断原因、跟踪拨号计划误路由，并排查网关与 originate 失败。"
+sidebar_label: "42. 呼叫建立失败"
+---
+
+# 第 42 章：呼叫建立失败 {#chapter-42-call-setup-failures}
+
+任何未进入通话状态的尝试都属于呼叫建立失败：主叫听到快忙音或收到 SIP 错误、出站腿立即返回，或控制台 `originate` 返回错误。几乎所有此类失败都会留下决定性证据，即*挂断原因*。最快的排查方式是先读原因，再追查其来源。
+
+本章侧重诊断，假定你已经能够发起呼叫并观察控制台，不重复讲解拨号计划或网关配置。配置说明见[拨号计划应用参考](/dialplan/dptools)、[入站 public 上下文](/dialplan/public-context)、[网关](/users-and-endpoints/gateways)和[通道变量](/reference/channel-variables)。
+
+<SignalWireCallout
+  title="无需抓包即可排查建立失败"
+  href="https://signalwire.com/docs/apis"
+  page="call-setup-failures"
+  linkText="查看 REST API">
+
+SignalWire 托管平台承载呼叫时，由平台负责与运营商交换 SIP。应用侧只需 API 请求和状态回调，通过查询错误码与日志了解失败，无需在服务器上捕获 INVITE 跟踪。
+
+</SignalWireCallout>
+
+## 读取挂断原因 {#reading-a-hangup-cause}
+
+FreeSWITCH 结束每个通道时都带有 Q.850 呼叫原因。原因通过三种方式暴露，均使用相同的大写名称：
+
+- `hangup_cause` 通道变量，可在拨号计划、事件和 CDR 中读取。
+- `CHANNEL_HANGUP` 事件的 `Hangup-Cause` 头。
+- 通道挂断时打印的日志行。
+
+名称来自核心的固定表，即 `src/switch_channel.c` 中的 `CAUSE_CHART`，`switch_channel_cause2str()` 将数值转换为显示的字符串。[附录 E](../reference/appendix-hangup-causes.mdx)列出全部原因。常见的呼叫建立原因如下：
+
+| 原因 | Q.850 | 建立阶段的含义 |
+|---|---|---|
+| `NORMAL_CLEARING` | 16 | 呼叫正常结束。发生在*建立阶段*时，通常表示对端应答后挂断，或 `200 OK` 后正常拆除。 |
+| `USER_BUSY` | 17 | 目标忙，来自 SIP `486`、`600`，或已注册端点返回忙线。 |
+| `NO_USER_RESPONSE` | 18 | 协议定时器到期前目标未响应，由 SIP `480` 映射。 |
+| `NO_ANSWER` | 19 | 目标已振铃，但超时前无人应答。 |
+| `SUBSCRIBER_ABSENT` | 20 | 用户存在，但当前不可达。 |
+| `CALL_REJECTED` | 21 | 对端主动拒绝，来自 SIP `401`、`402`、`403`、`407`、`603` 或 `608`。 |
+| `NUMBER_CHANGED` | 22 | SIP `410 Gone`。 |
+| `INVALID_NUMBER_FORMAT` | 28 | 拨号号码不符合路由格式，SIP `484 Address Incomplete`。 |
+| `NORMAL_TEMPORARY_FAILURE` | 41 | 上游暂时故障，来自 SIP `400`、`481`、`500` 或 `503`，可考虑重试。 |
+| `NETWORK_OUT_OF_ORDER` | 38 | SIP `502 Bad Gateway`。 |
+| `SERVICE_UNAVAILABLE` | 63 | 此路由服务不可用，SIP `405`。 |
+| `INCOMPATIBLE_DESTINATION` | 88 | 编解码器或媒体协商失败，SIP `488` 或 `606`。 |
+| `RECOVERY_ON_TIMER_EXPIRE` | 102 | 定时器到期仍未收到任何应答，SIP `408 Request Timeout` 或 `504`。 |
+| `UNALLOCATED_NUMBER` | 1 | 号码未分配，SIP `404 Not Found`。 |
+| `NO_ROUTE_DESTINATION` | 3 | 没有到目标的路由，SIP `485 Ambiguous` 或 `604`。 |
+
+FreeSWITCH 为自身情况添加的非 Q.850 原因，在建立阶段同样有用：
+
+| 原因 | 含义 |
+|---|---|
+| `USER_NOT_REGISTERED` | 尝试连接的 `user/` 或注册端点没有有效注册。 |
+| `GATEWAY_DOWN` | 指定网关存在但不可用，例如未注册或已标为 DOWN。 |
+| `INVALID_GATEWAY` | 拨号字符串中的网关名称不存在。 |
+| `INVALID_URL` | 无法将拨号字符串解析为有效 URL。 |
+| `INVALID_PROFILE` | 拨号字符串指定的 Sofia 配置实例不存在或未运行。 |
+| `ORIGINATOR_CANCEL` | 发起方，即 A 腿或 `originate` 调用方，在应答前取消，SIP `487`。 |
+| `PROGRESS_TIMEOUT` | 已收到媒体或进展，但呼叫未继续推进，由进展超时控制。 |
+| `ALLOTTED_TIMEOUT` | 整次呼叫发起的时限到期，仍无呼叫腿应答。 |
+
+:::tip
+另两个变量有助于精确判断 SIP 呼叫腿：`sip_term_status` 保存纯 SIP 响应编号，例如 `480`；`proto_specific_hangup_cause` 保存 `sip:480` 形式。它们在响应码被合并映射到 Q.850 原因前设置，因此即使多个 SIP 码对应同一原因，也能看出*实际报文*中的理由。桥接时，B 腿原因复制到 A 腿的 `last_bridge_hangup_cause`，`originate_disposition` 则记录呼叫发起结果，为 `success`、`failure` 或原因字符串本身。
+:::
+
+## 症状：呼叫未匹配任何条目 {#dialplan-no-match}
+
+**症状。** 呼叫到达但没有后续动作，或直接被拒绝，预期的拨号计划动作均未运行。
+
+**原因。** FreeSWITCH 使用的目的号码、上下文或拨号计划名称与所写条目不匹配。最常见的是入站呼叫进入错误上下文：未认证来源进入 `public`，而非 `default`。
+
+**确认。** 将控制台级别至少提高到 `INFO` 并拨打呼叫，`mod_dialplan_xml` 会准确打印正在路由的内容：
+
+```text
+Processing Caller Name <1001>->18005551212 in context public
+```
+
+该行包含主叫名称、主叫号码、将尝试匹配的*目的号码*及其*上下文*。预期 `default` 却显示 `public`，表示呼叫未认证，由 public 拨号计划处理；按设计，它不应直接访问内部分机。使用 `console loglevel debug` 进一步查看每个条件的求值：
+
+```text
+Dialplan: Processing recursive conditions level:0 ...
+Dialplan: sofia/internal/... Regex (FAIL) [my_ext] destination_number(18005551212) =~ /^(1\d{10})$/ match=false
+Dialplan: sofia/internal/... Action set(...)
+```
+
+`Regex (PASS)` / `Regex (FAIL)` 明确显示条件是否匹配，可区分问题出在正则模式还是目的号码本身。
+
+**修复。** 对照 `Processing ...` 行中的上下文、拨号计划名称和目的号码检查 XML。上下文为 `public` 时，判断呼叫是否*应该*认证：应认证则修复来源，使其注册或落入 ACL；否则由 public 上下文明确通过 `transfer` 路由到 `default`。交接方式见[入站 public 上下文](/dialplan/public-context)，条件和 `transfer` 应用见[拨号计划应用参考](/dialplan/dptools)。
+
+## 症状：经网关的出站呼叫失败 {#gateway-down}
+
+**症状。** 呼叫外部号码立即返回 `GATEWAY_DOWN`、`USER_NOT_REGISTERED` 或 `NORMAL_TEMPORARY_FAILURE`，B 腿甚至没有发送可跟踪的 INVITE。
+
+**原因。** 网关不可用。预期已注册的网关可能正在重试、注册失败或已过期。
+
+**确认。** 直接查询 Sofia：
+
+```text
+sofia status gateway my_gateway
+```
+
+输出有两个必须结合阅读的状态字段：`State` 是注册状态机，`Status` 是 UP/DOWN 汇总：
+
+```text
+State   	REGED
+Status  	UP
+```
+
+`State` 来自 `mod_sofia.c` 的 `sofia_state_names`：
+
+| 状态 | 含义 |
+|---|---|
+| `REGED` | 已注册且仍有效，是注册式网关的正常状态。 |
+| `TRYING` | REGISTER 已发出，正在等待。 |
+| `REGISTER` | 已排队准备发送 REGISTER。 |
+| `UNREGED` | 未注册，即初始或重置状态。 |
+| `UNREGISTER` | 已排队准备注销注册。 |
+| `FAILED` | 上次 REGISTER 尝试失败。 |
+| `FAIL_WAIT` | 失败后退避，等待重试。 |
+| `EXPIRED` | 注册已过期，尚未续期。 |
+| `NOREG` | 配置为*不注册*（`register=false`），对于 IP 认证中继属正常状态。 |
+| `DOWN` | 网关不可用或未注册。 |
+| `TIMEOUT` | REGISTER 未获响应并超时。 |
+
+`Status` 更简单，只会是 `DOWN` 或 `UP`；OPTIONS 探测正在进行时附带 `(ping)`，取自 `mod_sofia.c` 的 `status_names`。
+
+以下组合有助于解释出站失败：
+
+- `State NOREG / Status UP`：不注册的 IP 认证中继，状态正常，应检查拨号计划、编解码器或上游。
+- `State NOREG / Status DOWN`：不注册的网关 OPTIONS 探测失败，对端不可达。
+- `State FAILED`、`FAIL_WAIT`、`EXPIRED` 或 `TIMEOUT`：注册异常，原因可能是凭据、网络或对端；经此网关路由的呼叫会返回 `GATEWAY_DOWN`。
+
+**修复。** 恢复网关可用状态。注册式网关修正凭据或 realm 后重新注册；不注册的中继修复网络路径或探测目标。网关参数和 OPTIONS 保活见[网关](/users-and-endpoints/gateways)。
+
+## 症状：上游返回 403、404、480 或 503 {#sip-response-mapping}
+
+**症状。** SIP 跟踪显示对端以错误响应回复 INVITE，而呼叫腿最终以 Q.850 原因结束，未直接显示原始 SIP 编号。
+
+**原因。** `mod_sofia` 将每个最终 SIP 响应映射为 Q.850 原因，由 `sofia_glue.c` 中的 `sofia_glue_sip_cause_to_freeswitch` 处理。多个 SIP 码可能合并到一个原因，因此仅看原因会有歧义，还需读取 SIP 码。
+
+**确认。** 为配置实例启用 SIP 跟踪并重试：
+
+```text
+sofia profile internal siptrace on
+```
+
+也可使用 `sofia global siptrace on` 跟踪全部实例。读取响应码，并检查呼叫腿的 `proto_specific_hangup_cause` / `sip_term_status`。常见映射如下：
+
+| SIP 响应 | 对应原因 |
+|---|---|
+| `403 Forbidden`，以及 `401`、`402`、`407`、`603`、`608` | `CALL_REJECTED` |
+| `404 Not Found` | `UNALLOCATED_NUMBER` |
+| `480 Temporarily Unavailable` | `NO_USER_RESPONSE` |
+| `486 Busy Here`，以及 `600` | `USER_BUSY` |
+| `484 Address Incomplete` | `INVALID_NUMBER_FORMAT` |
+| `488 Not Acceptable Here`，以及 `606` | `INCOMPATIBLE_DESTINATION` |
+| `408` / `504` | `RECOVERY_ON_TIMER_EXPIRE` |
+| `485` / `604` | `NO_ROUTE_DESTINATION` |
+| `502 Bad Gateway` | `NETWORK_OUT_OF_ORDER` |
+| `400` / `481` / `500` / `503` | `NORMAL_TEMPORARY_FAILURE` |
+| `487 Request Terminated` | `ORIGINATOR_CANCEL` |
+
+注意容易混淆的映射：`404` 对应 `UNALLOCATED_NUMBER`，而非 `NO_ROUTE_DESTINATION`；`480` 对应 `NO_USER_RESPONSE`，而非 `NO_ANSWER`。未显式映射的 SIP 码回退到 `NORMAL_UNSPECIFIED`。
+
+**修复。** 问题通常需要在上游侧解决：`403` 表示服务商拒绝凭据或主叫信息，`404` 表示号码不被识别，`480`/`503` 表示目标暂时不可用。修正出站身份或路由后重试。
+
+## 症状：桥接结束而未尝试下一条腿 {#continue-on-fail}
+
+**症状。** 多目的地 `bridge` 在首次失败时停止，或本应停止却继续，导致拨号计划意外继续或挂断。
+
+**原因。** 出站腿失败后拨号计划是否继续，由 `switch_channel.c` 读取的 `continue_on_fail` 和 `failure_causes` 控制。两者均未设置时，仅 `NO_ANSWER`、`NO_USER_RESPONSE` 和 `ORIGINATOR_CANCEL` 默认允许继续，其他原因会挂断 A 腿。
+
+**确认。** 检查失败 B 腿的 `hangup_cause`，或 A 腿的 `last_bridge_hangup_cause`，并检查变量：
+
+- `continue_on_fail=true`：任何失败原因都继续拨号计划。
+- `continue_on_fail=false`：不继续，仅显式列出的原因（若有）可放行。
+- `continue_on_fail=user_busy,no_route_destination,603`：仅匹配这些名称或编号时继续，不区分大小写，接受 Q.850 数值。
+- `failure_causes=...`：反向过滤器，仅列表中的原因视为停止处理的失败，其余均继续。
+
+`ATTENDED_TRANSFER` 始终视为非失败，不触发继续执行逻辑。
+
+对于并行呼叫发起（`,` 和 `|` 运算符），`fail_on_single_reject` 控制一条腿拒绝是否中止整个集合。设为 `fail_on_single_reject=true` 时，首次拒绝就中止；也可指定逗号分隔的原因列表，仅对这些原因中止，前缀 `!` 用于取反。`originate_continue_on_timeout` 可在超时后继续尝试剩余呼叫腿。
+
+**修复。** 在 `bridge` 前按所需路由设置 `continue_on_fail` 或 `failure_causes`。它们是普通通道变量，见[通道变量](/reference/channel-variables)；`bridge` 应用见[拨号计划应用参考](/dialplan/dptools)。
+
+## 症状：CLI originate 返回 -ERR {#originate-cli}
+
+**症状。** 从 `fs_cli` 运行 `originate`，返回错误而非接通。
+
+**原因。** `originate` API 直接报告结果：成功打印新会话 UUID，失败打印此次尝试的 Q.850 原因，由 `mod_commands.c` 中的 `originate_function` 提供。
+
+**确认。** 读取响应：
+
+```text
+freeswitch@host> originate sofia/gateway/my_gateway/18005551212 &echo
+-ERR GATEWAY_DOWN
+```
+
+成功示例如下：
+
+```text
++OK 4f8c9a10-...-uuid
+```
+
+`-ERR` 后的字符串就是前表的原因名称，因此判断方法相同：`-ERR USER_NOT_REGISTERED` 表示目标无有效注册，`-ERR INVALID_GATEWAY` 表示网关名错误，`-ERR NO_ROUTE_DESTINATION` 表示没有可用路由，`-ERR RECOVERY_ON_TIMER_EXPIRE` 表示未收到响应并超时。
+
+**修复。** 将 `-ERR` 原因对应到前述章节，修复网关状态、注册、拨号字符串或上游问题。若原因指向 SIP 交换，需要查看实际响应，可启用 `sofia profile <name> siptrace on` 后重跑相同 `originate`。

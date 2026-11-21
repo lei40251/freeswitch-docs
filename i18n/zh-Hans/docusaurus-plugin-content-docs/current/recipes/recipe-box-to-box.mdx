@@ -1,0 +1,227 @@
+---
+sidebar_position: 4
+id: recipe-box-to-box
+slug: /recipes/box-to-box
+title: "第 36 章：连接两台 FreeSWITCH 服务器"
+description: "使用 SIP 网关或基于 IP 认证的中继连接两台 FreeSWITCH，使 A 服务器用户可以拨打 B 服务器用户。"
+sidebar_label: "36. 连接两台 FreeSWITCH 服务器"
+---
+
+# 第 36 章：连接两台 FreeSWITCH 服务器 {#chapter-36-connecting-two-freeswitch-servers}
+
+## 目标 {#goal}
+
+连接两台独立 FreeSWITCH 服务器，使注册在 **A 服务器**的用户通过四位分机号呼叫 **B 服务器**的用户。呼叫从 A 经指向 B 的 SIP 网关发出，到达 B 的 `external` 配置实例，进入 `public` 上下文，再路由到目标分机。
+
+```
+                    SIP trunk (port 5080)
+  Box A  192.0.2.10  ───────────────────────►  Box B  192.0.2.20
+  ┌──────────────────┐                         ┌──────────────────┐
+  │ user 1001 (5060) │                         │ user 2001 (5060) │
+  │ external (5080)  │  INVITE 2001            │ external (5080)  │
+  │  gateway "boxB" ─┼────────────────────────►│  public context  │
+  └──────────────────┘                         └──────────────────┘
+```
+
+本例中，A 呼叫 B 的 `2xxx` 用户。反向使用相同模式即可实现双向互通，见[变体](#variations)。`192.0.2.0/24` 和 `203.0.113.0/24` 是 [RFC 5737](https://datatracker.ietf.org/doc/html/rfc5737) 定义的文档示例地址段，请替换为自己的服务器 IP。
+
+## 前置条件 {#prerequisites}
+
+- 两台服务器均基于 vanilla 配置运行 FreeSWITCH，且各自至少有一个已注册用户（A 上的 `1001`、B 上的 `2001`）。
+- 两台服务器的 SIP 信令端口（`external` 配置实例的 `5080`）及 RTP 媒体端口范围能够互通。
+- 熟悉以下章节：
+  - [第 8 章：网关与中继注册](../users-endpoints/gateways.mdx)
+  - [第 5 章：SIP 配置实例（Sofia）](../users-endpoints/sip-profiles-sofia.mdx)
+  - [第 13 章：入站呼叫与 public 上下文](../dialplan/inbound-public-context.mdx)
+  - [第 11 章：XML 拨号计划](../dialplan/xml-dialplan.mdx)
+
+两台服务器不共享用户目录，各自认证本机注册用户；中继仅承载呼叫，不承载注册。
+
+---
+
+## 实现步骤 {#build-it}
+
+A 向 B 认证中继有两种方式：
+
+- **注册式网关**：A 向 B 发送 SIP REGISTER，使用用户名和密码认证。B 必须有可供 A 注册的用户账户。两台服务器使用动态 IP 时，此方式最简单。
+- **基于 IP 认证的中继**：双方均不注册，B 根据源 IP 信任 A。两台服务器都有静态 IP 时，此方式更直接。
+
+以下分别展示，两者选其一。
+
+### A 服务器：到 B 的出站网关 {#box-a--outbound-gateway-to-box-b}
+
+面向服务商的中继网关位于 `conf/sip_profiles/external/`，由 `external` 配置实例通过 `<X-PRE-PROCESS cmd="include" data="external/*.xml"/>` 引入。在此目录为到 B 的中继创建新文件。
+
+#### 变体 1：注册式网关 {#variant-1-registered-gateway}
+
+`conf/sip_profiles/external/boxB.xml`：
+
+```xml
+<include>
+  <gateway name="boxB">
+    <!-- Credentials for a user account that exists on Box B -->
+    <param name="username" value="trunkA"/>
+    <param name="password" value="s3cr3tpass"/>
+
+    <!-- Box B's external profile address; realm and proxy default to each other -->
+    <param name="realm"    value="192.0.2.20"/>
+    <param name="proxy"    value="192.0.2.20:5080"/>
+
+    <!-- Register with Box B and refresh hourly -->
+    <param name="register"         value="true"/>
+    <param name="expire-seconds"   value="3600"/>
+    <param name="retry-seconds"    value="30"/>
+
+    <!-- Detect a dead trunk: OPTIONS ping every 30s -->
+    <param name="ping"             value="30"/>
+  </gateway>
+</include>
+```
+
+#### 变体 2：基于 IP 认证的网关（不注册） {#variant-2-ip-authenticated-gateway-no-registration}
+
+`conf/sip_profiles/external/boxB.xml`：
+
+```xml
+<include>
+  <gateway name="boxB">
+    <!-- proxy is the only required field for a non-registering gateway -->
+    <param name="proxy"    value="192.0.2.20:5080"/>
+    <param name="register" value="false"/>
+
+    <!-- OPTIONS ping confirms the peer is reachable -->
+    <param name="ping"     value="30"/>
+  </gateway>
+</include>
+```
+
+`register` 为 `false` 时，FreeSWITCH 不发送 REGISTER，并在配置实例加载时立即将网关标记为 **UP**。可省略 `username` 和 `password`，默认分别为 `FreeSWITCH` 和空字符串。
+
+无需重启即可加载网关：
+
+```
+sofia profile external rescan
+sofia status gateway boxB
+```
+
+网关应显示 `Status: UP`。
+
+### A 服务器：通过网关路由 2xxx 的拨号计划 {#box-a--dialplan-to-route-2xxx-out-the-gateway}
+
+在 A 的 `default` 上下文中添加条目，例如在 `conf/dialplan/default/` 创建文件，将 `2` 开头的四位号码通过 `boxB` 网关桥接出去。端点字符串为 `sofia/gateway/<gateway-name>/<number>`。
+
+```xml
+<include>
+  <extension name="to_boxB">
+    <condition field="destination_number" expression="^(2\d{3})$">
+      <action application="set"    data="effective_caller_id_number=${caller_id_number}"/>
+      <action application="bridge" data="sofia/gateway/boxB/$1"/>
+    </condition>
+  </extension>
+</include>
+```
+
+`$1` 捕获完整四位号码（如 `2001`），发送给 B 的 INVITE 的 Request-URI 用户部分即为 `2001`。`set` 操作将原主叫号码带入 A 向 B 提供的 `From` 头，见[工作原理](#how-it-works)。
+
+### B 服务器：接收并路由入站呼叫 {#box-b--accept-and-route-the-inbound-call}
+
+呼叫到达 B 的 `external` 配置实例（端口 `5080`）。该实例配置 `context="public"` 和 `auth-calls="false"`，因此呼叫进入 `public` 上下文。在其中添加条目，将 `2xxx` 范围路由到本地用户。
+
+在 B 上创建 `conf/dialplan/public/01_from_boxA.xml`：
+
+```xml
+<include>
+  <extension name="from_boxA">
+    <condition field="destination_number" expression="^(2\d{3})$">
+      <action application="set"      data="domain_name=$${domain}"/>
+      <action application="transfer" data="$1 XML default"/>
+    </condition>
+  </extension>
+</include>
+```
+
+该规则匹配四位号码，设置 `domain_name` 以便在正确域中解析用户，然后将呼叫转入 B 的 `default` 上下文，由 vanilla 配置的 `Local_Extension` 拨号计划使已注册用户振铃。
+
+> **关于 `public` 上下文。** 它是未认证入站流量的安全边界。只应添加对任何能够访问端口 `5080` 的主叫都可安全执行的条目。匹配**明确**号码范围（`2\d{3}`），不要使用匹配全部的规则，也不要将任意目的号码转入 `default`。见[第 13 章](../dialplan/inbound-public-context.mdx)。
+
+#### 按源 IP 限制 B 的中继（IP 认证变体） {#restricting-box-bs-trunk-by-source-ip-ip-auth-variant}
+
+使用 IP 认证时，限制 `external` 配置实例，使仅 A 能向 `public` 发送未认证呼叫。首先在 `conf/autoload_configs/acl.conf.xml` 定义包含 A 地址的 ACL：
+
+```xml
+<configuration name="acl.conf" description="Network Lists">
+  <network-lists>
+    <list name="trusted-peers" default="deny">
+      <node type="allow" cidr="192.0.2.10/32"/>
+    </list>
+  </network-lists>
+</configuration>
+```
+
+然后在 B 的 `external` 配置实例中使用 `apply-inbound-acl` 引用该列表：
+
+```xml
+<param name="apply-inbound-acl" value="trusted-peers"/>
+```
+
+此时，源 IP 不在 `trusted-peers` 允许范围内的入站 SIP 请求会被以 `403` 拒绝。重新加载两个文件以使更改生效：
+
+```
+reloadacl
+sofia profile external restart
+```
+
+注册式网关不需要此 ACL：A 使用 B 上用户账户的用户名和密码进行认证，因此通过注册身份而非源 IP 标识中继。
+
+---
+
+## 工作原理 {#how-it-works}
+
+**注册式网关。** A 的 `external` 配置实例使用配置的 `username`/`password` 向 B 发送 SIP REGISTER。B 通过其目录中的用户账户认证注册。A 拨打 `2001` 时，拨号计划桥接到 `sofia/gateway/boxB/2001`；FreeSWITCH 查询 `boxB` 网关，构造发往 B 的 `proxy`（`192.0.2.20:5080`）、Request-URI 中包含 `2001` 的 INVITE，并通过已注册中继发送。
+
+**基于 IP 认证的中继。** 双方均不注册。A 的网关加载时即标记为 UP，直接向 B 的代理发送相同的 `sofia/gateway/boxB/2001` INVITE。B 信任该呼叫，因为源 IP 匹配 `apply-inbound-acl` 应用的 `trusted-peers` ACL，且 `external` 的 `auth-calls` 为 `false`，不发起摘要认证挑战。
+
+**进入 B 的 `public` 上下文。** 两种方式的 INVITE 均到达 B 的端口 `5080` 上配置 `context="public"` 的 `external` 实例。vanilla 的 `public` 上下文先运行 `outside_call` 等内置条目，再由 `from_boxA` 匹配 `2\d{3}`，通过 `transfer` 转入 `default`，使用户分机振铃。`public` 是两台服务器之间的信任边界，来自 A 的呼叫仅能到达它明确路由的目标。
+
+**主叫信息处理。** A 通过 SIP `From` 头向 B 提供主叫信息。默认情况下，网关使用自己的 `username` 或 `from-user` 作为 `From` 用户。若要跨中继传递*原始*主叫号码，可像上例一样在桥接前设置 `effective_caller_id_number`，或将网关参数 `caller-id-in-from` 设为 `true`，使经此网关桥接的出站呼叫使用入站主叫号码作为 `From` 用户。B 的标准入站主叫变量（`${caller_id_number}`、`${sip_from_user}`）由该头填充，见[第 13 章的主叫信息表](../dialplan/inbound-public-context.mdx#caller-id-on-inbound-calls)。
+
+完整网关参数见[第 8 章](../users-endpoints/gateways.mdx)；ACL 列表和 `apply-inbound-acl` 语义见[访问控制列表章节](../integration/access-control-lists.mdx)。
+
+---
+
+## 变体 {#variations}
+
+### 双向互通 {#bidirectional-linking}
+
+让 B 呼叫 A 的 `1xxx` 用户时，交换双方角色重复上述步骤：在 B 的 `external/` 目录定义指向 `192.0.2.10:5080` 的 `boxA` 网关，添加 `to_boxA` 拨号计划条目，将 `^(1\d{3})$` 桥接到 `sofia/gateway/boxA/$1`；在 A 的 `public` 上下文添加 `from_boxB` 条目。若使用 IP 认证，还需添加允许 `192.0.2.20/32` 的 `trusted-peers` ACL。这样双方分别有一个*发往*对端的网关，以及一个处理*来自*对端呼叫的 `public` 条目。
+
+### 共享拨号前缀 {#shared-dialplan-prefix}
+
+两台服务器的分机号可能重叠时，按拨号前缀而非号码范围路由。例如拨打 `8` 加分机号到达 B，在呼叫离开 A 前移除前缀：
+
+```xml
+<extension name="to_boxB_prefix">
+  <condition field="destination_number" expression="^8(\d{4})$">
+    <action application="bridge" data="sofia/gateway/boxB/$1"/>
+  </condition>
+</extension>
+```
+
+此处 `$1` 捕获不含 `8` 的四位号码，因此 A 拨打 `82001`，B 收到 `2001`。这样各自的本地编号计划保持独立，跨服务器呼叫也能从拨号字符串中明确识别。若需在线路上保留前缀，则将其放入捕获组（`^(8\d{4})$`），并在 B 匹配完整字符串。
+
+<SignalWireCallout
+  title="相同模式，以平台作为 B 服务器"
+  href="https://signalwire.com/docs/apis/rest/freeswitch-connector"
+  page="recipe-box-to-box"
+  linkText="查看 FreeSWITCH Connector">
+
+本章的网关同样可用于连接托管平台。将目标从第二台服务器改为 SignalWire，对端就可以是任意 SIP 端点、电话号码或 AI 智能体：
+
+```yaml
+- connect:
+    to: "sip:2001@office-b.example.sip.signalwire.com"
+```
+
+平台中的 FreeSWITCH Connector 资源表示每台服务器，因此混合部署中自托管与托管系统的路由方式，就与本例两台服务器间的路由相同。
+
+</SignalWireCallout>

@@ -1,0 +1,180 @@
+---
+sidebar_position: 1
+id: introduction
+slug: /foundations/introduction
+title: "第 1 章：简介与核心概念"
+description: "FreeSWITCH 的定位、运行时对象及配置组织方式。"
+sidebar_label: "1. 简介与核心概念"
+---
+
+# 第 1 章：简介与核心概念 {#chapter-1-introduction-and-core-concepts}
+
+FreeSWITCH 是用于语音、视频和文本通信的软件交换平台。本章说明后续章节依赖的概念：FreeSWITCH 的作用、运行时处理的对象，以及配置的组织方式。本章仅介绍配置模型，不涉及内部实现。
+
+:::tip FreeSWITCH Enterprise
+FreeSWITCH 开源且可免费使用。FreeSWITCH Enterprise 是由 SignalWire 提供专业支持和服务的商业支持版本。详情请联系 [sales@signalwire.com](mailto:sales@signalwire.com)。
+:::
+
+## FreeSWITCH 是什么 {#what-freeswitch-is}
+
+FreeSWITCH 连接通信端点，并对端点之间的呼叫应用处理逻辑。它负责用户注册和认证、通过 SIP 等协议接收和发起呼叫、协商媒体、运行语音信箱和会议等应用，以及按自定义规则路由呼叫。
+
+其行为几乎完全由配置决定。基础安装附带完整且可运行的默认配置（“vanilla” 配置），可作为 SIP PBX 使用。通过编辑 XML 配置文件即可调整 FreeSWITCH，无需修改代码。
+
+## 端点、通道与呼叫 {#endpoints-channels-and-calls}
+
+这些术语贯穿本手册。
+
+| 术语 | 含义 |
+| --- | --- |
+| 端点（Endpoint） | 发起或接收呼叫的协议接口。每个端点由一个模块实现，例如 SIP 的 Sofia 或 WebRTC 的 Verto。 |
+| 通道（Channel） | FreeSWITCH 与单个端点之间的一条呼叫腿，承载呼叫状态、媒体及一组通道变量。 |
+| 呼叫（Call） | 相互关联的一个或多个通道。典型的双方通话由两个通过桥接连接的通道组成。 |
+| 桥接（Bridge） | 连接两个通道、使媒体在二者之间流动的关联关系。 |
+| 会话（Session） | 通道及其应用状态的运行时容器。 |
+
+每个通道都携带通道变量，即保存呼叫状态并控制行为的具名值。通道变量由用户目录、拨号计划和应用设置，通过 `${variable_name}` 引用。完整列表见[第 32 章](../reference/channel-variables.mdx)。
+
+## 三个配置领域 {#the-three-configuration-domains}
+
+FreeSWITCH 将配置分为三个领域。理解它们的区别是理解系统的关键。
+
+| 领域 | 回答的问题 | 所在目录 |
+| --- | --- | --- |
+| 用户目录（Directory） | 谁可以连接，以及他们有哪些属性？ | `directory/` |
+| 拨号计划（Dialplan） | 呼叫到达后，应路由到哪里、执行什么操作？ | `dialplan/` |
+| 配置（Configuration） | 各模块和核心如何工作？ | `autoload_configs/` |
+
+用户目录中定义的用户向 SIP 配置实例进行认证。认证后，用户的 `user_context` 变量选择用于路由呼叫的拨号计划上下文。拨号计划随后运行应用，而应用的行为由对应模块的配置决定。详见[第 6 章](../users-endpoints/user-directory.mdx)、[第 7 章](../users-endpoints/sip-profiles-sofia.mdx)和[第 12 章](../dialplan/xml-dialplan.mdx)。
+
+## 配置领域示意图 {#configuration-domain-diagram}
+
+下图展示三个配置领域及呼叫在它们之间经过的路径。每个箭头表示领域之间的交接。
+
+```text
+  Endpoint (phone)
+       |
+       | SIP REGISTER / SIP INVITE
+       v
+  Sofia Profile (mod_sofia, internal profile)
+  - Listens on the configured sip-port
+  - Authenticates REGISTER requests against the Directory
+  - Routes answered INVITEs into its context (or the user's user_context)
+       |
+       | context = "default"  (from user_context variable in Directory)
+       v
+  Directory (directory/default/1000.xml)
+  - Holds credentials, user_context, caller-ID variables
+  - Consulted on REGISTER for authentication
+  - Consulted on bridge for destination contact lookup
+       |
+       | user_context = "default"
+       v
+  Dialplan context "default" (dialplan/default.xml)
+  - Extensions evaluated in order against destination_number
+  - Local_Extension matches ^(10[01][0-9])$
+  - Executes bridge application: user/1001@domain
+       |
+       | bridge
+       v
+  Sofia Profile (outbound leg to registered contact of 1001)
+       |
+       v
+  Endpoint (phone registered as 1001)
+```
+
+## 一次呼叫的组成 {#anatomy-of-a-call}
+
+以下以默认配置下分机 1000 呼叫分机 1001 为例，按步骤说明驱动每个阶段的配置文件。完整参数参考见第 6 章（用户目录）、第 7 章（SIP 配置实例与 Sofia）和第 12 章（XML 拨号计划）。
+
+**步骤 1：分机 1000 注册**
+
+分机 1000 向 `internal` 配置实例（`sip_profiles/internal.xml`）发送 SIP REGISTER。该实例启用了 `auth-calls` 并设置了 `force-register-domain`，因此会要求请求方进行认证。Sofia 查询用户目录来验证凭据，目录条目 `directory/default/1000.xml` 提供密码。成功后，Sofia 记录绑定关系（联系地址 URI 及其过期时间），使出站呼叫能够到达设备。目录条目还会向会话加载用户变量，包括：
+
+- `user_context = default`：选择该用户发起呼叫时使用的拨号计划上下文
+- `effective_caller_id_name = Extension 1000`
+- `effective_caller_id_number = 1000`
+
+**步骤 2：分机 1000 向 1001 发送 INVITE**
+
+分机 1000 向 `internal` 配置实例发送 SIP INVITE，Request-URI 为 `sip:1001@domain`。由于启用了 `auth-calls`，该实例会认证 INVITE，并再次通过用户目录验证凭据。认证成功后，实例确定使用哪个拨号计划上下文。由于主叫是已经认证的目录用户，FreeSWITCH 使用从该用户目录条目加载的 `user_context`。用户 1000 的值为 `default`。
+
+实例自身的 `context` 参数为 `public`（`sip_profiles/internal.xml` 中的 `context value="public"`）。该值仅适用于未认证的入站呼叫。已认证用户的 `user_context` 优先，因此呼叫进入 `default` 上下文。
+
+**步骤 3：拨号计划匹配目的号码**
+
+拨号计划引擎按顺序计算 `default` 上下文（`dialplan/default.xml`）。`Local_Extension` 条目包含以下条件：
+
+```xml
+<condition field="destination_number" expression="^(10[01][0-9])$">
+```
+
+目的号码 `1001` 匹配该条件。正则捕获值 `$1` 以 `dialed_extension` 导出。该条目随后在桥接前设置多个通道变量：
+
+- `call_timeout = 30`：继续执行后续操作前的振铃等待时间，单位为秒
+- `hangup_after_bridge = true`：桥接结束时挂断 A 腿
+- `continue_on_fail = true`：桥接失败时继续执行操作，以便进入后续的语音信箱回退流程
+
+**步骤 4：bridge 应用接通呼叫**
+
+`bridge` 操作为：
+
+```xml
+<action application="bridge" data="user/${dialed_extension}@${domain_name}"/>
+```
+
+`user/` 端点前缀指示 FreeSWITCH 在该域的用户目录中查找 `1001`，取得其已注册的联系地址 URI，并向该地址发起出站 SIP INVITE。1001 的目录条目（`directory/default/1001.xml`）与 1000 的条目结构相同。若 1001 已注册，Sofia 会向保存的联系地址发送 INVITE。
+
+若桥接失败或超时，且 `continue_on_fail` 为 true，则继续执行同一条目后续的 `answer` 和语音信箱 `bridge` 操作，将主叫转入 1001 的语音信箱。
+
+**步骤 5：媒体协商与流向**
+
+`internal` 配置实例设置了 `inbound-late-negotiation = true`，因此 A 腿的编解码器协商会推迟到 B 腿 SDP 可用时。该实例的 `inbound-codec-prefs` 和 `outbound-codec-prefs` 均取自 `$${global_codec_prefs}`，用于定义编解码器优先顺序。FreeSWITCH 分别为每条呼叫腿协商兼容的编解码器；若两条腿使用相同编解码器，FreeSWITCH 可以直接在二者之间传递 RTP。B 腿应答（SIP 200 OK）后，两个通道完成桥接，RTP 在两个端点之间流动。
+
+## 模块 {#modules}
+
+几乎所有功能均由启动时加载的模块提供。模块按所提供的接口类型分组。
+
+| 类别 | 提供的能力 | 示例 |
+| --- | --- | --- |
+| 端点 | 呼叫协议 | `mod_sofia`（SIP）、`mod_verto`（WebRTC） |
+| 应用 | 拨号计划应用和 API 命令 | `mod_dptools`、`mod_conference`、`mod_voicemail` |
+| 编解码器 | 音视频编码 | `mod_opus`、`mod_g729`、`mod_av` |
+| 文件格式 | 媒体文件读写 | `mod_sndfile`、`mod_local_stream` |
+| 拨号计划 | 拨号计划解释器 | `mod_dialplan_xml` |
+| 事件处理器 | 外部事件和 CDR 接口 | `mod_event_socket`、`mod_cdr_csv` |
+| 日志 | 日志输出 | `mod_console`、`mod_logfile` |
+| 语言 | 内嵌脚本 | `mod_lua` |
+| Say 和 ASR/TTS | 短语呈现和语音 | `mod_say_en`、`mod_flite` |
+
+加载哪些模块由 `modules.conf.xml` 控制，详见[第 5 章](../configuration-system/module-loading.mdx)。
+
+## 单一 XML 文档 {#the-single-xml-document}
+
+运行时，FreeSWITCH 将全部配置呈现为一个 XML 文档，包含固定的一组顶层节。磁盘上的多个小文件通过预处理器组装成该文档。
+
+| 节 | 内容 |
+| --- | --- |
+| `configuration` | 来自 `autoload_configs/` 的模块与核心配置 |
+| `dialplan` | 呼叫路由上下文 |
+| `chatplan` | 文本消息路由上下文 |
+| `directory` | 域、用户和组 |
+| `languages` | 短语与语言定义 |
+
+组装机制、预处理器和变量系统见[第 3 章](../configuration-system/xml-configuration.mdx)。
+
+## 本手册的覆盖范围 {#what-this-manual-covers}
+
+本手册按照运维人员的实际工作路径组织。第 1 部分帮助你运行系统，第 2 部分解释配置系统，第 3、4 部分定义谁能够连接以及如何路由呼叫，第 5 部分介绍媒体和编解码器，第 6 部分介绍内置应用，第 7 部分介绍集成接口，第 8 部分提供参考资料。
+
+继续阅读[第 2 章：快速入门](./getting-started.mdx)。
+
+<SignalWireCallout
+  title="该引擎也提供托管服务"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="introduction"
+  linkText="查看托管平台">
+
+由 FreeSWITCH 团队创立的 SignalWire 将同一引擎作为托管平台运行，通过 REST API 和 SWML（JSON/YAML 呼叫控制标记语言）提供号码、路由、会议、录音和 AI 智能体。阅读本手册时，可通过[附录 D](../reference/appendix-signalwire-map.mdx)查找各章对应的托管能力。
+
+</SignalWireCallout>

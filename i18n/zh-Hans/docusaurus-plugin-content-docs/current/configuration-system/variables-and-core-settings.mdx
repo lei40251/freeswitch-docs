@@ -1,0 +1,421 @@
+---
+sidebar_position: 2
+id: variables-and-core-settings
+slug: /configuration/core-settings
+title: "第 4 章：全局变量与核心设置"
+description: "逐项介绍 vars.xml 中的全局预处理变量，以及 switch.conf.xml 中的核心运行参数。"
+sidebar_label: "4. 全局变量与核心设置"
+---
+
+# 第 4 章：全局变量与核心设置 {#chapter-4-global-variables-and-core-settings}
+
+两个文件保存影响整个系统的值：`vars.xml` 定义全局预处理变量，`switch.conf.xml` 设置核心运行参数。本章分别介绍这两个文件。
+
+<SignalWireCallout
+  title="无需配置 max-sessions 的会话服务"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="core-settings"
+  linkText="查看托管平台">
+
+`max-sessions` 和 `sessions-per-second` 的存在源于单台服务器的容量限制。在 SignalWire 托管平台上，同一引擎通过随流量扩展的 API 提供服务，无需自行编写容量配置。
+
+</SignalWireCallout>
+
+## vars.xml 中的全局变量 {#global-variables-in-varsxml}
+
+`freeswitch.xml` 首先包含 `vars.xml`，因此其中定义的预处理变量可用于后续组装的所有文件。每个变量通过 `set` 预处理指令设置，在其他位置通过 `$${name}` 引用。
+
+```xml
+<X-PRE-PROCESS cmd="set" data="default_password=1234"/>
+<X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
+<X-PRE-PROCESS cmd="set" data="sound_prefix=$${sounds_dir}/en/us/callie"/>
+<X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
+```
+
+不能通过注释 `set` 指令来禁用它，应直接删除该行。文件中对此有明确说明。
+
+## 动态计算的变量 {#dynamically-calculated-variables}
+
+FreeSWITCH 启动时计算一组变量，并以 `$${name}` 的形式供配置引用。这些值无需手动设置。在控制台中可通过 `eval` 查看，例如 `eval $${local_ip_v4}`。
+
+| 变量 | 值 |
+| --- | --- |
+| `hostname` | 系统主机名 |
+| `local_ip_v4` | 主要 IPv4 地址 |
+| `local_mask_v4` | 主要 IPv4 地址的子网掩码 |
+| `local_ip_v6` | 主要 IPv6 地址 |
+| `switch_serial` | 交换机序列号 |
+| `base_dir` | 安装根目录 |
+| `conf_dir` | 配置根目录 |
+| `sounds_dir` | 声音文件目录 |
+| `recordings_dir` | 录音目录 |
+| `log_dir` | 日志目录 |
+| `db_dir` | 数据库目录 |
+| `script_dir` | 脚本目录 |
+| `certs_dir` | TLS 证书目录 |
+| `storage_dir` | 存储目录 |
+| `temp_dir` | 临时目录 |
+| `core_uuid` | 当前运行实例的唯一标识 |
+| `nat_public_addr` | 探测到的 NAT 公网地址 |
+| `nat_private_addr` | 探测到的 NAT 私网地址 |
+| `nat_type` | 检测到的 NAT 类型 |
+
+## 常用修改项 {#commonly-edited-variables}
+
+以下是 `vars.xml` 中最常修改的变量。
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `default_password` | 内置测试用户的共享密码 | `1234` |
+| `domain` | 认证和路由使用的默认 SIP 域 | `$${local_ip_v4}` |
+| `domain_name` | 用户目录中使用的 `domain` 别名 | `$${domain}` |
+| `sound_prefix` | 提示音文件的路径前缀 | `$${sounds_dir}/en/us/callie` |
+| `hold_music` | 保持音乐源 | `local_stream://moh` |
+| `use_profile` | 默认出站 SIP 配置实例 | `external` |
+| `global_codec_prefs` | 协商时提供的编解码器 | 在 `vars.xml` 中设置 |
+| `outbound_codec_prefs` | 出站呼叫腿提供的编解码器 | 在 `vars.xml` 中设置 |
+| `rtp_sdes_suites` | 提供和接受的 SRTP 加密套件 | 在 `vars.xml` 中设置 |
+
+修改 `domain` 会影响 SIP 认证，修改前请阅读“用户目录”章节。编解码器变量见“编解码器与协商”章节。
+
+## switch.conf.xml 中的核心设置 {#core-settings-in-switchconfxml}
+
+`switch.conf.xml` 使用 `<settings>` 块中的 `<param name="..." value="..."/>` 元素配置核心。默认文件中的多数参数被注释，启用前采用内部默认值。核心还从此文件读取 `<cli-keybindings>` 和 `<default-ptimes>`。
+
+```xml
+<configuration name="switch.conf" description="Core Configuration">
+  <settings>
+    <param name="max-sessions" value="1000"/>
+    <param name="sessions-per-second" value="30"/>
+    <param name="loglevel" value="debug"/>
+  </settings>
+</configuration>
+```
+
+## 核心设置参考 {#core-settings-reference}
+
+以下列出核心从 `switch.conf.xml` 的 `<settings>` 块解析的全部参数。默认值列表示配置文件未提供该参数时的内部代码默认值；若 vanilla 配置显式设置了其他值，会在括号内注明。
+
+### 会话与呼叫控制 {#session-and-call-control}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `max-sessions` | 最大并发会话数 | 整数 | `1000` |
+| `sessions-per-second` | 每秒最多创建的新会话数 | 整数 | `30` |
+| `multiple-registrations` | 允许中央注册表中每个账户存在多个注册 | `true`、`false` | `false` |
+| `max-audio-channels` | 每个会话的最大音频声道数；0 表示无限制 | 整数 | `0`（无限制） |
+| `enable-early-hangup` | 对端指示挂断后立即挂断通道，不等待媒体拆除完成 | `true`、`false` | `false` |
+| `min-idle-cpu` | 开始拒绝新呼叫之前要求的最低 CPU 空闲百分比 | 浮点数 | 未设置（无限制） |
+| `tipping-point` | 开始减载时的活动会话数；`0` 禁用 | 整数 | `0` |
+
+### 日志 {#logging}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `loglevel` | 全局日志级别 | `debug`、`info`、`notice`、`warning`、`err`、`crit`、`alert` | `debug` |
+| `debug-level` | 核心调试详细程度 | `0`-`10` | `0` |
+| `colorize-console` | 彩色控制台输出 | `true`、`false` | `false`（vanilla 配置为 `true`） |
+| `dialplan-timestamps` | 在拨号计划日志中包含完整时间戳 | `true`、`false` | `false` |
+| `verbose-channel-events` | 在每个通道事件中包含所有通道变量 | `true`、`false` | `false` |
+
+### 数据库 {#database}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `max-db-handles` | 核心数据库最大并发句柄数，必须为 5–5000 | 整数 | `50` |
+| `db-handle-timeout` | 获取数据库句柄失败前的等待秒数，必须为 1–5000 | 整数 | `5`（vanilla 配置为 `10`） |
+| `core-db-dsn` | 外部核心数据库 DSN，格式见下文 | DSN 字符串 | 未设置（使用 SQLite） |
+| `core-db-name` | SQLite 核心数据库的替代路径或名称；绝对路径原样使用，单独名称解析为 `$${db_dir}/name.db` | 路径或名称 | `$${db_dir}/core.db` |
+| `core-dbtype` | SQL 方言的数据库类型提示；仅识别 `MSSQL`，其他值选择默认方言 | `MSSQL` | 默认方言 |
+| `auto-create-schemas` | 启动时自动创建数据库结构 | `true`、`false` | `true` |
+| `auto-clear-sql` | 启动时清空 SQL 表 | `true`、`false` | `true` |
+| `odbc-skip-autocommit-flip` | 抑制 FreeSWITCH 通常对 ODBC 连接执行的自动提交切换 | `true`、`false` | `false` |
+| `core-non-sqlite-db-required` | 无法建立任何外部数据库连接时中止启动 | `true`、`false` | `false` |
+| `core-db-pre-trans-execute` | 每个数据库事务之前执行的 SQL 语句 | SQL 字符串 | 未设置 |
+| `core-db-post-trans-execute` | 每个数据库事务之后执行的 SQL 语句 | SQL 字符串 | 未设置 |
+| `core-db-inner-pre-trans-execute` | 每个内部数据库事务之前执行的 SQL 语句 | SQL 字符串 | 未设置 |
+| `core-db-inner-post-trans-execute` | 每个内部数据库事务之后执行的 SQL 语句 | SQL 字符串 | 未设置 |
+
+设置 `core-db-dsn` 可将核心数据库迁移到 PostgreSQL 或 MariaDB，需要加载 `mod_pgsql` 或 `mod_mariadb`。DSN 格式示例：
+
+```
+pgsql://hostaddr=127.0.0.1 dbname=freeswitch user=freeswitch password=''
+postgresql://user:secret@localhost/freeswitch
+mariadb://Server=localhost;Database=freeswitch;Uid=freeswitch;Pwd=pass;
+dsn:username:password
+```
+
+### RTP {#rtp}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `rtp-start-port` | 分配给 RTP 的最低 UDP 端口 | 端口号 | `16384` |
+| `rtp-end-port` | 分配给 RTP 的最高 UDP 端口 | 端口号 | `32768` |
+| `rtp-port-usage-robustness` | 分配 RTP 端口前测试每个端口，确认其未被占用 | `true`、`false` | `false` |
+| `rtp-retain-crypto-keys` | 将 SRTP 加密密钥保存在通道变量和 CDR 中；启用后，任何能读取 CDR 的人都可解密安全媒体 | `true`、`false` | `false` |
+| `ice-resolve-candidate` | 解析 ICE 候选 | `true`、`false` | `false` |
+
+### DTMF {#dtmf}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `min-dtmf-duration` | DTMF 事件最短时长，以采样数计；不足时补齐，不能低于 `400` | 整数 | `400` |
+| `max-dtmf-duration` | DTMF 事件最长时长，以采样数计；超出时截断，不能高于 `192000` | 整数 | `192000` |
+| `default-dtmf-duration` | 主动生成的事件或未携带时长的入站事件的 DTMF 时长 | 整数 | `2000` |
+
+### 定时 {#timing}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `1ms-timer` | 将核心定时器分辨率从默认 20 ms 改为 1 ms | `true` | `false` |
+| `enable-monotonic-timing` | 使用单调时钟计时 | `true`、`false` | `false` |
+| `enable-clock-nanosleep` | 使用 `clock_nanosleep` 唤醒定时器 | `true`、`false` | `false` |
+| `enable-softtimer-timerfd` | 对软件定时器使用 Linux `timerfd`；允许 `true`、`false`、`broadcast` 或 `fd-per-timer` | `true`、`false`、`broadcast`、`fd-per-timer` | `false` |
+| `enable-cond-yield` | 在定时器中启用有条件的执行权让出 | `true`、`false` | `false` |
+| `enable-timer-matrix` | 启用定时器矩阵 | `true`、`false` | `false` |
+| `timer-affinity` | 定时器线程的 CPU 亲和性；`disabled` 不绑定 CPU，整数则绑定到对应 CPU 索引 | `disabled` 或整数 | `disabled` |
+| `cpu-idle-smoothing-depth` | 计算 CPU 空闲百分比时用于求平均的采样数 | 整数 | `0` |
+
+### 系统执行 {#system-execution}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `threaded-system-exec` | 在专用线程中运行 `system()` 调用；不支持 Windows | `true`、`false` | `true`（非 Windows） |
+| `spawn-instead-of-system` | 执行外部命令时使用 `posix_spawn` 代替 `system()`；不支持 Windows | `true`、`false` | `false` |
+| `session-thread-pool` | 为会话线程使用线程池，而非每会话单独分配线程 | `true`、`false` | `true` |
+
+### 事件 {#events}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `event-heartbeat-interval` | `HEARTBEAT` 事件间隔，单位为秒 | 整数 | `20` |
+| `events-use-dispatch` | 通过分发线程池路由事件 | `true`、`false` | `true` |
+| `initial-event-threads` | 启动时创建的事件分发线程数；隐式启用 `events-use-dispatch`，上限为 CPU 数量的一半 | 整数 | 未设置 |
+| `api-expansion` | 允许在事件头中展开 API | `true`、`false` | `true` |
+| `event-channel-key-separator` | 事件通道键层级的分隔符 | 字符串 | `.` |
+| `event-channel-enable-hierarchy-deliver` | 将事件投递到通道层级中的所有父节点 | `true`、`false` | `false` |
+| `event-channel-hierarchy-deliver-once` | 层级事件即使匹配多个订阅者，也只投递一次 | `true`、`false` | `false` |
+| `event-channel-log-undeliverable-json` | 记录无法投递的事件通道消息 | `true`、`false` | `false` |
+
+### 身份标识 {#identity}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `switchname` | 覆盖数据库和 CURL 使用的系统主机名；适用于共享配置但需要不同身份的高可用集群节点 | 字符串 | 系统主机名 |
+| `uuid-version` | 通道 ID 使用的 UUID 版本 | `4`、`7` | `4` |
+
+### 其他设置 {#miscellaneous}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `mailer-app` | 发送语音信箱邮件的程序 | 程序名 | `sendmail` |
+| `mailer-app-args` | 传递给 `mailer-app` 的参数 | 字符串 | `-t` |
+| `dump-cores` | 移除核心转储大小限制，使崩溃时能生成 core 文件；需要 `HAVE_SETRLIMIT` | `yes`、`no` | `no` |
+| `enable-use-system-time` | 使用系统墙上时钟，而非 FreeSWITCH 内部时间 | `true`、`false` | `false` |
+| `exclude-error-log-from-xml-cdr` | 从 XML CDR 输出中排除错误日志 | `true`、`false` | `false` |
+| `caller-profile-soft-variables-uses-prefix` | 为主叫信息中的软变量添加前缀 | `true`、`false` | `false` |
+| `caller-profile-soft-lookup-values` | 查找主叫信息中的软变量值 | `true`、`false` | `false` |
+
+## 控制台按键绑定 {#console-key-bindings}
+
+`switch.conf.xml` 通过 `<cli-keybindings>` 将 `fs_cli` 的功能键映射到命令。每个 `<key>` 将一个数字映射到命令字符串，该数字对应功能键编号。
+
+```xml
+<cli-keybindings>
+  <key name="1" value="help"/>
+  <key name="2" value="status"/>
+  <key name="5" value="sofia status"/>
+  <key name="6" value="reloadxml"/>
+</cli-keybindings>
+```
+
+| 按键 | 默认命令 |
+| --- | --- |
+| F1 | `help` |
+| F2 | `status` |
+| F3 | `show channels` |
+| F4 | `show calls` |
+| F5 | `sofia status` |
+| F6 | `reloadxml` |
+| F7 | `console loglevel 0` |
+| F8 | `console loglevel 7` |
+| F9 | `sofia status profile internal` |
+| F10 | `sofia profile internal siptrace on` |
+| F11 | `sofia profile internal siptrace off` |
+| F12 | `version` |
+
+## 日志配置 {#logging-configuration}
+
+FreeSWITCH 通过一个或多个日志模块输出日志。各模块向核心注册并独立接收日志记录。`switch.conf.xml` 中的核心 `loglevel` 参数设置全局上限：超过该级别的记录在送达任何日志模块之前就被核心丢弃。各日志模块在此基础上应用自己的过滤器，无法输出核心已经丢弃的级别。
+
+### 日志级别 {#log-levels}
+
+FreeSWITCH 定义 8 个日志级别，以下按数值从小到大、详细程度递增排列。`console loglevel` 命令使用数值，配置文件使用名称。
+
+| 数值 | 名称 | 含义 |
+| --- | --- | --- |
+| 0 | `console` | 专门发往控制台通道的输出 |
+| 1 | `alert` | 需要立即采取措施 |
+| 2 | `crit` | 严重情况 |
+| 3 | `err` | 错误情况 |
+| 4 | `warning` | 警告情况 |
+| 5 | `notice` | 正常但重要的事件 |
+| 6 | `info` | 信息性消息 |
+| 7 | `debug` | 调试消息 |
+
+`switch.conf.xml` 中的核心 `loglevel` 接受名称值（`debug`、`info`、`notice`、`warning`、`err`、`crit`、`alert`）。设为 `warning` 时，只有 `warning`、`err`、`crit` 和 `alert` 记录能到达日志模块。vanilla 配置将其设为 `debug`，允许所有记录通过，再由各日志模块自行过滤。
+
+### mod_console {#mod_console}
+
+`mod_console` 将日志写入 FreeSWITCH 控制台（终端或 `fs_cli` 会话），通过 `console.conf.xml` 配置。
+
+#### 设置 {#settings}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `colorize` | 输出 ANSI 颜色码以区分日志级别 | `true`、`false` | `false` |
+| `loglevel` | 本日志模块接受的最高级别，超出时抑制 | `console`、`alert`、`crit`、`err`、`warning`、`notice`、`info`、`debug` | `debug` |
+| `uuid` | 每条日志前添加会话 UUID | `true`、`false` | `false` |
+| `json` | 以 JSON 对象而非纯文本输出日志 | `true`、`false` | `false` |
+
+vanilla 配置将 `loglevel` 设为预处理变量 `$${console_loglevel}`，该变量在 `vars.xml` 中定义为 `info`。要在控制台输出所有级别，可将 `loglevel` 设为 `debug`。
+
+```xml
+<configuration name="console.conf" description="Console Logger">
+  <settings>
+    <param name="colorize" value="true"/>
+    <param name="loglevel" value="info"/>
+  </settings>
+  <mappings>
+    <map name="all" value="console,debug,info,notice,warning,err,crit,alert"/>
+  </mappings>
+</configuration>
+```
+
+#### 级别映射 {#level-maps}
+
+`<mappings>` 块控制特定源文件或函数显示哪些级别。每个 `<map>` 元素的 `name` 属性标识源文件名、函数名或 `all`，`value` 属性列出以逗号分隔的一个或多个级别名称。
+
+- `name="all"` 适用于所有源位置。一旦存在，就会覆盖其他映射项。
+- 具名项仅适用于来自对应文件或函数的日志，可单独为某个模块启用详细输出，不影响其他模块。
+
+```xml
+<mappings>
+  <!-- Pass all levels globally -->
+  <map name="all" value="warning,err,crit,alert"/>
+  <!-- Also pass debug and info from a specific source file -->
+  <map name="mod_sofia.c" value="debug,info,warning,err,crit,alert"/>
+</mappings>
+```
+
+`<map>` 中的级别列表是掩码，不是阈值。列出 `warning,err,crit,alert` 就只允许这四个级别。使用 `all` 作为值则允许所有级别。
+
+`console loglevel` API 命令可在不重新加载配置的情况下调整运行时 `loglevel`。`console colorize`、`console uuid` 和 `console json` 也可在运行时切换对应设置。
+
+### mod_logfile {#mod_logfile}
+
+`mod_logfile` 将日志写入一个或多个文件，通过 `logfile.conf.xml` 配置。该文件采用配置实例结构：全局 `<settings>` 块控制 HUP 行为，`<profiles>` 内每个 `<profile>` 定义独立的日志目标及其路径、轮转策略和级别过滤器。
+
+#### 全局设置 {#global-settings}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `rotate-on-hup` | FreeSWITCH 收到 SIGHUP 时轮转日志文件，而非关闭后重新打开 | `true`、`false` | `false` |
+
+#### 配置实例设置 {#profile-settings}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `logfile` | 日志文件的绝对路径 | 路径字符串 | `$${log_dir}/freeswitch.log` |
+| `rollover` | 触发轮转的文件字节数；`0` 禁用基于大小的轮转 | 整数 | `10485760`（约 10 MB；vanilla 配置为 `1048576000`） |
+| `maximum-rotate` | 保留的轮转日志文件数上限；设置后使用数字后缀（`.1`、`.2` 等）代替日期戳，达到上限时删除最旧文件；`0` 禁用数量限制 | 整数 | `0`（无上限，使用日期戳文件名） |
+| `uuid` | 每条日志前添加会话 UUID | `true`、`false` | `true` |
+
+vanilla 配置将 `rollover` 设为 `1048576000`（约 1 GB），将 `maximum-rotate` 设为 `32`，最多生成 32 个编号轮转文件（`freeswitch.log.1` 至 `freeswitch.log.32`）。
+
+#### 轮转行为 {#rotation-behavior}
+
+当前日志文件达到 `rollover` 字节阈值时自动触发大小轮转。信号触发的轮转行为取决于 `rotate-on-hup`：
+
+- `rotate-on-hup true`：收到 SIGHUP 时轮转每个配置实例的日志文件。
+- `rotate-on-hup false`：收到 SIGHUP 时关闭并重新打开每个配置实例的日志文件，不重命名；适用于自行重命名日志后再发送 SIGHUP 的外部轮转工具。
+
+`maximum-rotate` 为非零值时，轮转将当前文件重命名为 `logfile.1`，既有编号加 1，并删除超出数量上限的文件。为 0（默认值）时，轮转会在文件名后追加日期时间戳和索引。
+
+#### 配置实例级别映射 {#profile-level-maps}
+
+每个配置实例的 `<mappings>` 块与 `console.conf.xml` 中的行为相同：`<map>` 元素使用 `name`（文件、函数或 `all`）和 `value`（逗号分隔的级别名或 `all`）。
+
+```xml
+<configuration name="logfile.conf" description="File Logging">
+  <settings>
+    <param name="rotate-on-hup" value="true"/>
+  </settings>
+  <profiles>
+    <profile name="default">
+      <settings>
+        <param name="logfile" value="/var/log/freeswitch/freeswitch.log"/>
+        <param name="rollover" value="52428800"/>
+        <param name="maximum-rotate" value="10"/>
+        <param name="uuid" value="true"/>
+      </settings>
+      <mappings>
+        <map name="all" value="notice,warning,err,crit,alert"/>
+      </mappings>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+一个 `logfile.conf.xml` 中可以存在多个配置实例。它们独立加载，因此可将不同级别集合写入不同文件。
+
+### mod_syslog {#mod_syslog}
+
+`mod_syslog` 将日志转发给系统 syslog 守护进程，通过 `syslog.conf.xml` 配置，默认不加载。
+
+#### 设置 {#settings-1}
+
+| 参数 | 用途 | 允许值 | 默认值 |
+| --- | --- | --- | --- |
+| `ident` | 传递给 `openlog()` 的身份字符串，作为 syslog 条目的程序名 | 字符串 | `freeswitch` |
+| `facility` | syslog 设施类型 | `auth`、`cron`、`daemon`、`kern`、`local0`-`local7`、`lpr`、`mail`、`news`、`syslog`、`user`、`uucp`（以及平台支持时的 `authpriv`、`ftp`） | `user` |
+| `loglevel` | 转发到 syslog 的最高 FreeSWITCH 日志级别，超出时丢弃 | `console`、`alert`、`crit`、`err`、`warning`、`notice`、`info`、`debug` | `warning` |
+| `uuid` | 每条 syslog 消息前添加会话 UUID | `true`、`false` | `true` |
+
+FreeSWITCH 日志级别与 syslog 优先级的映射为：`debug` → `LOG_DEBUG`，`info` → `LOG_INFO`，`notice` → `LOG_NOTICE`，`warning` → `LOG_WARNING`，`err` → `LOG_ERR`，`crit` → `LOG_CRIT`，`alert` → `LOG_ALERT`。`console` 映射到 `LOG_NOTICE`。
+
+`mod_syslog` 不支持按源文件或函数进行级别映射；`loglevel` 是该日志模块唯一的全局阈值。
+
+`format` 参数会从配置文件解析，但当前实现不使用其值：无论如何，日志行均以纯文本传递给 `syslog()`。
+
+```xml
+<configuration name="syslog.conf" description="Syslog Logger">
+  <settings>
+    <param name="ident" value="freeswitch"/>
+    <param name="facility" value="local0"/>
+    <param name="loglevel" value="notice"/>
+    <param name="uuid" value="true"/>
+  </settings>
+</configuration>
+```
+
+### 启用日志模块 {#enabling-logger-modules}
+
+在 `autoload_configs` 目录的 `modules.conf.xml` 中，通过 `<modules>` 块加载日志模块。
+
+vanilla 配置默认加载 `mod_console` 和 `mod_logfile`：
+
+```xml
+<load module="mod_console"/>
+<load module="mod_logfile"/>
+```
+
+`mod_syslog` 存在但已注释：
+
+```xml
+<!-- <load module="mod_syslog"/> -->
+```
+
+要启用 `mod_syslog`，删除注释分隔符，并确保 `autoload_configs` 目录中存在 `syslog.conf.xml`。
+
+三个模块可以同时加载。各模块独立接收核心日志并应用自己的过滤器。因此，若三个模块都已加载且过滤器包含某级别，一条通过核心 `loglevel` 上限的记录可以同时输出到控制台、写入文件并转发到 syslog。

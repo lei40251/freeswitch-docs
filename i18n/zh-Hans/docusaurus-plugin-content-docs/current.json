@@ -1,0 +1,94 @@
+{
+  "version.label": {
+    "message": "当前版本",
+    "description": "The label for version current"
+  },
+  "sidebar.manual.category.Part 1: Foundations": {
+    "message": "第 1 部分：基础知识",
+    "description": "The label for category 'Part 1: Foundations' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 2: The Configuration System": {
+    "message": "第 2 部分：配置系统",
+    "description": "The label for category 'Part 2: The Configuration System' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 3: Users and Endpoints": {
+    "message": "第 3 部分：用户与端点",
+    "description": "The label for category 'Part 3: Users and Endpoints' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 4: Call Routing and the Dialplan": {
+    "message": "第 4 部分：呼叫路由与拨号计划",
+    "description": "The label for category 'Part 4: Call Routing and the Dialplan' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 5: Media and Codecs": {
+    "message": "第 5 部分：媒体与编解码器",
+    "description": "The label for category 'Part 5: Media and Codecs' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 6: Applications and Features": {
+    "message": "第 6 部分：应用与功能",
+    "description": "The label for category 'Part 6: Applications and Features' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 7: Integration and Control": {
+    "message": "第 7 部分：集成与控制",
+    "description": "The label for category 'Part 7: Integration and Control' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 8: Reference": {
+    "message": "第 8 部分：参考资料",
+    "description": "The label for category 'Part 8: Reference' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 9: Module Reference": {
+    "message": "第 9 部分：模块参考",
+    "description": "The label for category 'Part 9: Module Reference' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Applications": {
+    "message": "应用",
+    "description": "The label for category 'Applications' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Endpoints": {
+    "message": "端点",
+    "description": "The label for category 'Endpoints' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Dialplan Engines": {
+    "message": "拨号计划引擎",
+    "description": "The label for category 'Dialplan Engines' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Codecs": {
+    "message": "编解码器",
+    "description": "The label for category 'Codecs' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.File Formats and Streaming": {
+    "message": "文件格式与流式传输",
+    "description": "The label for category 'File Formats and Streaming' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Speech: ASR and TTS": {
+    "message": "语音：ASR 与 TTS",
+    "description": "The label for category 'Speech: ASR and TTS' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Events, CDR, and Logging": {
+    "message": "事件、CDR 与日志",
+    "description": "The label for category 'Events, CDR, and Logging' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Caching and Data Stores": {
+    "message": "缓存与数据存储",
+    "description": "The label for category 'Caching and Data Stores' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.XML Interfaces and Directories": {
+    "message": "XML 接口与用户目录",
+    "description": "The label for category 'XML Interfaces and Directories' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Embedded Languages": {
+    "message": "内嵌语言",
+    "description": "The label for category 'Embedded Languages' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 10: Recipes": {
+    "message": "第 10 部分：完整示例",
+    "description": "The label for category 'Part 10: Recipes' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 11: Troubleshooting": {
+    "message": "第 11 部分：故障排查",
+    "description": "The label for category 'Part 11: Troubleshooting' in sidebar 'manual'"
+  },
+  "sidebar.manual.category.Part 12: Programming (ESL & Scripting)": {
+    "message": "第 12 部分：编程（ESL 与脚本）",
+    "description": "The label for category 'Part 12: Programming (ESL & Scripting)' in sidebar 'manual'"
+  }
+}

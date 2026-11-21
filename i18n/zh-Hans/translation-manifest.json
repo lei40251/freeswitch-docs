@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "files": {
+    "applications/index.mdx": {
+      "sourceHash": "c35ab51198d2d8ccee691a929a150d2d7d7c36025941e9edfb30bfd56104eb1f",
+      "translationHash": "cfdf767c07ee458176a5101ad359e6c1fea3ebddaef2004155d59ac31a31cc74"
+    },
+    "configuration-system/index.mdx": {
+      "sourceHash": "d2f8064a5da9400cc78180fa58a442535196acfdaf74083ac5d1c69ac8b34e2c",
+      "translationHash": "637c03d07b7dfdabe138720328a711fd795a85f255a6bf38014957408d721e9b"
+    },
+    "dialplan/index.mdx": {
+      "sourceHash": "18f34b1babc8bafd8d5adfdfbd5c5e897efe3eb4ed8ce568f4ff5a55a14087ab",
+      "translationHash": "af9ecb219afc8476d2ce4335d1428f3d9b409abb5cf962feacbfa6bdf36278ec"
+    },
+    "foundations/getting-started.mdx": {
+      "sourceHash": "7621a82d8179fbd480d5f68fe75890e2c6fa7821d21048a9f3a5d3da78e6b35c",
+      "translationHash": "b589c58488b9fe519b8d162c61a21c5303e2391f5bd45a0076c75b3341c7c4df"
+    },
+    "foundations/index.mdx": {
+      "sourceHash": "c70426e95da6c08a7f189253f1d3fe9246299760c92da5e672caa92ab7857a67",
+      "translationHash": "2ff6716ff99f11330ac47cfae5597c67d83c77487fc9a4dacbd6e5e15bf4761c"
+    },
+    "foundations/introduction.mdx": {
+      "sourceHash": "97d19efd0eb1ad1b74992385be83b763e770eae1cd78a3b3187bd681ae0a7b53",
+      "translationHash": "a689742f7e7bdf401a158b4a90b9fe3645377e51a8f7e7a4daae395ee637f845"
+    },
+    "index.mdx": {
+      "sourceHash": "05d54eb2de5e004ff8ca90b891792a9ea63d41755c2aed6cd5eb8297f48bad6c",
+      "translationHash": "024d01a0a2e68e5138aae7f62ebba2d4957f131138b5754166993e50dabdd7cd"
+    },
+    "integration/index.mdx": {
+      "sourceHash": "40f2e5a9ea5423b05b696f17eafb3ba50a04c99cff0dcbc28e4a5b1bce11f9ec",
+      "translationHash": "5f23d4802493b6376fb7ef375d48c5f669dd33e0ea6b234730dfa6df6c5eb7d6"
+    },
+    "media/index.mdx": {
+      "sourceHash": "d31b3efb74f4380d6ccf156ea5a69331d6285b422cdfa5e2c08542f96fb0f341",
+      "translationHash": "105d11b6575b992126b936a2de1b4baa7a1f349c603d439472ca9d06996504e5"
+    },
+    "users-endpoints/index.mdx": {
+      "sourceHash": "0600fe27d9d4f3c5498e643ae4229b52d285a424ac71f6bbbbc6fe96f9176e0d",
+      "translationHash": "afaf18be7209fe17fa413f90368a64faad73d8c806687bcfd9928902b53d5fd9"
+    },
+    "configuration-system/module-loading.mdx": {
+      "sourceHash": "a312ba486375720004e3497ce096d974684e2d68102608b344183a611345aa35",
+      "translationHash": "d4620a43cbfa5953b2c4a2d2750eaac1fcbeae8c2876ac93d6b6ab4c9047de6d"
+    },
+    "configuration-system/variables-and-core-settings.mdx": {
+      "sourceHash": "43216ab711385604bb396b674a5aaeecafac0afdf8e7516aedc1446997c1e290",
+      "translationHash": "095d856c696c2ee4054c02f437bd4a3d40f3eea548b63f934c8716f0edf231f5"
+    },
+    "configuration-system/xml-configuration.mdx": {
+      "sourceHash": "d0868a9d877e0e3b0bb08b2e0781da47286fd39a67bdde123060c724f429240f",
+      "translationHash": "662af2b62b6cbc1b2caa157abffd70d41ffa178e9ecfb7c1d2e2287f2cfbdfd3"
+    },
+    "recipes/index.mdx": {
+      "sourceHash": "deafcbfad18d0b32635290ebb5ad388ba20a9497bb9eb735e720477cc7d3c147",
+      "translationHash": "7e4fb1e5d543a76600ea9ed2fd9cb1f756cac1758db4cf61293724042a1dd4ad"
+    },
+    "recipes/recipe-box-to-box.mdx": {
+      "sourceHash": "fc4a0309c870e7ffbdf87494408be32e1cfac5b0b652f2d0cc815b0c7b15d593",
+      "translationHash": "ddb508060a35f5a57e8691d29d40edb7e840b48dd4e33095b9340d4f15c553c6"
+    },
+    "recipes/recipe-click-to-call.mdx": {
+      "sourceHash": "2744d41a7a6b6506e65a12c89b7b111233859c052d1a16f0a555ef7b5f710e16",
+      "translationHash": "890579e05223a7ffb71424253c69df40f25e53f3a435e3db7990b4472f25b6ef"
+    },
+    "recipes/recipe-conference-pin.mdx": {
+      "sourceHash": "f0bb0ed05be99966a6d4d3f50f458e00dc493bbb5335a0984a90a34e4a40f2b4",
+      "translationHash": "fa212faa2984ec97a8d8f0b99374635f71770ca627f790db0f7e6f2da60af048"
+    },
+    "recipes/recipe-did-ivr-voicemail.mdx": {
+      "sourceHash": "1be13421914af47031ad77c34c9f270220cbe121d89360a16e7fe0dda5d540a7",
+      "translationHash": "fada046b0fb44fe4e80b52f2a08c2a87bcedc572042f1a75f2a4c884511a65b2"
+    },
+    "recipes/recipe-ring-group.mdx": {
+      "sourceHash": "128d43c7adeed3a34854154cb952c2a66b029aba7c1b7cb73fdd4fbe367b4582",
+      "translationHash": "1ed24d5605249de661b9e46e8a2335565bddfd37f3c114763c06307988d3a3b3"
+    },
+    "recipes/recipe-time-routing.mdx": {
+      "sourceHash": "c1f2a6dbe6b47d4d93e0f32f262b753b1fb877e71df0a4dab2351865081739b5",
+      "translationHash": "84b9b23211a41c87ffe1d91fd3e44db1a01295f200932207ef759dae8ed399bb"
+    },
+    "troubleshooting/diagnostic-toolbox.mdx": {
+      "sourceHash": "c23c297af9237258c6911222732d79f558578b62d198b09385cae8a7aa23b31f",
+      "translationHash": "1d84353515b10446cefcf15e88636250f2ff6157223c4b98db2aecac2d59aa11"
+    },
+    "troubleshooting/index.mdx": {
+      "sourceHash": "3954bd8db217cece370a22045308bbfc9160aa6b18e693db58faec05d2fd07c0",
+      "translationHash": "dd865d869bb7a123237698b53bf2ca96f3cd89fb6d29e2c31e326ea4a499ba51"
+    },
+    "troubleshooting/registration-problems.mdx": {
+      "sourceHash": "3a615899eed659e77e347e9e8663a2f58d33516161fc027c7410d39a0e0d9396",
+      "translationHash": "5de529069c014ca25882e0bd1d1aad195e1f962593c4925c83dd2c94ec99b859"
+    },
+    "troubleshooting/audio-problems.mdx": {
+      "sourceHash": "0114b38b596efb8098d84c1d356d0739490030eb0f9adbd915270deb85f3c0bd",
+      "translationHash": "43590526c316d770264f46c00dca04f3f8e3218d620a6a888bb3a7642190f5ed"
+    },
+    "troubleshooting/call-setup-failures.mdx": {
+      "sourceHash": "8454ff21eb19ff60e5159618bce807793e27461cdfcc0b67b70ce02bc56bcda7",
+      "translationHash": "82a74e21deb13e9f83abf474f6d1ae8d934075306fa08840d65b69cc0ebb534f"
+    },
+    "troubleshooting/reading-traces-cdr.mdx": {
+      "sourceHash": "bcf0f134e3d7e4b29e56ac44c063635161c72e6e8e6322af8c2d72d66209c473",
+      "translationHash": "516db00fd2e4e06b9f04513294df06b33bce3567f5ec5f3c1dbb7d23bc742b86"
+    }
+  }
+}

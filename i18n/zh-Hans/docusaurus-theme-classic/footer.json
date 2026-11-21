@@ -1,0 +1,98 @@
+{
+  "link.title.FreeSWITCH": {
+    "message": "FreeSWITCH",
+    "description": "The title of the footer links column with title=FreeSWITCH in the footer"
+  },
+  "link.title.Documentation": {
+    "message": "文档",
+    "description": "The title of the footer links column with title=Documentation in the footer"
+  },
+  "link.title.Reference": {
+    "message": "参考资料",
+    "description": "The title of the footer links column with title=Reference in the footer"
+  },
+  "link.title.Downloads": {
+    "message": "下载",
+    "description": "The title of the footer links column with title=Downloads in the footer"
+  },
+  "link.title.Community": {
+    "message": "社区",
+    "description": "The title of the footer links column with title=Community in the footer"
+  },
+  "link.title.SignalWire": {
+    "message": "SignalWire",
+    "description": "The title of the footer links column with title=SignalWire in the footer"
+  },
+  "link.item.label.Getting Started": {
+    "message": "快速入门",
+    "description": "The label of footer link with label=Getting Started linking to /foundations/getting-started"
+  },
+  "link.item.label.Module Reference": {
+    "message": "模块参考",
+    "description": "The label of footer link with label=Module Reference linking to /module-reference"
+  },
+  "link.item.label.Recipes": {
+    "message": "完整示例",
+    "description": "The label of footer link with label=Recipes linking to /recipes"
+  },
+  "link.item.label.Troubleshooting": {
+    "message": "故障排查",
+    "description": "The label of footer link with label=Troubleshooting linking to /troubleshooting"
+  },
+  "link.item.label.Programming (ESL)": {
+    "message": "编程（ESL）",
+    "description": "The label of footer link with label=Programming (ESL) linking to /programming"
+  },
+  "link.item.label.CLI and API": {
+    "message": "命令行与 API",
+    "description": "The label of footer link with label=CLI and API linking to /reference/cli-and-api"
+  },
+  "link.item.label.Channel Variables": {
+    "message": "通道变量",
+    "description": "The label of footer link with label=Channel Variables linking to /reference/channel-variables"
+  },
+  "link.item.label.Core Concepts": {
+    "message": "核心概念",
+    "description": "The label of footer link with label=Core Concepts linking to /foundations/introduction"
+  },
+  "link.item.label.Open Source FreeSWITCH": {
+    "message": "FreeSWITCH 开源版",
+    "description": "The label of footer link with label=Open Source FreeSWITCH linking to https://github.com/signalwire/freeswitch/releases"
+  },
+  "link.item.label.FreeSWITCH Enterprise": {
+    "message": "FreeSWITCH Enterprise",
+    "description": "The label of footer link with label=FreeSWITCH Enterprise linking to https://github.com/signalwire/stack/releases"
+  },
+  "link.item.label.GitHub": {
+    "message": "GitHub",
+    "description": "The label of footer link with label=GitHub linking to https://github.com/signalwire/freeswitch"
+  },
+  "link.item.label.Forums": {
+    "message": "论坛",
+    "description": "The label of footer link with label=Forums linking to https://forum.signalwire.community/"
+  },
+  "link.item.label.YouTube": {
+    "message": "YouTube",
+    "description": "The label of footer link with label=YouTube linking to https://www.youtube.com/freeswitch"
+  },
+  "link.item.label.X (Twitter)": {
+    "message": "X (Twitter)",
+    "description": "The label of footer link with label=X (Twitter) linking to https://twitter.com/freeswitch"
+  },
+  "link.item.label.ClueCon": {
+    "message": "ClueCon",
+    "description": "The label of footer link with label=ClueCon linking to https://www.cluecon.com/"
+  },
+  "link.item.label.SignalWire.com": {
+    "message": "SignalWire.com",
+    "description": "The label of footer link with label=SignalWire.com linking to https://signalwire.com"
+  },
+  "link.item.label.Office Hours": {
+    "message": "专家答疑",
+    "description": "The label of footer link with label=Office Hours linking to https://info.signalwire.com/freeswitch-office-hours-signup"
+  },
+  "link.item.label.Contact Sales": {
+    "message": "联系销售",
+    "description": "The label of footer link with label=Contact Sales linking to mailto:sales@signalwire.com"
+  }
+}

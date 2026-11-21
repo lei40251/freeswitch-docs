@@ -63,14 +63,18 @@ const config = {
   favicon: "img/favicon.webp",
   markdown: {
     hooks: {
-      onBrokenMarkdownLinks: "throw",
+      onBrokenMarkdownLinks: require("./plugins/resolve-localized-markdown-link"),
       onBrokenMarkdownImages: "throw"
     },
   },
 
   i18n: {
     defaultLocale: "en-US",
-    locales: ["en-US"],
+    locales: ["en-US", "zh-Hans"],
+    localeConfigs: {
+      "en-US": { label: "English" },
+      "zh-Hans": { label: "简体中文", htmlLang: "zh-CN", baseUrl: "/freeswitch/zh-Hans/" },
+    },
   },
 
   // SignalWire design system typefaces: Instrument Sans (headings),
@@ -128,6 +132,7 @@ const config = {
           srcDark: "img/logo-white.svg",
         },
         items: [
+          { type: "localeDropdown", position: "right" },
           {
             href: "https://github.com/signalwire/freeswitch",
             label: "GitHub",
@@ -284,7 +289,8 @@ const config = {
           // /freeswitch/search is the Typesense route: classified as a doc, so
           // without this it becomes search.md. The debug routes only exist when
           // DOCUSAURUS_DEBUG is set; excluded as cheap insurance.
-          excludeRoutes: [`${B}/search`, `${B}/search/`, `${B}/__docusaurus/**`],
+          excludeRoutes: [`${B}/search`, `${B}/search/`, `${B}/__docusaurus/**`,
+            `${B}/zh-Hans/search`, `${B}/zh-Hans/search/`, `${B}/zh-Hans/__docusaurus/**`],
           beforeDefaultRehypePlugins: [rehypeLlmsCleanup],
         },
 
@@ -295,7 +301,8 @@ const config = {
           includePages: false,
           includeVersionedDocs: false,
           includeGeneratedIndex: true,
-          excludeRoutes: [`${B}/search`, `${B}/__docusaurus/**`],
+          excludeRoutes: [`${B}/search`, `${B}/__docusaurus/**`,
+            `${B}/zh-Hans/search`, `${B}/zh-Hans/__docusaurus/**`],
 
           siteTitle: "FreeSWITCH Users Manual",
           siteDescription:
@@ -320,7 +327,7 @@ const config = {
               position: 0,
               // Trailing slash required: the route is "/freeswitch/" and the
               // glob "/freeswitch" does not match it.
-              routes: [{ route: `${B}/` }],
+              routes: [{ route: `${B}/` }, { route: `${B}/zh-Hans/` }],
             },
             {
               id: "foundations",
@@ -328,7 +335,7 @@ const config = {
               description:
                 "Core concepts and how to get a FreeSWITCH instance running.",
               position: 1,
-              routes: [{ route: `${B}/foundations/**` }],
+              routes: [{ route: `${B}/foundations/**` }, { route: `${B}/zh-Hans/foundations/**` }],
             },
             {
               id: "configuration-system",
@@ -336,7 +343,7 @@ const config = {
               description:
                 "How FreeSWITCH is configured through its XML configuration system.",
               position: 2,
-              routes: [{ route: `${B}/configuration/**` }],
+              routes: [{ route: `${B}/configuration/**` }, { route: `${B}/zh-Hans/configuration/**` }],
             },
             {
               id: "users-endpoints",
@@ -344,7 +351,7 @@ const config = {
               description:
                 "Define users and connect SIP, WebRTC, and gateway endpoints.",
               position: 3,
-              routes: [{ route: `${B}/users-and-endpoints/**` }],
+              routes: [{ route: `${B}/users-and-endpoints/**` }, { route: `${B}/zh-Hans/users-and-endpoints/**` }],
             },
             {
               id: "dialplan",
@@ -352,7 +359,7 @@ const config = {
               description:
                 "Route calls with the XML dialplan, contexts, and dptools.",
               position: 4,
-              routes: [{ route: `${B}/dialplan/**` }],
+              routes: [{ route: `${B}/dialplan/**` }, { route: `${B}/zh-Hans/dialplan/**` }],
             },
             {
               id: "media",
@@ -360,14 +367,14 @@ const config = {
               description:
                 "Codec negotiation, media handling, and audio playback.",
               position: 5,
-              routes: [{ route: `${B}/media-and-codecs/**` }],
+              routes: [{ route: `${B}/media-and-codecs/**` }, { route: `${B}/zh-Hans/media-and-codecs/**` }],
             },
             {
               id: "applications",
               name: "Part 6: Applications and Features",
               description: "The bundled dialplan applications and features.",
               position: 6,
-              routes: [{ route: `${B}/applications/**` }],
+              routes: [{ route: `${B}/applications/**` }, { route: `${B}/zh-Hans/applications/**` }],
             },
             {
               id: "integration",
@@ -375,7 +382,7 @@ const config = {
               description:
                 "Control and integrate FreeSWITCH with external systems.",
               position: 7,
-              routes: [{ route: `${B}/integration/**` }],
+              routes: [{ route: `${B}/integration/**` }, { route: `${B}/zh-Hans/integration/**` }],
             },
             {
               id: "reference",
@@ -383,7 +390,7 @@ const config = {
               description:
                 "CLI and API reference, channel variables, and appendices.",
               position: 8,
-              routes: [{ route: `${B}/reference/**` }],
+              routes: [{ route: `${B}/reference/**` }, { route: `${B}/zh-Hans/reference/**` }],
             },
             {
               id: "module-reference",
@@ -391,7 +398,7 @@ const config = {
               description:
                 "A per-module reference for the bundled FreeSWITCH modules not covered in the topical chapters: purpose, configuration, the applications and API commands they register, and the channel variables they use.",
               position: 9,
-              routes: [{ route: `${B}/module-reference/**` }],
+              routes: [{ route: `${B}/module-reference/**` }, { route: `${B}/zh-Hans/module-reference/**` }],
             },
             {
               id: "recipes",
@@ -399,7 +406,7 @@ const config = {
               description:
                 "End-to-end worked examples that compose the configuration, dialplan, and applications from the reference chapters into complete, working call flows.",
               position: 10,
-              routes: [{ route: `${B}/recipes/**` }],
+              routes: [{ route: `${B}/recipes/**` }, { route: `${B}/zh-Hans/recipes/**` }],
             },
             {
               id: "troubleshooting",
@@ -407,7 +414,7 @@ const config = {
               description:
                 "Diagnose the common failures operators hit — registration, audio, and call-setup problems — using FreeSWITCH's own console, status, and tracing tools.",
               position: 11,
-              routes: [{ route: `${B}/troubleshooting/**` }],
+              routes: [{ route: `${B}/troubleshooting/**` }, { route: `${B}/zh-Hans/troubleshooting/**` }],
             },
             {
               id: "programming",
@@ -415,7 +422,7 @@ const config = {
               description:
                 "Drive FreeSWITCH from code: the event model, an events catalog, the inbound and outbound Event Socket, and the embedded scripting APIs.",
               position: 12,
-              routes: [{ route: `${B}/programming/**` }],
+              routes: [{ route: `${B}/programming/**` }, { route: `${B}/zh-Hans/programming/**` }],
             },
           ],
 

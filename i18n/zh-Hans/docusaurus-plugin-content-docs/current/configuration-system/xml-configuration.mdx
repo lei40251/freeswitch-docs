@@ -1,0 +1,159 @@
+---
+sidebar_position: 1
+id: xml-configuration
+slug: /configuration/xml
+title: "第 3 章：XML 配置系统"
+description: "FreeSWITCH 如何通过预处理器、包含指令、变量语法和顶层节，将多个文件组装为单一 XML 配置。"
+sidebar_label: "3. XML 配置系统"
+---
+
+# 第 3 章：XML 配置系统 {#chapter-3-the-xml-configuration-system}
+
+FreeSWITCH 将全部配置作为单一 XML 文档读取。在磁盘上，该文档被拆分到多个文件中，由预处理器在 XML 解析之前组装。本章介绍组装机制、预处理指令、变量语法，以及文档的顶层节。
+
+<SignalWireCallout
+  title="无需维护配置树"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="xml-configuration"
+  linkText="查看托管平台">
+
+SignalWire 托管平台使用资源代替配置树：通过控制面板或 REST API 创建号码、端点、脚本和智能体。无需预处理器、`reloadxml`，也无需在升级时合并文件。
+
+</SignalWireCallout>
+
+## 根文档 {#the-root-document}
+
+入口是配置根目录中的 `freeswitch.xml`。它定义五个节，并引入填充各节的文件。结构固定如下：
+
+```xml
+<document type="freeswitch/xml">
+  <X-PRE-PROCESS cmd="include" data="vars.xml"/>
+
+  <section name="configuration" description="Various Configuration">
+    <X-PRE-PROCESS cmd="include" data="autoload_configs/*.xml"/>
+  </section>
+
+  <section name="dialplan" description="Regex/XML Dialplan">
+    <X-PRE-PROCESS cmd="include" data="dialplan/*.xml"/>
+  </section>
+
+  <section name="chatplan" description="Regex/XML Chatplan">
+    <X-PRE-PROCESS cmd="include" data="chatplan/*.xml"/>
+  </section>
+
+  <section name="directory" description="User Directory">
+    <X-PRE-PROCESS cmd="include" data="directory/*.xml"/>
+  </section>
+
+  <section name="languages" description="Language Management">
+    <X-PRE-PROCESS cmd="include" data="lang/de/*.xml"/>
+    <X-PRE-PROCESS cmd="include" data="lang/en/*.xml"/>
+    <X-PRE-PROCESS cmd="include" data="lang/fr/*.xml"/>
+    <X-PRE-PROCESS cmd="include" data="lang/ru/*.xml"/>
+    <X-PRE-PROCESS cmd="include" data="lang/he/*.xml"/>
+    <X-PRE-PROCESS cmd="include" data="lang/es/es_ES.xml"/>
+    <X-NO-PRE-PROCESS cmd="include" data="lang/es/es_MX.xml"/>
+    <X-PRE-PROCESS cmd="include" data="lang/pt/pt_BR.xml"/>
+    <X-NO-PRE-PROCESS cmd="include" data="lang/pt/pt_PT.xml"/>
+    <X-NO-PRE-PROCESS cmd="include" data="lang/sv/*.xml"/>
+  </section>
+</document>
+```
+
+通常无需编辑 `freeswitch.xml` 本身，而是编辑其包含的文件。
+
+## 预处理器 {#the-preprocessor}
+
+XML 解析器运行之前，预处理器遍历文档并执行指令。指令既可写成包含 `cmd` 和 `data` 属性的 `<X-PRE-PROCESS>` 标签，也可在 XML 注释中写成 `#command`。
+
+### 预处理命令 {#preprocessor-commands}
+
+`<X-PRE-PROCESS>` 元素识别以下 `cmd` 值。
+
+| `cmd` | `data` 格式 | 效果 |
+| --- | --- | --- |
+| `include` | 文件路径或 glob 模式 | 在当前位置插入指定文件或 glob 匹配文件的内容。glob 按排序顺序包含所有匹配文件。 |
+| `set` | `name=value` | 定义预处理变量，其他位置通过 `$${name}` 引用。 |
+| `exec-set` | `name=shell command` | 执行 shell 命令，去除标准输出首尾空白后赋给指定预处理变量。 |
+| `stun-set` | `name=stun-server-host` | 查询指定 STUN 服务器，将发现的公网 IP 地址赋给指定预处理变量。 |
+| `env-set` | `name=$ENVVAR` | 读取指定操作系统环境变量，将其值赋给指定预处理变量。取值中的 `$` 前缀是必需的标记，处理后会被移除。 |
+| `exec` | shell 命令 | 执行 shell 命令，将其标准输出直接插入文档当前位置。 |
+
+`cmd` 匹配不区分大小写。无法识别的 `cmd` 值会被静默忽略。
+
+`<X-NO-PRE-PROCESS>` 不是预处理指令。预处理器不会匹配它（`X-NO-PRE-PROCESS` 不包含子串 `X-pre-process`），因此该标签作为字面 XML 元素原样进入组装后的文档，并被配置系统忽略。这实际上会阻止包含指定文件。`freeswitch.xml` 使用它排除默认配置中的部分语言文件。
+
+### 行内注释形式 {#inline-comment-form}
+
+预处理器也识别以 `<!--#` 为前缀、嵌入 XML 注释的指令。此形式支持 `set`、`exec-set`、`stun-set`、`include` 和 `exec`。注意，行内注释形式不处理 `env-set`，应改用 `<X-PRE-PROCESS>` 元素形式。
+
+```xml
+<!--#set name=value-->
+<!--#include "path/to/file.xml"-->
+<!--#comment This text is stripped and never reaches the XML parser.-->
+```
+
+任何 `<!--#...-->` 块都会在 XML 解析器读取文档前被预处理器消耗。`#comment` 除了使整个注释块被移除之外，没有特殊行为；它只是便于阅读的约定标签。
+
+## 包含文件与片段 {#include-files-and-partials}
+
+通过 `include` 引入的文件不是独立文档，而是在包含位置插入父文档的片段。包含多个元素的片段使用 `<include>` 标签包裹，以保持 XML 格式良好：
+
+```xml
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="$${default_password}"/>
+    </params>
+  </user>
+</include>
+```
+
+`<include>` 包装元素由预处理器消耗，不会出现在最终文档中。因此，用户目录条目、拨号计划上下文和 SIP 配置实例可以分别存放在独立文件中，并合并到正确的节。
+
+## 预处理变量 {#preprocessor-variables}
+
+预处理变量是在组装阶段解析的全局字符串。它们使用两个美元符号，并通过 `set` 定义：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="domain=example.com"/>
+```
+
+通过 `$${name}` 引用预处理变量。两个美元符号表示该值在预处理期间、XML 解析器读取之前仅展开一次。
+
+这与通道变量不同：通道变量使用一个美元符号，即 `${name}`，在呼叫时针对特定通道展开。两者区别如下：
+
+| 语法 | 解析时机 | 作用域 |
+| --- | --- | --- |
+| `$${name}` | 配置组装时 | 全局，对所有呼叫相同 |
+| `${name}` | 呼叫时 | 当前通道 |
+
+大部分全局值，包括路径、默认域和默认密码，都是在 `vars.xml` 中定义的预处理变量。详见第 4 章“变量与核心设置”。
+
+## 顶层节 {#the-top-level-sections}
+
+组装后的文档包含五个节，分别由系统的不同部分负责。
+
+| 节 | 内容来源 | 对应说明 |
+| --- | --- | --- |
+| `configuration` | `autoload_configs/*.xml` | 第 2–7 部分 |
+| `dialplan` | `dialplan/*.xml` | 第 4 部分（XML 拨号计划） |
+| `chatplan` | `chatplan/*.xml` | 文本消息路由 |
+| `directory` | `directory/*.xml` | 第 6 章（用户目录） |
+| `languages` | `lang/*/*.xml` | 短语呈现 |
+
+`autoload_configs/` 下每个文件都包含一个以其配置模块命名的 `configuration` 块，例如 `sofia.conf.xml` 中的 `<configuration name="sofia.conf" ...>`。模块读取名称与其注册名称匹配的块。
+
+## 组装后的文档 {#the-compiled-document}
+
+预处理结束后，FreeSWITCH 将完整组装的文档写入日志目录中的 `freeswitch.xml.fsxml`。日志目录由 `log_dir` 配置，通常为 `/var/log/freeswitch`。文件名是在根配置文件名后附加 `.fsxml`。该文件就是解析器实际读取的 XML：所有包含指令均已解析，所有 `$${...}` 变量均已展开。它是用于确认运行配置的只读产物。不要编辑它：每次 `reloadxml` 都会重新生成，且 FreeSWITCH 运行期间会将其映射到内存。
+
+## 编辑与重新加载 {#editing-and-reloading}
+
+编辑 `autoload_configs/`、`dialplan/`、`directory/` 和 `sip_profiles/` 下的小文件，不要编辑组装后的文档。使用以下命令应用更改：
+
+```
+reloadxml
+```
+
+`reloadxml` 重新执行预处理器并解析文档。用户目录和拨号计划的更改在下一次呼叫时生效。部分模块缓存自身配置，需要针对性地重新加载或重新扫描，详见对应模块章节。

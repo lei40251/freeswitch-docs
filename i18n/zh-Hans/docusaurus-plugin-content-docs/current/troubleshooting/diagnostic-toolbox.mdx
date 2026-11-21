@@ -1,0 +1,273 @@
+---
+sidebar_position: 1
+id: diagnostic-toolbox
+slug: /troubleshooting/toolbox
+title: "第 39 章：诊断工具箱"
+description: "使用 FreeSWITCH 自带命令，通过 fs_cli 连接、设置日志级别、检查通道和 SIP 配置实例状态，并跟踪 SIP。"
+sidebar_label: "39. 诊断工具箱"
+---
+
+# 第 39 章：诊断工具箱 {#chapter-39-the-diagnostic-toolbox}
+
+修复异常呼叫之前，首先需要*看清* FreeSWITCH 正在做什么。本章介绍自带的交互式控制台、日志级别控制、状态检查命令和 SIP 跟踪。所有示例均为真实 API 命令，与[命令行及 API 命令参考](../reference/cli-and-api.mdx)中的命令集合相同，因此控制台输入也可通过事件套接字的 `api` 或 `bgapi` 发送。
+
+这些工具用于读取和观察，不改变呼叫路由方式。出现故障时先用它们定位，再参考配置章节应用修复。
+
+<SignalWireCallout
+  title="通过 API 诊断"
+  href="https://signalwire.com/docs/apis"
+  page="diagnostic-toolbox"
+  linkText="查看 REST API">
+
+托管平台通过日志和 Webhook 提供诊断：每次呼叫和消息都是可查询状态历史的资源，无需连接控制台或提高日志级别。
+
+</SignalWireCallout>
+
+## 使用 fs_cli 连接 {#connecting-with-fs_cli}
+
+`fs_cli` 是通过事件套接字连接正在运行的 FreeSWITCH 的交互式客户端。同一主机通常直接运行：
+
+```bash
+fs_cli
+```
+
+连接远程实例时指定主机、端口和事件套接字密码：
+
+```bash
+fs_cli -H 192.0.2.10 -P 8021 -p ClueCon
+```
+
+连接后显示 `freeswitch@host>` 提示符。输入 `/help` 列出控制台支持的客户端命令：
+
+```text
+Command                    	Description
+-----------------------------------------------
+/help                      	Help
+/exit, /quit, /bye, ...    	Exit the program.
+/event, /noevents, /nixevent	Event commands.
+/log, /nolog               	Log commands.
+/uuid                      	Filter logs for a single call uuid
+/filter                    	Filter commands.
+/logfilter                 	Filter Log for a single string.
+/debug [0-7]               	Set debug level.
+```
+
+所有不以 `/` 开头的输入均作为 API 命令发送给 FreeSWITCH。例如 `status` 执行服务器端 `status` API，而 `/help` 由客户端自行处理。
+
+### 在控制台控制日志流 {#controlling-the-log-stream-from-the-console}
+
+观察呼叫时，以下斜线命令控制日志显示：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/log <level>` | 订阅指定及更严重级别的日志，例如 `/log debug`；以 `log` 命令发送给服务器。 |
+| `/nolog` | 停止向当前控制台传送日志事件。 |
+| `/logfilter <string>` | 仅显示包含 `<string>` 的日志；无参数运行 `/logfilter` 清除过滤器。过滤在客户端执行。 |
+| `/uuid <uuid>` | 仅显示标记指定呼叫 UUID 的日志；无参数运行可清除。 |
+
+`/log` 控制服务器发送哪些日志事件，`/logfilter` 和 `/uuid` 缩小客户端从日志流中打印的范围。常见做法是先用 `/log debug` 接收详细日志，再用 `/logfilter 1001` 或 `/uuid <uuid>` 跟踪单个用户或呼叫。
+
+:::note
+`/log debug` 仅影响流向*当前*控制台会话的事件，不改变全系统控制台详细程度；后者见下一节。
+:::
+
+## 日志级别 {#log-levels}
+
+FreeSWITCH 日志级别从最严重到最不严重排列如下：
+
+```text
+CONSOLE  ALERT  CRIT  ERR  WARNING  NOTICE  INFO  DEBUG
+```
+
+指定级别包含所有比它更严重的级别，因此 `DEBUG` 最详细，`CONSOLE` 最安静。`CONSOLE` 是始终显示的特殊级别，不泛指所有控制台输出。注意名称是 `ERR`，不是 `ERROR`，警告级别是 `WARNING`。
+
+这些级别可在三个位置设置，作用各不相同。
+
+### console loglevel：控制台日志模块的详细程度 {#console-loglevel--the-console-loggers-verbosity}
+
+`mod_console` 在 FreeSWITCH 运行的终端打印日志，可用 `console loglevel` API 设置其详细程度：
+
+```text
+console loglevel debug
+console loglevel 7
+```
+
+接受级别名称或 `0`–`7` 数值，无参数运行查看用法。对应的启动默认值位于 `autoload_configs/console.conf.xml`：
+
+```xml
+<settings>
+  <param name="colorize" value="true"/>
+  <param name="loglevel" value="$${console_loglevel}"/>
+</settings>
+```
+
+vanilla 配置在 `vars.xml` 中设置该变量：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="console_loglevel=info"/>
+```
+
+因此全新安装默认输出到 `info`，除非主动提高。`console.conf.xml` 的 `<mappings>` 可进一步限定文件或函数输出哪些级别，例如只查看 `sofia.c` 的 `debug`，避免其他日志淹没信息。
+
+### fsctl loglevel：核心全局日志级别 {#fsctl-loglevel--the-cores-global-log-level}
+
+`fsctl loglevel` 设置核心日志引擎的级别，控制所有日志模块之前的统一关口：
+
+```text
+fsctl loglevel debug
++OK log level: DEBUG [7]
+```
+
+与 `console loglevel` 一样，接受名称或 `0`–`7`。由于作用于核心，它影响所有连接的日志模块，不仅是控制台。`fsctl` 命令集合很大，其中与诊断相关的是 `loglevel` 和 `debug_level`。
+
+### 应该使用哪一种？ {#which-one-do-i-use}
+
+- 只观察一个控制台会话：使用 `/log <level>`。
+- 修改终端日志模块打印内容：使用 `console loglevel <level>`。
+- 需要包括文件与事件套接字订阅者在内的所有输出更详细：使用 `fsctl loglevel <level>`。
+
+## 检查状态 {#inspecting-state}
+
+以下命令用于了解 FreeSWITCH 认为系统当前处于什么状态。
+
+### status {#status}
+
+`status` 是简明健康检查，显示运行时间、版本、会话数量和每秒会话数：
+
+```text
+UP 0 years, 2 days, 4 hours, 17 minutes, 9 seconds, 31 milliseconds, 502 microseconds
+FreeSWITCH (Version 1.10.x ...) is ready
+1234 session(s) since startup
+3 session(s) - peak 27, last 5min 5
+0 session(s) per Sec out of max 30, peak 12, last 5min 4
+1000 session(s) max
+min idle cpu 0.00/98.70
+```
+
+先看“is ready”。若为“not ready”，系统仍在启动或关闭。会话数量可判断是否接近配置上限。
+
+### show：通道、呼叫和注册的实时表 {#show--live-tables-of-channels-calls-and-registrations}
+
+`show` 输出核心内部表，常用子命令如下：
+
+```text
+show channels
+show channels count
+show calls
+show registrations
+```
+
+- `show channels` 列出全部活动通道（呼叫腿）。添加 `count` 仅显示数量，添加 `like <match string>` 过滤。
+- `show calls` 列出已桥接呼叫，即连接在一起的两条腿。
+- `show registrations` 列出当前向 FreeSWITCH 注册的 SIP 端点，电话“无法接通”时应首先检查。
+
+`show` 还提供 `show modules`、`show codec`、`show api`、`show dialplan` 等报告，无参数运行可查看完整列表。输出采用 CSV 风格，方便通过事件套接字解析 `show channels`。
+
+### sofia status：SIP 配置实例与网关健康状态 {#sofia-status--sip-profile-and-gateway-health}
+
+`mod_sofia` 为 SIP 提供独立的 `sofia` 命令树，先查看汇总：
+
+```text
+sofia status
+```
+
+```text
+                     Name	   Type	                                      Data	State
+=================================================================================================
+                 internal	profile	          sip:mod_sofia@192.0.2.10:5060	RUNNING (0)
+                 external	profile	          sip:mod_sofia@192.0.2.10:5080	RUNNING (0)
+            example.com::gw	gateway	          sip:user@example.com	         NOREG
+=================================================================================================
+```
+
+重点看 `State` 列：配置实例应为 `RUNNING`；预期向上游注册的网关应为 `REGED`。
+
+进一步检查单个配置实例的监听地址、编解码器和计数器：
+
+```text
+sofia status profile internal
+```
+
+检查单个网关的注册状态和呼叫计数：
+
+```text
+sofia status gateway example.com::gw
+```
+
+准确语法为 `sofia status profile <name>` 和 `sofia status gateway <name>`，另有 `xmlstatus` 变体提供 XML 数据，供工具使用。相关配置见 [Sofia SIP 配置实例](../users-endpoints/sip-profiles-sofia.mdx)章节。
+
+## SIP 跟踪 {#sip-tracing}
+
+呼叫在 SIP 层失败时，应查看实际交换的报文。Sofia 可直接将它们打印到日志，无需外部抓包工具。
+
+一次为**所有**配置实例启用跟踪：
+
+```text
+sofia global siptrace on
+sofia global siptrace off
+```
+
+也可仅跟踪单个配置实例，在繁忙服务器上显著减少输出：
+
+```text
+sofia profile internal siptrace on
+sofia profile internal siptrace off
+```
+
+启用后，该实例的每条 SIP 请求和响应均写入日志，受当前控制台级别控制，并以 `send`/`recv` 和对端地址为前缀。由此可观察 `REGISTER` 收到 `401` 再到 `200 OK`，或确定哪个 `INVITE` 收到了 `403 Forbidden`。
+
+需要更深入的协议栈细节时，使用 `sofia loglevel` 为各 Sofia-SIP 组件设置 `0`–`9` 的详细程度：
+
+```text
+sofia loglevel all 9
+sofia loglevel tport 9
+```
+
+可选组件为 `all|default|tport|iptsec|nea|nta|nth_client|nth_server|nua|soa|sresolv|stun`。`tport`（传输）适合排查连接层问题。输出非常多，完成后通过 `sofia loglevel all 0` 调低。无参数运行 `sofia` 查看完整用法。
+
+## 单次呼叫检查 {#per-call-inspection}
+
+从 `show channels`、日志或 `/uuid` 过滤取得 UUID 后，即可单独查询该通道。
+
+`uuid_dump` 打印会话的全部通道变量：
+
+```text
+uuid_dump <uuid>
+```
+
+这是单条腿信息最丰富的视图，包括主叫信息、匹配网关、使用的编解码器、拨号计划上下文、已结束时的挂断原因，以及其他数百项信息。适合排查“已接通但行为不对”的呼叫。
+
+只需一个变量时，使用 `uuid_getvar` 直接获取：
+
+```text
+uuid_getvar <uuid> read_codec
+uuid_getvar <uuid> sip_gateway_name
+```
+
+若只想提高一个活动呼叫的日志详细程度而不影响其他呼叫，使用 `uuid_loglevel` 设置会话级别：
+
+```text
+uuid_loglevel <uuid> debug
+```
+
+## 外部抓包工具 {#external-capture-tools}
+
+上述命令足以完成大多数诊断，但有时需要报文级视图，例如检查未出现在日志中的 SDP，或向厂商提供抓包。这些工具**不属于 FreeSWITCH**，请通过操作系统包管理器安装。
+
+| 工具 | 用途 |
+| --- | --- |
+| `sngrep` | 基于 ncurses 的交互式 SIP 查看器，以实时梯形图展示线路上的呼叫流程，便于快速查看对话。 |
+| `tcpdump` | 将原始报文捕获到 `.pcap` 文件，供后续分析。 |
+| `tshark` | Wireshark 命令行版本，从实时接口或 `.pcap` 过滤并解码 SIP/RTP。 |
+
+在默认端口捕获 SIP 的典型命令：
+
+```bash
+sudo tcpdump -i any -s 0 -w /tmp/sip.pcap 'port 5060 or port 5080'
+```
+
+用 Wireshark 或 `tshark -r /tmp/sip.pcap` 打开结果，通过 *Telephony → VoIP Calls* 重建对话。单向音频故障时，跟踪 RTP 流，确认媒体双向流动，并发往 SDP 宣告的地址。
+
+:::tip
+先在 FreeSWITCH 内使用 `sofia profile <name> siptrace on`。无需额外进程，即可回答多数“对端发了什么”的问题。只有需要观察日志无法展示的媒体或流量时，再使用 `sngrep` 或抓包。
+:::

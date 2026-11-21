@@ -1,0 +1,340 @@
+---
+sidebar_position: 3
+id: module-loading
+slug: /configuration/module-loading
+title: "第 5 章：模块加载与管理"
+description: "启动时的模块选择、提前和延后加载文件，以及通过控制台加载、卸载和重新加载模块。"
+sidebar_label: "5. 模块加载与管理"
+---
+
+# 第 5 章：模块加载与管理 {#chapter-5-module-loading-and-management}
+
+FreeSWITCH 的功能由模块提供。本章介绍启动时如何选择加载模块、专用的提前和延后加载文件，以及通过控制台加载、卸载和重新加载模块的方法。
+
+<SignalWireCallout
+  title="无需加载模块"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="module-loading"
+  linkText="查看托管平台">
+
+SignalWire 托管平台中的会议、录音、语音、消息和 AI 能力已在运行，只需调用对应方法，无需编译和加载模块。平台使用同一引擎，并启用完整能力集合。
+
+</SignalWireCallout>
+
+## 构建时与运行时的模块选择 {#build-time-vs-runtime-module-selection}
+
+FreeSWITCH 将模块可用性分成编译和运行时加载两个独立阶段。
+
+**构建时**：`build/modules.conf.in`（或由其创建的本地 `modules.conf`）控制构建系统编译哪些模块。未以 `#` 开头的行会使对应的 `.so` 共享库被构建并安装，已注释的行则不构建对应共享库。
+
+**运行时**：`autoload_configs/modules.conf.xml` 控制 FreeSWITCH 启动时实际加载哪些已安装模块。`<load>` 元素指示 FreeSWITCH 从模块目录打开指定共享库。
+
+编译安装是加载的严格前提。为未构建的模块启用 `<load>` 会在启动日志中产生加载错误；FreeSWITCH 仍继续启动，但该模块不可用。反过来，模块已编译但在 `modules.conf.xml` 中保持注释没有问题，此时 `.so` 存在于磁盘上但不被加载。
+
+常见流程是编辑 `build/modules.conf.in`、重新编译（`make && make install`），然后在 `modules.conf.xml` 中启用对应 `<load>` 行。
+
+`build/modules.conf.most` 是范围更广的替代构建清单，启用多数可选模块。默认构建不使用它；需要一次构建更完整的模块集合时，可复制或引用该文件。
+
+## modules.conf.xml {#modulesconfxml}
+
+`modules.conf.xml` 列出启动时加载的模块。文件包含单个 `<modules>` 块，每个模块对应一个 `<load>` 元素：
+
+```xml
+<configuration name="modules.conf" description="Modules">
+  <modules>
+    <load module="mod_console"/>
+    <load module="mod_sofia"/>
+    <load module="mod_dptools"/>
+  </modules>
+</configuration>
+```
+
+添加或取消注释对应的 `<load>` 行即可启用模块，注释或删除该行即可禁用。更改在重启后生效，也可通过下文的运行时命令立即应用。模块必须已安装才能加载；为未构建的模块启用 `<load>` 会在日志中产生加载错误。
+
+## 默认加载集合 {#the-default-load-set}
+
+以下按随附 `modules.conf.xml` 中的注释类别，列出全部未注释的 `<load>`，并简述各模块的作用。
+
+### 日志模块 {#loggers}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_console` | 将日志写入前台终端或 `fs_cli` |
+| `mod_logfile` | 将日志写入磁盘上的轮转文件 |
+
+### 多功能模块 {#multi-faceted}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_enum` | ENUM 电话号码查询，同时提供拨号计划接口和 API 命令 |
+
+### 事件处理器 {#event-handlers}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_cdr_csv` | 使用可配置模板将呼叫详单写入 CSV 文件 |
+| `mod_event_socket` | 通过 TCP 套接字暴露 FreeSWITCH 事件系统，供外部控制 |
+
+### 端点 {#endpoints}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_sofia` | 基于 Sofia-SIP 协议栈的 SIP 端点，是主要信令模块 |
+| `mod_loopback` | 交换机内部用于背靠背呼叫腿的环回端点 |
+| `mod_rtc` | `mod_verto` 与 SIP-over-WSS 共享的 WebRTC DTLS-SRTP 传输层 |
+| `mod_verto` | 使用 Verto JSON-RPC 信令协议的 WebRTC 端点 |
+
+### 应用 {#applications}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_signalwire` | SignalWire 云连接和令牌配置 |
+| `mod_commands` | 核心 API 命令集合（originate、uuid_kill、status 等） |
+| `mod_conference` | 多方音视频会议引擎 |
+| `mod_db` | 基于内部数据库的键值存储，供拨号计划和脚本使用 |
+| `mod_dptools` | 标准拨号计划应用（answer、bridge、playback、record 等） |
+| `mod_expr` | 拨号计划条件使用的表达式计算库 |
+| `mod_fifo` | 先进先出呼叫队列应用 |
+| `mod_hash` | 可通过拨号计划和 API 访问的内存哈希表 |
+| `mod_voicemail` | 集成 IVR、存储和 MWI 的语音信箱系统 |
+| `mod_esf` | 组播寻呼支持（兼容 Polycom 分组寻呼） |
+| `mod_fsv` | FreeSWITCH 视频文件格式的录制器与播放器 |
+| `mod_valet_parking` | 具名呼叫停泊位，支持通过分机号取回 |
+| `mod_httapi` | 基于 HTTP 的应用接口，从 Web 服务器获取拨号计划指令 |
+
+### 拨号计划接口 {#dialplan-interfaces}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_dialplan_xml` | 处理 `dialplan/*.xml` 中的拨号计划，默认且最常用的解释器 |
+| `mod_dialplan_asterisk` | 处理 Asterisk 风格的 `extensions.conf` 拨号计划语法 |
+
+### 编解码器接口 {#codec-interfaces}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_spandsp` | DSP 功能：T.38 传真、G.711 A-law/u-law、音调检测和转码辅助 |
+| `mod_g723_1` | G.723.1 窄带编解码器（5.3 kbps 和 6.3 kbps） |
+| `mod_g729` | G.729 窄带编解码器（8 kbps），自由软件实现 |
+| `mod_amr` | 面向移动通信和 VoIP 互通的 AMR 窄带编解码器 |
+| `mod_b64` | Base64 编解码器透传，用于透明中继已编码载荷 |
+| `mod_opus` | Opus 宽带/全频带编解码器，是 WebRTC 的主要编解码器 |
+
+### 文件格式接口 {#file-format-interfaces}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_av` | 通过 libavformat 读写音视频文件（MP4、WebM 等） |
+| `mod_sndfile` | 通过 libsndfile 读写音频文件（WAV、AIFF、AU 等） |
+| `mod_native_file` | 匹配文件原生格式，无需转码即可播放音频文件 |
+| `mod_png` | 将 PNG 图像作为视频帧发送，用于视频保持画面 |
+| `mod_local_stream` | 轮流流式播放目录中的音频文件，作为保持音乐源 |
+| `mod_tone_stream` | 根据描述字符串生成音调及音调序列 |
+
+### 语言 {#languages}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_lua` | 内嵌 Lua 5.x 运行时，用于拨号计划脚本和事件处理器 |
+
+### Say {#say}
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_say_en` | 英语短语呈现（数字、日期、货币和拼读） |
+
+## 可选模块（随附配置中已注释） {#optional-modules-shipped-commented-out}
+
+以下模块在 `modules.conf.xml` 中以已注释的 `<load>` 行存在。取消注释即可启用，同时需确保模块已编译。
+
+其中多数模块在[第 9 部分：模块参考](/module-reference)中有专门页面，介绍各自的配置文件、注册的拨号计划应用与 API 命令，以及使用的通道变量。
+
+**日志模块**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_graylog2` | 向 Graylog2 GELF 端点集中发送日志 |
+| `mod_syslog` | 将日志发送到系统 syslog 守护进程 |
+
+**XML 接口**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_xml_rpc` | 提供 HTTP/XML-RPC 管理接口，供部分 Web 管理面板使用 |
+| `mod_xml_curl` | 运行时从 HTTP 服务器获取拨号计划、用户目录和配置 XML |
+| `mod_xml_cdr` | 将呼叫详单作为 XML 提交到 HTTP 端点 |
+| `mod_xml_scgi` | 通过 SCGI 协议获取 XML 文档 |
+
+**事件处理器**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_amqp` | 向 AMQP 消息代理（RabbitMQ）发布事件 |
+| `mod_cdr_sqlite` | 将 CDR 写入本地 SQLite 数据库 |
+| `mod_event_multicast` | 通过 UDP 组播向其他 FreeSWITCH 节点广播事件 |
+| `mod_erlang_event` | 通过 Erlang 端口映射器为 Erlang 节点提供事件接口 |
+| `mod_smpp` | SMPP 短信网关集成 |
+| `mod_snmp` | 通过 SNMP 暴露交换机统计信息 |
+
+**用户目录接口**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_ldap` | 通过 LDAP 目录进行认证和用户查询 |
+
+**端点**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_alsa` | Linux 上用于访问本地声卡的 ALSA 音频端点 |
+| `mod_skinny` | 面向 Cisco 桌面电话的 Cisco SCCP（Skinny）端点 |
+| `mod_rtmp` | RTMP 流媒体端点 |
+| `mod_dingaling` | Jingle/XMPP 端点 |
+| `mod_freetdm` | 通过 FreeTDM 为硬件中继卡提供 TDM 电话端点 |
+
+**应用**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_curl` | 在拨号计划中发起 HTTP 请求，从 Web 服务获取或向其提交数据 |
+| `mod_directory` | 支持通过 DTMF 按姓名搜索的企业通讯录应用 |
+| `mod_distributor` | 在带权重的网关列表之间分配呼叫 |
+| `mod_lcr` | 基于数据库费率表的最低成本路由引擎 |
+| `mod_easyroute` | 基于数据库表的轻量 DID 路由 |
+| `mod_fsk` | 用于主叫号码和数据信令的 FSK 调制解调器 |
+| `mod_spy` | 静默呼叫监听应用 |
+| `mod_sms` | 短信路由与处理应用 |
+| `mod_random` | 生成供拨号计划变量使用的随机数 |
+| `mod_translate` | 使用正则表达式或数据库规则进行号码转换 |
+| `mod_mongo` | 用于拨号计划和数据存储的 MongoDB 集成 |
+
+**拨号计划接口**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_dialplan_directory` | 从用户目录查询拨号计划路由 |
+
+**编解码器接口**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_ilbc` | iLBC 窄带编解码器（13.3 kbps 和 15.2 kbps） |
+| `mod_siren` | G.722.1（Siren）宽带编解码器，用于 Polycom 互通 |
+
+**文件格式接口**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_opusfile` | 读取 Ogg Opus 文件供播放 |
+| `mod_shout` | 通过 libshout 和 libmp3lame 读写 MP3 流和文件，可作为 Icecast 源 |
+| `mod_shell_stream` | 将任意 shell 命令的输出作为音频流 |
+
+**定时器**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_timerfd` | 使用 Linux `timerfd` 内核接口的高分辨率定时器 |
+| `mod_posix_timer` | 基于 POSIX 间隔定时器的替代计时源 |
+
+**语言**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_v8` | 内嵌 V8 JavaScript 引擎，用于拨号计划脚本 |
+| `mod_perl` | 内嵌 Perl 运行时，用于拨号计划脚本 |
+| `mod_python3` | 内嵌 Python 3 运行时，用于拨号计划脚本 |
+| `mod_java` | 内嵌 JVM，用于拨号计划脚本 |
+
+**ASR/TTS**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_flite` | 使用 CMU Flite 引擎的文本转语音 |
+| `mod_pocketsphinx` | 使用 PocketSphinx 引擎的自动语音识别 |
+| `mod_tts_commandline` | 通过外部命令行程序提供 TTS |
+
+**Say**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_say_ru` | 俄语短语呈现 |
+| `mod_say_zh` | 中文短语呈现 |
+| `mod_say_sv` | 瑞典语短语呈现 |
+
+构建系统还提供以下 Say 模块（未列在默认 `modules.conf.xml` 中）：`mod_say_de`、`mod_say_es`、`mod_say_es_ar`、`mod_say_fa`、`mod_say_fr`、`mod_say_he`、`mod_say_hr`、`mod_say_hu`、`mod_say_it`、`mod_say_ja`、`mod_say_nl`、`mod_say_pl`、`mod_say_pt`、`mod_say_th`。
+
+**第三方应用**
+
+| 模块 | 作用 |
+| --- | --- |
+| `mod_nibblebill` | 按呼叫腿实时计费，支持配置扣费间隔 |
+| `mod_callcenter` | 支持坐席技能路由、话后整理和报表的 ACD 队列 |
+
+## 提前与延后加载 {#early-and-late-loading}
+
+两个配套文件控制需要在主模块集合之前或之后加载的模块。FreeSWITCH 按以下顺序处理：
+
+1. `pre_load_modules.conf.xml`
+2. `modules.conf.xml`
+3. `post_load_modules.conf.xml`
+
+各文件均使用相同的 `<load module="..."/>` 语法。
+
+**`pre_load_modules.conf.xml`**：随附默认配置加载一个模块：
+
+```xml
+<configuration name="pre_load_modules.conf" description="Modules">
+  <modules>
+    <!-- Databases -->
+    <!-- <load module="mod_mariadb"/> -->
+    <load module="mod_pgsql"/>
+  </modules>
+</configuration>
+```
+
+`mod_pgsql` 提供 PostgreSQL 数据库后端。其他模块（包括核心子系统）可能在自身初始化期间打开数据库连接，因此数据库驱动必须在主加载序列开始前可用。`mod_mariadb` 是已注释的 MariaDB 或 MySQL 后端替代项；可替换 `mod_pgsql`，也可同时启用以支持两种后端。
+
+当 FreeSWITCH 从 HTTP 服务器获取配置、用户目录和拨号计划文档时，应在此启用 `mod_xml_curl`：XML 接口必须在消费这些文档的模块初始化前注册，因此需要提前加载。
+
+**`post_load_modules.conf.xml`**：默认为空，用于依赖完整模块集合已完成初始化的模块。目前没有随附模块需要它。
+
+| 文件 | 默认内容 | 典型用途 |
+| --- | --- | --- |
+| `pre_load_modules.conf.xml` | 启用 `mod_pgsql` | 数据库后端、XML 提供器 |
+| `modules.conf.xml` | 完整的可用 PBX 模块集合 | 所有标准模块 |
+| `post_load_modules.conf.xml` | 空 | 依赖延后初始化的模块 |
+
+## 模块类别 {#module-categories}
+
+模块类别决定其提供的接口类型及读取的配置文件。类别仅用于组织；单个模块可注册多种接口，例如 `mod_enum` 同时提供拨号计划接口、应用和 API 命令。
+
+| 类别 | 提供的接口 |
+| --- | --- |
+| `endpoints` | 呼叫信令协议 |
+| `applications` | 拨号计划应用与 API 命令 |
+| `dialplans` | 拨号计划解释器 |
+| `codecs` | 音视频编解码器 |
+| `formats` | 文件和流的读写器 |
+| `event_handlers` | 外部事件接口与 CDR 后端 |
+| `loggers` | 日志目标 |
+| `languages` | 内嵌脚本运行时 |
+| `say` | 各语言的短语呈现 |
+| `asr_tts` | 语音识别与合成 |
+| `timers` | 计时源 |
+| `databases` | 外部数据库后端 |
+| `directories` | 外部用户目录后端 |
+| `xml_int` | 动态 XML 提供器 |
+
+## 运行时管理模块 {#managing-modules-at-runtime}
+
+可以通过 `fs_cli` 加载、卸载和重新加载模块，无需重启。
+
+| 命令 | 效果 |
+| --- | --- |
+| `load mod_name` | 立即加载模块 |
+| `unload mod_name` | 立即卸载模块 |
+| `reload mod_name` | 卸载后重新加载模块，并重新读取配置 |
+| `reloadxml` | 重新解析 XML 文档，不改变已加载模块 |
+| `show modules` | 列出当前已加载的模块 |
+
+`reloadxml` 刷新配置文档，但不会加载或卸载模块。如果模块缓存自身配置，而你修改了该配置，应使用 `reload mod_name`。各模块是否需要重新加载，详见对应章节。

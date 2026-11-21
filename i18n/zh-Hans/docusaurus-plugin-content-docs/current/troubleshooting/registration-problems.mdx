@@ -1,0 +1,195 @@
+---
+sidebar_position: 2
+id: registration-problems
+slug: /troubleshooting/registration
+title: "第 40 章：注册故障"
+description: "先检查 sofia status 与 show registrations，再按症状排查 SIP 注册凭据、NAT、过期抖动和传输不匹配。"
+sidebar_label: "40. 注册故障"
+---
+
+# 第 40 章：注册故障 {#chapter-40-registration-problems}
+
+SIP 电话或软电话无法注册，是运维人员最常遇到的故障。设备可能显示“注册失败”、呼叫分机直接转入语音信箱，或昨天正常的电话悄然离线，但诊断路径相同。FreeSWITCH 在数据库中记录成功注册，并在日志中记录拒绝的尝试。本章先介绍如何读取这些状态，再排查几乎涵盖所有注册故障的四类原因：凭据错误、NAT、过期抖动和传输不匹配。
+
+注册由 [`mod_sofia`](../users-endpoints/sip-profiles-sofia.mdx) 处理，检查的凭据来自[用户目录](../users-endpoints/user-directory.mdx)。请同时参考这两章，多数修复只需修改配置实例或用户记录的一行。
+
+<SignalWireCallout
+  title="由平台管理注册"
+  href="https://signalwire.com/docs/platform/voice/sip/trunking"
+  page="registration-problems"
+  linkText="查看托管 SIP">
+
+端点注册到 SignalWire 托管 SIP 后，注册服务、证书和 NAT 处理由平台维护，本章涉及的调试便主要集中在端点自身。
+
+</SignalWireCallout>
+
+## 确认注册状态 {#confirming-registration-state}
+
+修改任何设置之前，先确认 FreeSWITCH 当前是否有该用户的注册。有两种视图。
+
+### 按配置实例：`sofia status profile <name> reg` {#sofia-status-reg}
+
+Sofia 视图按配置实例展示 SIP 协议栈看到的注册。应查询电话实际连接的实例，内置内部电话实例为 `internal`：
+
+```
+sofia status profile internal reg
+```
+
+它列出该实例的全部注册，并显示注册时保存的字段：
+
+```
+Registrations:
+===============================================================================
+Call-ID:        a1b2c3d4-....
+User:           1000@192.168.1.10
+Contact:        sip:1000@192.168.1.50:5060;...
+Agent:          Yealink SIP-T46G ...
+Status:         Registered(UDP)(unknown) EXP(2026-06-15 12:34:56) EXPSECS(295)
+Ping-Status:    Reachable
+Ping-Time:      0.00
+Host:           192.168.1.10
+IP:             192.168.1.50
+Port:           5060
+Auth-User:      1000
+Auth-Realm:     192.168.1.10
+MWI-Account:    1000@192.168.1.10
+===============================================================================
+Total items returned: 1
+```
+
+诊断时重点关注：
+
+- **Contact**：FreeSWITCH 将向此地址发送 INVITE。若为私网地址（`192.168.x.x`、`10.x.x.x`），但 **IP** 为公网地址，表示设备位于 NAT 后且 Contact *未*被改写，见 [NAT](#cause-nat)。
+- **Status**：括号中显示传输，例如 `Registered(UDP)`。与电话配置不一致时，检查[传输问题](#cause-transport)。
+- **EXPSECS**：距离注册过期的秒数。总是很小且不断重置，可能是[注册抖动](#cause-expiry)。
+
+可传入子串，按 **Contact** 列筛选：
+
+```
+sofia status profile internal reg 192.168.1.50
+```
+
+查找指定用户时，使用 `user` 关键字和 `user@domain` 参数；任一部分均可省略，只匹配用户或主机：
+
+```
+sofia status profile internal user 1000@192.168.1.10
+```
+
+:::note
+`reg <string>` 按 Contact 列过滤，不按用户过滤。按分机查注册应使用 `user 1000@domain` 或 `user 1000`，而非 `reg 1000`。
+:::
+
+若输出 `Total items returned: 0`，说明没有该用户的注册，即 REGISTER 尚未成功。继续检查下列原因。
+
+### 全服务器：show registrations {#show-registrations}
+
+核心 `show` 查询全部配置实例共用的注册表，便于快速查看全局数量：
+
+```
+show registrations
+show registrations as xml
+```
+
+```
+show registrations count
+```
+
+`count` 形式只返回行数，是确认是否*存在任何*注册的最快方法。
+
+---
+
+## 原因：凭据错误 {#cause-credentials}
+
+**症状。** 电话显示认证失败，或收到挑战后重试，最终放弃。`sofia status ... reg` 中没有该用户。
+
+**可能原因。** 配置实例的 `auth-calls` 为 `true` 时，REGISTER 必须通过摘要认证，内置 internal 默认如此。凭据与[目录](../users-endpoints/user-directory.mdx)中的匹配用户比较。两类拒绝在线路上明显不同，有助于定位：
+
+- **反复的 `401 Unauthorized`。** FreeSWITCH 发出挑战，电话回应，但摘要校验失败，可能是密码错误，或设备使用了不同的 realm。FreeSWITCH 会再次挑战；不断循环 401 表示凭据或 realm 不匹配。
+- **`403 Forbidden`。** FreeSWITCH 找到明确拒绝理由，最常见是*目录中完全没有匹配用户*，即电话提供的用户名/域组合不存在。此时日志包含明确警告：
+
+  ```
+  Can't find user [1000@example.com] from 192.168.1.50
+  You must define a domain called 'example.com' in your directory and add a user
+  with the id="1000" attribute ...
+  ```
+
+  用户既无 `password` 也无 `a1-hash` 时，空密码也会导致 403，除非用户设置了 `allow-empty-password`。使用 `sip-forbid-register` 显式禁用的用户同样被拒绝。
+
+**如何确认。**
+
+1. 电话重试时观察日志。`Can't find user` 表示目录未命中；没有该警告却持续 401，指向密码或 realm 错误。
+2. 检查 **realm**。电话认证使用的 realm 必须等于所注册的域。`reg` 输出中的 **Auth-Realm** 是 FreeSWITCH 使用的 realm。若设备配置一个域，却按另一 realm 生成凭据，摘要永远无法通过。
+3. 确认目录包含该用户。目录 `id` 和域必须匹配电话发送的用户名与域。
+
+**修复。**
+
+- 修正目录用户记录中的 `password` 或 `a1-hash` 参数。`a1-hash` 是 `user:realm:password` 的预计算 MD5，必须针对与电话*相同*的 realm 计算。
+- 确保存在与电话域匹配的 `<domain>`，且其中用户的 `id` 匹配电话用户名。见[目录结构与用户记录](../users-endpoints/user-directory.mdx)。
+- 若要让配置实例按 IP 而非凭据认证，这是中继的另一种配置方式；电话注册仍需要 `auth-calls` 和有效目录凭据。
+
+---
+
+## 原因：NAT {#cause-nat}
+
+**症状。** 电话已注册并出现在 `reg` 中，但来电无法到达，不振铃或建立失败。输出的 **Contact** 为私网地址，**IP** 却为设备的公网地址。
+
+**可能原因。** NAT 后的设备在 SIP Contact 头中填写私网 LAN 地址。若 FreeSWITCH 原样保存，后续 INVITE 会发往不可路由的私网地址。需要检测 NAT，并将 Contact 改写为实际收到报文的公网源地址和端口。
+
+**如何确认。** 对比 `sofia status profile internal reg` 的 **Contact** 和 **IP**。前者私网、后者公网时，Contact 未改写，入站呼叫将失败。
+
+**修复。** 以下均为 Sofia [配置实例](../users-endpoints/sip-profiles-sofia.mdx)的 `<param>` 设置：
+
+- **`apply-nat-acl`**：指定应视为“位于 NAT 后”的网络 ACL。随附 internal 设置为 `nat.auto`，自动匹配 RFC 1918 私网范围。源 IP 匹配该 ACL 的设备获得 NAT 处理，首先应确认此项存在。
+- **`aggressive-nat-detection`**：设为 `true` 后，除 ACL 匹配外，还通过 Contact 或 Via 中的私网地址等线索判断 NAT。`sofia status profile <name>` 的 `AGGRESSIVENAT` 显示其状态。内置 internal 中此项被注释；设备仍无法识别为 NAT 后时可启用。
+- **`ext-sip-ip`**：FreeSWITCH 在自身 SIP 信令中宣告的公网 IP。当服务器自身位于 NAT 后，例如采用 1:1 NAT 的云主机，应设置此项让电话通过公网地址访问。接受显式 IP、`auto`（通过 STUN 解析）或 `auto-nat`（使用路由器 UPnP/NAT-PMP 映射）。
+- **`NDLB-*`**：针对异常客户端的兼容措施。相关项包括 **`NDLB-received-in-nat-reg-contact`**，将实际报文来源的 `received`/`rport` 地址端口附加到保存的 Contact；以及 **`NDLB-force-rport`**，强制使用 rport 源地址。仅为确实需要的特定客户端启用，默认关闭。
+
+修改 NAT 参数后，重启或重新扫描实例（`sofia profile internal rescan`），让电话重新注册，再检查 `reg` 中的 Contact。
+
+---
+
+## 原因：过期与抖动 {#cause-expiry}
+
+**症状。** 电话在注册、掉线和重注册之间快速循环，或两次呼叫之间注册消失。`reg` 的 **EXPSECS** 总是很小，或日志中注册反复消失和出现。
+
+**可能原因。** 每个 REGISTER 携带 `Expires`，表示绑定有效期。FreeSWITCH 遵从客户端请求；有效期很短时，设备必须频繁重注册，任一报文丢失就可能掉线。另外，大量电话使用*相同*有效期会同步重注册，形成 REGISTER“惊群”。
+
+**如何确认。** 注册后立即读取 `sofia status profile internal reg` 的 **EXPSECS**。例如 60 表示电话请求 60 秒有效期，每分钟重注册。日志中按此间隔出现 REGISTER 属于正常刷新；预期间隔*之间*出现 REGISTER，且伴随 `expire` 事件，才指向真正抖动，常因丢包或 NAT 绑定比注册更早超时。
+
+**修复。** 在 Sofia [配置实例](../users-endpoints/sip-profiles-sofia.mdx)中：
+
+- **`sip-expires-max-deviation`**：设置为 N 秒后，FreeSWITCH 对各注册有效期加入最多 N 秒随机偏移，分散相同有效期的电话，平滑重注册负载。默认 `0`，即无随机偏移。SUBSCRIBE 对应参数为 `sip-subscription-max-deviation`。
+- **注册探测**：不必依赖极短客户端有效期检测离线电话，可让 FreeSWITCH 发送 SIP OPTIONS。**`nat-options-ping`** 探测检测为 NAT 后的注册并维持 NAT 孔洞，**`all-reg-options-ping`** 探测*全部*注册。**`ping-mean-interval`** 控制同一注册的目标探测间隔秒数，**`ping-thread-frequency`** 控制探测线程唤醒频率。结果显示为 `reg` 的 **Ping-Status**（`Reachable` / `Unreachable`）和 **Ping-Time**。这样电话可使用较长有效期，FreeSWITCH 仍能跟踪可达性。
+
+电话请求的有效期在*设备自身*设置，不在 FreeSWITCH 中设置。若重注册过于频繁，提高电话配置的注册间隔，再由随机偏移和探测机制处理其他问题。
+
+:::note
+`expire-seconds` 参数控制 FreeSWITCH 作为注册客户端连接网关时*请求*的有效期，是网关/出站设置，不是入站电话注册的寿命。见[网关章节](../users-endpoints/gateways.mdx)。
+:::
+
+---
+
+## 原因：传输不匹配 {#cause-transport}
+
+**症状。** 电话发送 REGISTER，但 FreeSWITCH 不回应，或使用电话未监听的传输回应。`reg` 中没有记录，抓包显示 REGISTER 到达或未到达预期端口和协议。
+
+**可能原因。** 配置实例在特定端口绑定特定传输。电话使用 TCP 但实例仅监听 UDP，或指向错误端口时，REGISTER 无法到达能处理它的监听器。
+
+**如何确认。**
+
+1. 检查实例实际绑定。`sofia status` 列出 URL 和传输，`sofia status profile internal` 显示绑定地址。已有注册的 **Status** 显示传输，例如 `Registered(UDP)` 或 `Registered(TCP)`。
+2. 确认端口。内置 internal 的 **`sip-port`** 默认为 5060。电话指向其他端口就无法到达该实例。
+
+**修复。** 在 Sofia [配置实例](../users-endpoints/sip-profiles-sofia.mdx)中：
+
+- 使电话传输匹配实例绑定。SIP 端口支持 UDP 和 TCP；TLS 需启用 **`tls`**，可选 **`tls-only`** 拒绝明文，并通过 **`tls-sip-port`** 设置端口。WebRTC 客户端使用 **`ws-binding`** 启用 WebSocket，**`wss-binding`** 启用安全 WebSocket。
+- 确认电话指向该实例的 **`sip-port`**。多个实例各自绑定端口，应选择正确实例。
+- 修改传输或 TLS 设置后重启实例以重新绑定：`sofia profile internal restart`。
+
+---
+
+## 查看实际 REGISTER 报文 {#reading-the-register}
+
+状态和配置都正确但注册仍失败时，查看真实 SIP 交换。使用 `sofia global siptrace on` 或实例的 `sip-trace` 参数启用跟踪，观察 REGISTER、`401` 挑战、携带认证信息的 REGISTER、最终 `200 OK` 或 `403`。挑战/响应显示 realm 及摘要是否通过；Contact 和 Via 则显示设备声称的地址与真实报文来源的区别。
+
+如何逐步读取 SIP 跟踪、理解各头字段并跟踪事务，见[跟踪解读章节](./reading-traces-cdr.mdx)。

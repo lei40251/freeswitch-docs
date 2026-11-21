@@ -1,0 +1,197 @@
+---
+sidebar_position: 2
+id: recipe-ring-group
+slug: /recipes/ring-group
+title: "第 34 章：振铃组与轮询组"
+description: "使用 bridge 拨号字符串构建同时振铃组、顺序轮询组，以及无人接听时的语音信箱回退。"
+sidebar_label: "34. 振铃组与轮询组"
+---
+
+# 第 34 章：振铃组与轮询组 {#chapter-34-ring-group-and-hunt-group}
+
+## 目标 {#goal}
+
+让一个分机号呼叫多个成员，提供两种行为：
+
+- **振铃组**：所有成员同时振铃，最先应答者接听呼叫。
+- **轮询组**：按列表顺序逐个呼叫成员，直到有人应答。
+
+两者均使用单个 `bridge` 操作，在拨号字符串中列出成员端点。两个分隔符控制拨号行为：
+
+- **逗号**（`,`）使其两侧呼叫腿**同时**拨出。
+- **竖线**（`\|`）使其两侧分组**顺序**拨出，仅当前组失败或超时后才尝试下一组。
+
+无人应答时，呼叫继续进入语音信箱。
+
+**呼叫流程：**
+
+1. 内部主叫拨打组号码（`3000` 或 `3001`）。
+2. 拨号计划条目匹配号码并设置失败回退和超时变量。
+3. `bridge` 并行、串行或混合发起成员呼叫腿。
+4. 最先应答的成员与主叫桥接，其余呼叫腿取消。
+5. 超时前无人应答时，`continue_on_fail` 允许拨号计划继续执行语音信箱回退。
+
+## 前置条件 {#prerequisites}
+
+- [`bridge` 应用和拨号字符串语法](../dialplan/dptools-reference.mdx)：逗号、竖线、逐腿变量和全局变量运算符。
+- 可用的 [XML 拨号计划](../dialplan/xml-dialplan.mdx)：本例向 `conf/vanilla/` 随附的 `default` 上下文添加条目。
+- 在[用户目录](../users-endpoints/user-directory.mdx)中注册的成员电话：假定默认域中存在 `1001`、`1002` 和 `1003`（vanilla 配置提供 `1000`-`1019`）。
+- “随身呼叫”变体还需要一个出站[网关](../users-endpoints/gateways.mdx)。
+
+## 实现步骤 {#build-it}
+
+将以下条目添加到 `conf/dialplan/default.xml`，放在通用匹配的 `Local_Extension` 条目**之前**，使组号码优先匹配。保存后在 FreeSWITCH 控制台或 `fs_cli` 运行 `reloadxml`。
+
+### 同时振铃组 {#simultaneous-ring-group}
+
+分机 `3000` 同时呼叫 `1001`、`1002` 和 `1003`。呼叫腿之间的逗号使 `bridge` 并行发起三路呼叫；最先应答者接通，其余自动挂断。
+
+```xml
+<extension name="ring_group_simultaneous">
+  <condition field="destination_number" expression="^3000$">
+    <action application="set" data="hangup_after_bridge=true"/>
+    <action application="set" data="continue_on_fail=true"/>
+    <!-- Give the whole group 25 seconds to answer, then fall through. -->
+    <action application="set" data="call_timeout=25"/>
+    <action application="bridge"
+      data="user/1001@${domain_name},user/1002@${domain_name},user/1003@${domain_name}"/>
+    <!-- Reached only if no member answered (continue_on_fail=true). -->
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="default ${domain_name} 1001"/>
+  </condition>
+</extension>
+```
+
+`call_timeout` 是整次呼叫发起的全局时限。由于各腿并行振铃，为全组设置单一超时通常就能满足需求。
+
+### 顺序轮询组 {#sequential-hunt-group}
+
+分机 `3001` 按顺序呼叫成员。每个竖线分组是一次独立的呼叫尝试；仅当前组失败或超时后才尝试下一组。各组的逐腿 `[leg_timeout=N]` 控制对应电话的振铃时长。
+
+```xml
+<extension name="hunt_group_sequential">
+  <condition field="destination_number" expression="^3001$">
+    <action application="set" data="hangup_after_bridge=true"/>
+    <action application="set" data="continue_on_fail=true"/>
+    <action application="bridge"
+      data="[leg_timeout=15]user/1001@${domain_name}|[leg_timeout=15]user/1002@${domain_name}|[leg_timeout=15]user/1003@${domain_name}"/>
+    <!-- Reached only if no member answered any group. -->
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="default ${domain_name} 1001"/>
+  </condition>
+</extension>
+```
+
+此例每条腿振铃 15 秒。`1001` 未应答时，`bridge` 转向 `1002`，然后 `1003`；若所有组均未应答，操作失败，拨号计划继续进入语音信箱。
+
+:::note
+顺序轮询应优先采用上面的逐腿 `[leg_timeout=N]`，而非单一全局 `call_timeout`。后者限制整次呼叫发起，例如三条各 15 秒的腿若共用 30 秒 `call_timeout`，第三台电话尚未振铃就已超时。为每组设置 `leg_timeout` 可使各步骤独立。
+:::
+
+### 混合模式：组内并行、组间顺序 {#mixing-the-two-groups-that-ring-in-parallel-in-sequence}
+
+逗号和竖线可以组合：每个竖线分组内部，逗号使成员同时振铃；当前组失败后竖线推进到下一组。以下先同时呼叫两名前台，再呼叫经理，最后转语音信箱：
+
+```xml
+<extension name="ring_group_then_manager">
+  <condition field="destination_number" expression="^3002$">
+    <action application="set" data="hangup_after_bridge=true"/>
+    <action application="set" data="continue_on_fail=true"/>
+    <action application="bridge"
+      data="[leg_timeout=20]user/1001@${domain_name},[leg_timeout=20]user/1002@${domain_name}|[leg_timeout=20]user/1003@${domain_name}"/>
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="default ${domain_name} 1003"/>
+  </condition>
+</extension>
+```
+
+## 工作原理 {#how-it-works}
+
+传递给 `bridge` 的参数是由 `switch_ivr_originate.c` 解析的**拨号字符串**。依据呼叫发起源码，两种多腿分隔符具有明确且不同的含义：
+
+- **逗号（`,`）：同时、并行。** 单组内所有逗号分隔的呼叫腿同时拨出。字符串按逗号拆为一组“与”关系的端点，一起发起呼叫；最先应答者与主叫桥接，其余取消。这就是振铃组行为。
+- **竖线（`\|`）：顺序、失败切换。** 拨号字符串首先按竖线拆成有序分组，FreeSWITCH 从左到右逐组尝试，仅当**当前组所有呼叫腿**都失败或超时，才继续下一组。这就是轮询组行为。
+
+**优先级：** 先按竖线分组，再按逗号拆分组内成员。因此 `A,B|C,D` 表示“A 和 B 同时振铃；两者都失败后，C 和 D 同时振铃”。没有竖线的纯逗号列表是纯振铃组，通过竖线连接的单腿列表是纯轮询组。
+
+**超时。** `call_timeout`（通道变量或拨号字符串中的全局 `{call_timeout=N}`）限制整次呼叫发起。逐腿 `[leg_timeout=N]` 则限制单条腿。顺序轮询应使用逐腿超时，让各电话有独立振铃窗口；并行组使用单一 `call_timeout` 更简单。
+
+**`ignore_early_media`。** 默认情况下，发送早期媒体（应答前的回铃音或提示）的出站腿可能使呼叫发起被视为成功，并阻止后续处理。通过全局 `{ignore_early_media=true}` 或逐腿设置 `ignore_early_media=true`，可让 `bridge` 等待真正应答（SIP `200 OK`），而不把早期媒体视为胜出的呼叫腿。轮询组包含网关或播放早期媒体的设备时尤其重要，否则第一条腿的回铃音就可能提前终止轮询。vanilla 的 `conf/dialplan/default.xml` 在组拨号条目中也使用了此设置（`{leg_timeout=15,ignore_early_media=true}`）。
+
+**应答与桥接行为。** `bridge` **不会**预先应答主叫；成员应答后才桥接音频，所以组内振铃时主叫听到正常回铃音。设置 `hangup_after_bridge=true`，可在桥接通话结束后挂断主叫通道，避免返回拨号计划。`bridge` 后的语音信箱回退仅在无人应答时运行，因此必须设置 `continue_on_fail=true`；否则桥接失败会挂断主叫，而不会继续下一操作。
+
+端点前缀、`:_:` 企业拨号分隔符以及全局/逐腿变量括号等完整语法，见[拨号计划应用参考](../dialplan/dptools-reference.mdx)。
+
+## 变体 {#variations}
+
+### 企业振铃组与共享语音信箱 {#enterprise-ring-group-then-a-shared-voicemail-box}
+
+一个部门号码同时呼叫所有成员 30 秒，然后将主叫送入部门共享信箱（`2000`）：
+
+```xml
+<extension name="sales_ring_group">
+  <condition field="destination_number" expression="^3010$">
+    <action application="set" data="hangup_after_bridge=true"/>
+    <action application="set" data="continue_on_fail=true"/>
+    <action application="bridge"
+      data="{call_timeout=30,ignore_early_media=true}user/1001@${domain_name},user/1002@${domain_name},user/1003@${domain_name}"/>
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="default ${domain_name} 2000"/>
+  </condition>
+</extension>
+```
+
+此处超时和早期媒体设置直接放在拨号字符串的全局 `{...}` 中，而非独立 `set` 操作；两种方式均可。
+
+若团队成员在目录中维护，而非硬编码分机，可将逗号列表替换为目录**组**：`bridge` 接受 `group/<name>@<domain>`，使用各成员的 `dial-string` 同时呼叫目录组全体成员。定义组的方法见[用户目录](../users-endpoints/user-directory.mdx)。
+
+### 随身呼叫到外部号码 {#find-me--follow-me-to-an-external-number}
+
+按顺序呼叫用户桌面电话、经出站网关呼叫手机，最后进入语音信箱。竖线使各步骤顺序执行，外部腿使用网关拨号字符串，见[网关与中继注册](../users-endpoints/gateways.mdx)：
+
+```xml
+<extension name="follow_me_1001">
+  <condition field="destination_number" expression="^3020$">
+    <action application="set" data="hangup_after_bridge=true"/>
+    <action application="set" data="continue_on_fail=true"/>
+    <action application="bridge"
+      data="[leg_timeout=20]user/1001@${domain_name}|[leg_timeout=25,ignore_early_media=true]sofia/gateway/mycarrier/15551234567"/>
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="default ${domain_name} 1001"/>
+  </condition>
+</extension>
+```
+
+桌面电话振铃 20 秒，未应答则通过 `mycarrier` 网关向手机号码呼叫 25 秒。网关腿上的 `ignore_early_media=true` 很重要，因为 PSTN 运营商常发送回铃音或网络提示等早期媒体，否则可能被视为应答并终止轮询。两条腿都失败后，主叫进入语音信箱。
+
+将 `mycarrier` 替换为已定义并注册的网关名称。该网关必须配置在已加载的 Sofia 实例中，此条目才能工作。
+
+<SignalWireCallout
+  title="在 SignalWire 上实现相同流程"
+  href="https://signalwire.com/docs/swml/reference/calling/connect"
+  page="recipe-ring-group"
+  linkText="查看 SWML 的 connect">
+
+在 SignalWire 的 JSON/YAML 呼叫控制标记语言 SWML 中，两种行为都可通过一个 `connect` 实现：`parallel` 同时呼叫全组，`serial` 按列表轮询。
+
+```yaml
+version: 1.0.0
+sections:
+  main:
+    - answer: {}
+    - connect:
+        timeout: 20
+        parallel:
+          - to: "sip:alice@office.example.sip.signalwire.com"
+          - to: "sip:bob@office.example.sip.signalwire.com"
+          - to: "+15550142"
+```
+
+将 `parallel` 改为 `serial`，相同列表就会顺序轮询。成员可任意混合 SIP 端点、电话号码和 AI 智能体。
+
+</SignalWireCallout>

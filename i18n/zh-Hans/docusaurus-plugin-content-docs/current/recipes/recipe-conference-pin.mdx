@@ -1,0 +1,214 @@
+---
+sidebar_position: 5
+id: recipe-conference-pin
+slug: /recipes/conference-pin
+title: "第 37 章：带 PIN 的电话会议"
+description: "呼叫者拨打分机，输入 PIN 后进入带主持人的会议室；使用 conference 应用自身的 PIN 和成员标志处理，并提供 play_and_get_digits 变体。"
+sidebar_label: "37. 带 PIN 的电话会议"
+---
+
+# 第 37 章：带 PIN 的电话会议 {#chapter-37-a-conference-bridge-with-a-pin}
+
+## 目标 {#goal}
+
+团队需要一个受 PIN 保护的统一会议号码。呼叫者拨打分机，按提示输入 PIN，匹配后进入共享会议室。一个 PIN 用于普通参与者，另一个用于**主持人**；主持人使用主持人按键映射，并可通过 `non_moderator` 控制其他成员。
+
+`mod_conference` 本身已支持收集并校验 PIN，最简单的实现无需在拨号计划中收集数字：配置实例定义 `pin` 和 `moderator-pin`，由 `conference` 应用提示输入并检查。本例先介绍此方式，再展示使用 `play_and_get_digits` 在拨号计划中收集 PIN 的变体，以便完全控制提示过程。
+
+**呼叫流程：**
+
+1. 内部主叫拨打会议分机（`3500`）。
+2. 拨号计划条目应答呼叫，并以房间名和配置实例运行 `conference`。
+3. 首个呼叫者进入时，根据指定配置实例创建房间；后续呼叫者加入已存在的房间。
+4. 由于配置实例定义了 `pin` 和 `moderator-pin`，`conference` 播放 `pin-sound` 并收集数字。
+5. 匹配主持人 PIN 时携带 `moderator` 标志加入，匹配入场 PIN 时作为普通成员加入；不匹配则重复提示，达到 `pin-retries` 次数后拒绝。
+
+## 前置条件 {#prerequisites}
+
+- 使用 `mod_conference` 的[会议功能](../applications/conferencing.mdx)：会议模型、配置实例、`conference` 参数语法和成员标志。
+- [IVR 菜单](../applications/ivr-menus.mdx)：提示音驱动的数字收集基础，用于下方拨号计划 PIN 变体。
+- [拨号计划应用参考](../dialplan/dptools-reference.mdx)：`answer`、`play_and_get_digits` 和 `conference` 应用。
+- 可用的 [XML 拨号计划](../dialplan/xml-dialplan.mdx)：本例向 `conf/vanilla/` 的 `default` 上下文添加条目。
+
+## 实现步骤 {#build-it}
+
+包含两部分：在 `conference.conf.xml` 中定义 PIN 的**配置实例**，以及应答并进入房间的**拨号计划条目**。
+
+### 1. 带 PIN 的会议配置实例 {#1-a-conference-profile-with-pins}
+
+vanilla 的 `conference.conf.xml` 提供 `default` 实例，但其 `pin` 和 `moderator-pin` 被注释。不要修改被随附 `30xx` 分机复用的 `default`，而应在 `conf/autoload_configs/conference.conf.xml` 的 `<profiles>` 块中添加专用实例：
+
+```xml
+<profile name="secure">
+  <param name="domain" value="$${domain}"/>
+  <param name="rate" value="8000"/>
+  <param name="interval" value="20"/>
+  <param name="energy-level" value="100"/>
+
+  <!-- Entry PIN for ordinary participants. -->
+  <param name="pin" value="12345"/>
+  <!-- A different PIN that grants moderator status on entry. -->
+  <param name="moderator-pin" value="54321"/>
+  <!-- Attempts allowed before the caller is rejected. -->
+  <param name="pin-retries" value="3"/>
+
+  <!-- Prompt and error files used while collecting the PIN. -->
+  <param name="pin-sound" value="conference/conf-pin.wav"/>
+  <param name="bad-pin-sound" value="conference/conf-bad-pin.wav"/>
+
+  <!-- Announce the member count once the room reaches one member. -->
+  <param name="announce-count" value="1"/>
+
+  <!-- Sounds and behaviors carried over from the default profile. -->
+  <param name="muted-sound" value="conference/conf-muted.wav"/>
+  <param name="unmuted-sound" value="conference/conf-unmuted.wav"/>
+  <param name="alone-sound" value="conference/conf-alone.wav"/>
+  <param name="moh-sound" value="$${hold_music}"/>
+  <param name="enter-sound" value="tone_stream://%(200,0,500,600,700)"/>
+  <param name="exit-sound" value="tone_stream://%(500,0,300,200,100,50,25)"/>
+  <param name="caller-id-name" value="$${outbound_caller_name}"/>
+  <param name="caller-id-number" value="$${outbound_caller_id}"/>
+  <param name="comfort-noise" value="true"/>
+</profile>
+```
+
+保存后在 FreeSWITCH 控制台或 `fs_cli` 运行 `reloadxml`，使新配置被读取。
+
+### 2. 进入房间的拨号计划条目 {#2-a-dialplan-extension-that-enters-the-room}
+
+将以下条目放到 `conf/dialplan/default.xml` 中通用匹配的 `Local_Extension` **之前**，让 `3500` 优先匹配。它应答呼叫，以房间名和 `secure` 配置运行 `conference`。这里无需 PIN 逻辑，配置中的 `pin`/`moderator-pin` 会使应用自行提示并校验：
+
+```xml
+<extension name="secure_conference">
+  <condition field="destination_number" expression="^3500$">
+    <action application="answer"/>
+    <action application="conference" data="secure-${domain_name}@secure"/>
+  </condition>
+</extension>
+```
+
+再次运行 `reloadxml`。用两台已注册电话拨打 `3500`，各自按提示输入 PIN：`12345` 作为参与者加入，`54321` 作为主持人加入。
+
+### 主持人与参与者 {#moderator-vs-participant}
+
+两个 PIN 在**同一房间**中产生不同角色：
+
+- 输入 `12345`（`pin`），作为普通成员加入。
+- 输入 `54321`（`moderator-pin`），自动设置 `moderator` 成员标志。主持人不属于[会议 API](../applications/conferencing.mdx#the-conference-api)的 `non_moderator` 目标，因此可通过 `conference secure-${domain_name} mute non_moderator` 将其他成员全部静音。
+
+也可在加入时使用 `conference` 参数的 `+flags{...}` 后缀显式指定成员标志。添加 `+flags{mute}` 使呼叫者以静音状态入会，添加 `+flags{moderator}` 可在不使用 PIN 的情况下授予主持人身份。`mute` 和 `moderator` 是从拨号字符串解析的已核实标志名称。参数语法如下：
+
+```text
+conference <room>[@<profile>][+<pin>][+flags{<flag>|<flag>...}]
+```
+
+例如，单独的“收听者”分机，以静音状态加入同一房间：
+
+```xml
+<extension name="secure_conference_listener">
+  <condition field="destination_number" expression="^3501$">
+    <action application="answer"/>
+    <action application="conference" data="secure-${domain_name}@secure+flags{mute}"/>
+  </condition>
+</extension>
+```
+
+## 工作原理 {#how-it-works}
+
+**房间创建与配置查找。** 会议室由名称字符串标识。以 `room@profile` 运行 `conference` 时，FreeSWITCH 在 `conference.conf.xml` 查找 `profile`；房间尚不存在时由该配置创建，后续拨打相同名称的呼叫者加入现有实例。这里房间名为 `secure-${domain_name}`，按域划分命名空间，配置实例为 `secure`。见[会议模型](../applications/conferencing.mdx#conference-model)。
+
+**PIN 处理。** 解析后的配置实例或拨号字符串的 `+<pin>` 后缀提供入场 PIN 或主持人 PIN 时，`conference` 应答通道、播放 `pin-sound` 并收集数字。输入值先与 `pin` 比较，再与 `moderator-pin` 比较。不匹配时播放 `bad-pin-sound` 并重新提示；达到 `pin-retries` 次失败后拒绝呼叫者，并将该呼叫记录为 PIN 拒绝的 CDR。呼叫者也可通过 `supplied_pin` 通道变量或 `X-ConfPin=` SIP URL 参数提前提供 PIN，已匹配时跳过语音提示。
+
+**主持人 PIN 产生的标志。** 输入匹配 `moderator-pin` 而非入场 `pin` 时，`mod_conference` 记录该结果，并在成员加入时设置 `moderator` 标志（`MFLAG_MOD`）。在协议层面，这就是两种 PIN 的唯一区别：同一房间、同一配置实例，仅一个成员状态位不同。主持人成员使用 `moderator-controls` 按键映射（若配置中已定义），并从 `non_moderator` API 目标中排除。
+
+**加入时的成员标志。** 标志来自三个位置并合并：配置实例的 `member-flags` 参数、`conference_member_flags` 通道变量，以及 `conference` 参数中的 `+flags{...}` 后缀。上文的 `mute`、`deaf` 和 `moderator` 名称均原样取自拨号字符串标志解析器。见[加入时的成员标志](../applications/conferencing.mdx#member-flags-at-join-time)及完整的 [conference 应用语法](../applications/conferencing.mdx#the-conference-dialplan-application)。
+
+包含 `pin`、`moderator-pin`、`pin-retries`、`announce-count` 和声音文件在内的完整参数表，见[配置实例参数](../applications/conferencing.mdx#profile-parameters)。
+
+## 变体 {#variations}
+
+### 改为在拨号计划中收集 PIN {#collect-the-pin-in-the-dialplan-instead}
+
+若需自行设计提示过程，例如自定义问候、数字正则校验或失败转接，可在进入房间前用 `play_and_get_digits` 收集 PIN，再通过拨号字符串 `+<pin>` 传入。保留配置中的 `pin`/`moderator-pin`，让 `conference` 继续校验所传值：
+
+```xml
+<extension name="secure_conference_dp_pin">
+  <condition field="destination_number" expression="^3502$">
+    <action application="answer"/>
+    <action application="sleep" data="500"/>
+    <!-- min max tries timeout(ms) terminators prompt invalid_file var regexp -->
+    <action application="play_and_get_digits"
+      data="4 6 3 7000 # conference/conf-pin.wav conference/conf-bad-pin.wav conf_pin \d+"/>
+    <action application="conference" data="secure-${domain_name}@secure+${conf_pin}"/>
+  </condition>
+</extension>
+```
+
+`play_and_get_digits` 的位置参数严格按以下顺序排列：
+`<min> <max> <tries> <timeout_ms> <terminators> <file> <invalid_file> <var_name> <regexp>`。
+上例收集 4–6 位数字，允许 3 次尝试，等待 7 秒，接受 `#` 作为结束符；播放 `conf-pin.wav`，正则匹配失败时播放 `conf-bad-pin.wav`；结果存入 `conf_pin`，并使用 `\d+` 校验。收集的 `${conf_pin}` 以 `+<pin>` 后缀传入，`conference` 继续分别校验入场 PIN 和主持人 PIN，保留通过 PIN 获得主持人身份的行为。含可选 `digit_timeout` 和 `failure_ext` 的完整参数见[拨号计划应用参考](../dialplan/dptools-reference.mdx)。
+
+### 分开的主持人与收听者入口 {#separate-moderator-and-listener-entry-points}
+
+可以使用不同分机，并通过 `+flags{...}` 设置角色，代替在同一分机中按 PIN 分支。这些仅供内部使用的分机无需提示 PIN。以下主持人和静音收听者分机共享同一房间：
+
+```xml
+<extension name="conf_moderator_entry">
+  <condition field="destination_number" expression="^3510$">
+    <action application="answer"/>
+    <action application="conference" data="secure-${domain_name}@secure+flags{moderator}"/>
+  </condition>
+</extension>
+
+<extension name="conf_listener_entry">
+  <condition field="destination_number" expression="^3511$">
+    <action application="answer"/>
+    <action application="conference" data="secure-${domain_name}@secure+flags{mute|deaf}"/>
+  </condition>
+</extension>
+```
+
+拨打 `3510` 作为主持人加入；拨打 `3511` 以静音且屏蔽接收音频的状态加入，既不听到音频也不发送音频，可用于监控馈送。由于这些入口按分机而非 PIN 授权角色，应在拨号计划或用户目录中限制访问，不要对外公开。
+
+### 自定义加入和退出提示 {#play-custom-entry-and-exit-sounds}
+
+配置实例的 `enter-sound` 和 `exit-sound` 在成员加入或离开时向会议室播放提示。vanilla 配置使用简短的 `tone_stream://` 音调；可改为相对于会议 `sound-prefix` 的录音文件，播放语音公告：
+
+```xml
+<param name="enter-sound" value="conference/conf-has-joined.wav"/>
+<param name="exit-sound" value="conference/conf-has-left.wav"/>
+```
+
+若要在成员加入时播报当前人数，将 `announce-count` 设为开始播报的阈值；`1` 表示从首位成员开始播报。相关声音和播报选项见[配置实例参数](../applications/conferencing.mdx#profile-parameters)。
+
+<SignalWireCallout
+  title="在 SignalWire 上实现相同流程"
+  href="https://signalwire.com/docs/swml/reference/calling/join-conference"
+  page="recipe-conference-pin"
+  linkText="查看 SWML 的 join_conference">
+
+SignalWire 托管平台中，PIN 校验和会议室可通过 JSON/YAML 呼叫控制标记语言 SWML 的几个方法实现：
+
+```yaml
+version: 1.0.0
+sections:
+  main:
+    - answer: {}
+    - prompt:
+        play: "say:Enter the conference PIN."
+        max_digits: 4
+    - switch:
+        variable: prompt_value
+        case:
+          "7788":
+            - join_conference:
+                name: weekly-status
+        default:
+          - play:
+              url: "say:That PIN is not valid. Goodbye."
+          - hangup: {}
+```
+
+加入音、静音、录音和主持人行为都由同一方法的参数控制，无需会议配置 XML，也无需规划媒体服务器容量。
+
+</SignalWireCallout>
