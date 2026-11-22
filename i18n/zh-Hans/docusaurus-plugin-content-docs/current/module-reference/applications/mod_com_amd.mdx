@@ -1,0 +1,321 @@
+---
+sidebar_position: 5.5
+id: mod_com_amd
+slug: /module-reference/applications/mod_com_amd
+title: "mod_com_amd——应答机检测（商业模块）"
+description: "商业应答机检测 AMD 模块的语音静音分类、参数、许可证、事件与编程示例。"
+sidebar_label: "mod_com_amd"
+---
+# mod_com_amd——应答机检测（商业模块） {#mod_com_amd-—-answering-machine-detection-commercial}
+
+`mod_com_amd` 是商业应答机检测（AMD）模块。在通道上启动检测后，它监听远端传入的音频，依据问候语中语音与静音的时间模式判断接听方。短促问候语后出现静音，或者始终没有问候语，会被分类为真人；长时间连续的问候语或包含很多词语的问候语，会被分类为机器。结果写入通道变量，可触发拨号计划操作，并通过事件报告。
+
+自动外呼系统使用它把真人应答接入坐席，把机器应答转接至预录音或直接挂机。检测属于基于时序的启发式规则，没有任何设置能够准确识别所有呼叫；应使用实际拨打号码的应答录音来调整阈值。
+
+`mod_com_amd` 按通道数授权，不属于开源代码树。许可证购买、软件包安装、许可激活和许可证服务器的说明参见[商业模块与许可证](../commercial-modules.mdx)。它与 [`mod_avmd`](./mod_avmd.mdx) 互为补充：`mod_avmd` 检测语音信箱问候语结束时的提示音，而不是判断是谁接听。
+
+<SignalWireCallout
+  title="无需许可证服务器的应答机检测"
+  href="https://signalwire.com/docs/swml/reference/calling/detect-machine"
+  page="mod-com-amd"
+  linkText="查看 SWML 的 detect_machine">
+
+托管版 SignalWire 将该商业 AMD 引擎封装为 SWML（基于 JSON/YAML 的呼叫控制标记语言）的 `detect_machine` 方法，无需激活许可证或加载模块。它还支持传真检测，配置 `detect_message_end: true` 后可等待问候语结束。检测结果通过 `status_url` Webhook 回传，`wait` 用于选择阻塞或异步检测。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+按[商业模块与许可证](../commercial-modules.mdx)说明安装 `freeswitch-mod-com-amd` 软件包并激活 AMD 许可证。标准 `modules.conf.xml` **不包含**此模块，需要在 `autoload_configs/modules.conf.xml` 添加：
+
+```xml
+<load module="mod_com_amd"/>
+```
+
+加载时模块会记录已许可通道数量（`AMD license count => <N>`），并注册三个拨号计划应用、三个 API 命令及自定义事件子类 `AMD::EVENT`。模块仅在加载时读取 `amd.conf.xml`。修改该文件后需执行 `reload mod_com_amd` 或重启 FreeSWITCH 才能生效；仅执行 `reloadxml` 不会应用更新。
+
+## 检测如何分类呼叫 {#how-detection-classifies-a-call}
+
+模块逐帧分析 FreeSWITCH 在通道上接收的音频（读取方向）。将每帧的平均样本振幅与 `silent_threshold` 比较：大于或等于阈值判定为语音，低于则判定为静音。一次持续至少 `noise_min_length` 毫秒的语音片段视为一个词。检测到第一个词后结束初始阶段，进入开场白分析阶段。
+
+检测会在第一条符合条件的规则处停止：
+
+| `amd_status` | `amd_result` | 规则 |
+|---|---|---|
+| `person` | `silent-initial` | 尚未听到任何词语，线路静音持续达到 `silent_initial` 毫秒。 |
+| `person` | `silent-after-intro` | 第一个词语结束后，经过 `silent_after_intro` 毫秒仍未听到下一个词。短于 `noise_min_length` 的语音片段不会重置计时器。 |
+| `machine` | `max-count` | 词语数量达到 `noise_max_count`，**或者**第一个词语开始后，一次不中断的语音持续达到 `noise_max_intro` 毫秒。 |
+| `unsure` | `too-long` | 在其他规则匹配之前，`total_analysis_time` 规定的分析预算已耗尽。 |
+| `undefined` | `media-bug-failed` | 检测无法启动，参见[检测失败](#detection-failures)。 |
+
+模块还定义了 `max-intro` 结果，但长问候语规则实际报告 `max-count`，因此正常情况下不会出现 `max-intro`。
+
+匹配规则后，模块设置 `amd_status` 和 `amd_result`，以 `INFO` 级别记录 `AMD Status: <status> (<result>)`（若启用 `debug`，还会在 `debug_loglevel` 输出详细结果），发送 `DETECTED_SPEECH` 完成事件，执行匹配的 `amd_execute_on_*` 动作，然后从通道分离。分离时释放 AMD 许可通道，因此许可证只在检测期间占用，不会一直占用到呼叫结束。
+
+因为检测读取的是通道传入音频，应在需要识别其接听方的呼叫腿上运行。对于使用 `originate` 将呼叫送入拨号计划的情况，该呼叫腿就是执行拨号计划的通道。若可能在应答前执行 `voice_start`，请提前设置 `media_bug_answer_req=true`，以免把早期媒体也作为检测输入。
+
+## 配置：`amd.conf.xml` {#configuration-amdconfxml}
+
+软件包会安装 `autoload_configs/amd.conf.xml`。全部参数都位于同一个 `<settings>` 块中，也都可通过 [`voice_start`](#voice_start) 的参数为单次呼叫覆盖。
+
+### 参数参考 {#parameter-reference}
+
+**模块默认值**列表示配置文件和 `voice_start` 参数均未指定某项时所采用的值；**软件包配置值**列表示随包安装的 `amd.conf.xml` 所设置的值。两者在多个参数上不同。
+
+| 参数 | 用途 | 取值 | 模块默认值 | 软件包配置值 |
+|---|---|---|---|---|
+| `silent_threshold` | 区分语音与静音的帧能量阈值，即一帧 16 位音频样本的绝对值平均值。达到或超过阈值即视为语音。 | 整数（0 到 32767） | `256` | `256` |
+| `silent_initial` | 第一个词之前持续静音多少毫秒后，将呼叫分类为 `person` / `silent-initial`。 | 整数，毫秒 | `4500` | `4500` |
+| `silent_after_intro` | 检测到一个词后，没有继续出现词语达到多少毫秒，将呼叫分类为 `person` / `silent-after-intro`。 | 整数，毫秒 | `1000` | `500` |
+| `noise_max_intro` | 第一个词开始后，单次不间断语音持续多少毫秒，会分类为 `machine` / `max-count`。 | 整数，毫秒 | `1250` | `1250` |
+| `noise_min_length` | 一次语音片段至少持续多少毫秒才算作一个词。 | 整数，毫秒 | `120` | `120` |
+| `noise_inter_silence` | 词语计数门槛：语音片段达到 `noise_min_length` 后，只有与上一静音帧相隔至少指定毫秒数才计为一个词。该间隔已经比 `noise_min_length` 多约一帧，因此小于或等于 `noise_min_length` 不会阻止计数；超过它一帧以上则会导致词语根本无法计数。 | 整数，毫秒 | `30` | `50` |
+| `noise_max_count` | 词语数量达到该值时分类为 `machine` / `max-count`。 | 整数 | `6` | `3` |
+| `total_analysis_time` | 在将呼叫分类为 `unsure` / `too-long` 之前允许的分析预算。**单位不是毫秒**，参见[分析预算单位](#analysis-budget-units)。 | 整数 | `5000` | `5000` |
+| `hangup_on_bug_fail` | 检测无法启动时使用 `DESTINATION_OUT_OF_ORDER` 原因挂机。 | `true` / `false` | `true` | 未设置 |
+| `event_fire` | 将带有通道头的 `DETECTED_SPEECH` 完成事件发送到全局事件系统，而不是排入通道队列，参见[事件](#events)。 | `true` / `false` | `false` | 未设置 |
+| `debug` | 在 `debug_loglevel` 记录检测轨迹：每个静音帧、每个规则检查点，以及列出全部参数和计数器的结果行。 | `true` / `false` | `false` | `true` |
+| `debug_loglevel` | `debug` 输出的日志级别；范围外数值会被忽略。 | `1`（ALERT）到 `7`（DEBUG） | `7` | 未设置 |
+
+随包配置启用了 `debug`，会以 `DEBUG` 级别对每个静音帧写一行日志。将其设为 `false`，即可减少为每通呼叫一行 `INFO` 结果日志。
+
+随包配置还包含 `silent_max_session`、`ring_timeout` 和 `break_digit`。模块并不读取这三个参数；`silent_max_session` 是固定的内部数值，另外两个不起作用。
+
+### 软件包随附配置 {#packaged-configuration}
+
+```xml
+<configuration name="amd.conf" description="AMD Configuration">
+  <!-- AMD -->
+  <settings>
+    <param name="silent_threshold" value="256"/>
+    <param name="silent_initial" value="4500"/>
+    <param name="silent_after_intro" value="500"/>
+    <param name="silent_max_session" value="200"/>
+    <param name="noise_max_intro" value="1250"/>
+    <param name="noise_min_length" value="120"/>
+    <param name="noise_inter_silence" value="50"/>
+    <param name="noise_max_count" value="3"/>
+    <param name="total_analysis_time" value="5000"/>
+    <param name="ring_timeout" value="36"/>
+    <param name="break_digit" value="#"/>
+    <param name="debug" value="1"/>
+  </settings>
+</configuration>
+```
+
+### 分析预算单位 {#analysis-budget-units}
+
+模块将 `total_analysis_time` 与已分析的解码音频数量比较，计量单位为每 1,000 字节的 16 位音频。一个单位对应的时长取决于通道采样率：
+
+| 通道采样率 | 每单位时长 | 取值 `5000` 时的预算 | 5 秒预算对应的取值 |
+|---|---|---|---|
+| 8000 Hz | 62.5 ms | 约 312 秒 | `80` |
+| 16000 Hz | 31.25 ms | 约 156 秒 | `160` |
+| 48000 Hz | 10.4 ms | 约 52 秒 | `480` |
+
+对于单声道，*S* 秒预算的参数值为 *S* × 采样率 × 2 ÷ 1000。使用默认值时，`silent-initial`、`silent-after-intro` 和 `max-count` 规则几乎总会在预算耗尽前决定分类。要限制检测总时长，应根据上表降低 `total_analysis_time`。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `voice_start` | 在通道上开始检测。立即返回，检测运行时拨号计划会继续执行。 | 可选的逗号分隔 `key=value` 参数覆盖列表 |
+| `voice_stop` | 停止通道检测并释放许可通道。 | 无 |
+| `waitforresult` | 阻塞等待检测结果，等待过程中播放文件。 | 可选的播放文件 |
+
+### `voice_start` {#voice_start}
+
+启动检测。没有参数时采用 `amd.conf.xml` 中的设置。参数为逗号分隔的 `key=value` 对，键名与[参数参考](#parameter-reference)相同（例如 `noise_max_count` 或 `hangup_on_bug_fail`），不区分大小写，最多读取 20 对。这些覆盖值仅对本次检测有效。
+
+开始检测时，模块清除通道上已有的 `amd_status`、`amd_result`，并占用一个 AMD 许可通道。一个通道同一时刻只能进行一次检测：检测已运行时再调用 `voice_start`，会记录 `Only 1 AMD per channel please!`，不做任何更改。
+
+```xml
+<action application="voice_start"/>
+```
+
+```xml
+<action application="voice_start" data="silent_after_intro=800,noise_max_count=4,total_analysis_time=80,debug=false"/>
+```
+
+如果调用 `voice_start` 时通道变量 `amd_debug` 为真，则本次检测会启用 `debug`。
+
+### `voice_stop`
+
+停止检测并释放许可通道。如果尚未产生结果，`amd_status` 和 `amd_result` 保持未设置状态，且不会执行任何 `amd_execute_on_*` 动作。对没有检测任务的通道调用此应用不起作用。
+
+```xml
+<action application="voice_stop"/>
+```
+
+### `waitforresult`
+
+若通道尚未应答，先将其应答，然后等待检测完成。等待期间播放参数指定的文件，每次播放结束后重新播放；未提供参数或使用 `silence` 时播放静音。一旦检测结果产生或通道挂机，就会返回。
+
+```xml
+<action application="waitforresult"/>
+<action application="waitforresult" data="ivr/ivr-one_moment_please.wav"/>
+```
+
+- 如果结果已经设置，记录 `AMD RESULT FOUND: <result>` 并立即返回。
+- 如果通道未运行检测，以 `WARNING` 级别记录 `<channel> Channel is not running AMD` 并返回。
+- 如果等待期间通道挂机，将 `amd_wait_status` 和 `amd_wait_result` 设为 `hangup`。
+
+`waitforresult` 没有自己的超时时间。等待在任一检测规则命中时结束，因此应通过 `total_analysis_time` 限定时间（参见[分析预算单位](#analysis-budget-units)）。
+
+## API 命令 {#api-commands}
+
+模块注册三个报告 AMD 许可使用情况的 API 命令，都不需要参数。其输出和在拨号计划条件中的用法见[商业模块与许可证：检查许可使用情况](../commercial-modules.mdx#checking-licence-usage)。
+
+| 命令 | 返回结果 |
+|---|---|
+| `amd_info` | `AMD license available => <free>`、`AMD license allocated => <in use>`，或 `Can't contact licence server.` |
+| `amd_available` | 有至少一个空闲 AMD 通道时为 `true`，否则为 `false` |
+| `amd_count` | 空闲 AMD 通道数 |
+
+没有可以通过 UUID 在指定通道上启动检测的 API 命令。从 Event Socket 可以通过 `execute_on_answer` 等通道变量启动（参见 [Event Socket 外呼程序](#event-socket-dialer)），或者直接在通道上运行 `voice_start` 应用。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `amd_status` | 设置 | 分类结果：`person`、`machine`、`unsure`，或无法启动检测时的 `undefined`；开始检测时清除。 |
+| `amd_result` | 设置 | 决定分类的规则：`silent-initial`、`silent-after-intro`、`max-count`、`too-long` 或 `media-bug-failed`；开始检测时清除。 |
+| `amd_wait_status` | 设置 | 在执行 `waitforresult` 期间通道挂机时设为 `hangup`。 |
+| `amd_wait_result` | 设置 | 在执行 `waitforresult` 期间通道挂机时设为 `hangup`。 |
+| `amd_execute_on_machine` | 读取 | 结果为 `machine` 时执行的拨号计划应用。 |
+| `amd_execute_on_person` | 读取 | 结果为 `person` 时执行的拨号计划应用。 |
+| `amd_execute_on_unsure` | 读取 | 结果为 `unsure` 时执行的拨号计划应用。 |
+| `amd_debug` | 读取 | 执行 `voice_start` 时若为真，则为本次检测启用 `debug`。 |
+
+`amd_execute_on_*` 变量值由应用名称、空格和参数组成，例如 `transfer amd_machine XML default`。动作执行时才展开参数中的变量。模块采用前缀匹配，因此名称以 `amd_execute_on_machine` 开头的任意通道变量（如 `amd_execute_on_machine_1`、`amd_execute_on_machine_2`）都会在检测到机器时执行。动作在检测完成时执行，通道可能仍在运行原有应用，因此 `transfer` 会中断该应用。
+
+若检测无法启动，或在产生结果之前被 `voice_stop` 停止，则不会执行任何 `amd_execute_on_*` 动作。
+
+## 事件 {#events}
+
+| 事件 | 触发时机 | 头字段 |
+|---|---|---|
+| `CUSTOM`，带 `Event-Subclass: AMD::EVENT` | 检测过程中音频每次在语音与静音之间切换时 | `Action`（`start-talking` 或 `stop-talking`），以及通道头字段 |
+| `DETECTED_SPEECH` | 检测产生结果时 | `amd_result`、`amd_status`；消息体为 `amd_complete` |
+| `MEDIA_BUG_START` / `MEDIA_BUG_STOP` | 检测附加到通道或从通道分离时（FreeSWITCH 核心事件） | `Media-Bug-Function: amd`、`Media-Bug-Target: amd`，以及通道头字段 |
+
+`AMD::EVENT` 在每次状态切换时触发，因此每通呼叫可能产生大量事件。
+
+`DETECTED_SPEECH` 完成事件的投递方式由 `event_fire` 决定：
+
+- **`event_fire=false`（默认）：** 事件被放入通道队列，且不附带通道头字段。它可以被已注册输入回调、正在通道上播放音频的脚本收到，或者被启用了 `divert_events` 的出站 Event Socket 连接接收。但它不会进入全局事件系统，因此入站 Event Socket 的订阅者看不到。若通道队列拒绝该事件，模块会改将其发送到事件系统，并附加 `delivery-failure: true` 头字段。
+- **`event_fire=true`：** 事件带着包括 `Unique-ID` 在内的通道头字段发送到事件系统。入站 Event Socket 客户端可通过 `event plain DETECTED_SPEECH` 接收。
+
+## 检测失败 {#detection-failures}
+
+没有空闲 AMD 许可通道、许可证服务器不可访问，或 Media Bug 无法附加到通道时，`voice_start` 无法启动检测。每种情况下模块均会：
+
+1. 以 `ERROR` 级别记录 `Bug Failure!`。
+2. 将 `amd_status` 设为 `undefined`，`amd_result` 设为 `media-bug-failed`。
+3. 如果 `hangup_on_bug_fail` 为 `true`（默认），以 `DESTINATION_OUT_OF_ORDER` 原因挂机。
+
+在 `voice_start` 前检查 `${amd_available()}` 可以避免多数失败，但检查后、开始前，其他呼叫仍可能占用最后一个空闲通道。若希望检测无法启动时仍保持呼叫，应传入 `hangup_on_bug_fail=false`，然后根据 `amd_status` 路由：
+
+```xml
+<action application="voice_start" data="hangup_on_bug_fail=false"/>
+```
+
+## 示例 {#examples}
+
+### 阻塞等待结果的出站呼叫 {#outbound-call-with-a-blocking-wait}
+
+使用 `originate` 发起呼叫，使被应答的呼叫腿执行 `amd_outbound` extension。`ignore_early_media=true` 让 `originate` 等待真正应答，而不是把早期媒体当作应答。
+
+```text
+bgapi originate {ignore_early_media=true}sofia/gateway/mygw/15551234567 amd_outbound XML default
+```
+
+该 extension 检查有无空闲 AMD 通道、等待结果，并将呼叫转接到按结果状态命名的 extension。动作执行时展开变量，因此 `transfer` 中的 `${amd_status}` 保存的是 `waitforresult` 等待到的结果。
+
+```xml
+<extension name="amd_outbound">
+  <condition field="destination_number" expression="^amd_outbound$"/>
+  <condition field="${amd_available()}" expression="^true$">
+    <action application="voice_start"/>
+    <action application="waitforresult"/>
+    <action application="transfer" data="amd_${amd_status} XML default"/>
+    <anti-action application="hangup" data="NORMAL_TEMPORARY_FAILURE"/>
+  </condition>
+</extension>
+
+<extension name="amd_person">
+  <condition field="destination_number" expression="^amd_(person|unsure)$">
+    <action application="bridge" data="user/1000"/>
+  </condition>
+</extension>
+
+<extension name="amd_machine">
+  <condition field="destination_number" expression="^amd_machine$">
+    <action application="wait_for_silence" data="300 30 5 25000"/>
+    <action application="playback" data="$${recordings_dir}/campaign-message.wav"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+在 `amd_machine` 中，[`wait_for_silence`](../../dialplan/dptools-reference.mdx) 会在播放消息之前等待问候语结束。
+
+### 呼叫继续进行时并行检测 {#detection-while-the-call-proceeds}
+
+使用 `amd_execute_on_machine` 动作后，拨号计划无需等待。检测运行的同时呼叫继续执行；如果判断为机器，就将其转接到其他流程：
+
+```xml
+<extension name="amd_proceed">
+  <condition field="destination_number" expression="^amd_proceed$">
+    <action application="set" data="amd_execute_on_machine=transfer amd_machine XML default"/>
+    <action application="voice_start"/>
+    <action application="playback" data="$${recordings_dir}/live-greeting.wav"/>
+    <action application="bridge" data="user/1000"/>
+  </condition>
+</extension>
+```
+
+### Event Socket 外呼程序 {#event-socket-dialer}
+
+Event Socket 应用可以通过 `execute_on_answer` 在应答时启动检测，将通道 park，并在完成事件到达后采取动作。`event_fire=true` 会把事件发送到事件系统，以供入站连接接收：
+
+```text
+event plain DETECTED_SPEECH
+event plain CUSTOM AMD::EVENT
+bgapi originate {ignore_early_media=true,execute_on_answer='voice_start event_fire=true'}sofia/gateway/mygw/15551234567 &park()
+```
+
+收到 `DETECTED_SPEECH` 事件后，从头字段读取 `amd_status` 和 `Unique-ID`，再执行 `uuid_transfer`、`uuid_kill` 等命令。
+
+### Lua
+
+自行发起呼叫的脚本也可以使用相同应用：
+
+```lua
+local number = argv[1]
+local api = freeswitch.API()
+
+if api:executeString("amd_available") ~= "true" then
+  freeswitch.consoleLog("WARNING", "No free AMD channel\n")
+  return
+end
+
+local session = freeswitch.Session("{ignore_early_media=true}sofia/gateway/mygw/" .. number)
+
+if session:ready() then
+  session:execute("voice_start")
+  session:execute("waitforresult")
+
+  if session:getVariable("amd_status") == "machine" then
+    session:execute("wait_for_silence", "300 30 5 25000")
+    session:execute("playback", "/var/lib/freeswitch/recordings/campaign-message.wav")
+    session:hangup()
+  else
+    session:execute("bridge", "user/1000")
+  end
+end
+```
+
+使用 `luarun dialer.lua 15551234567` 运行。
+
+**源码：** `mod_com_amd.c`（商业模块源码，不包含在 FreeSWITCH 公共代码树中），以及 `freeswitch-mod-com-amd` 软件包安装的 `amd.conf.xml`。

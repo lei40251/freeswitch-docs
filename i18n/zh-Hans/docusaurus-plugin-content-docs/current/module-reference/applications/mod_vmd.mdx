@@ -1,0 +1,108 @@
+---
+sidebar_position: 39
+id: mod_vmd
+slug: /module-reference/applications/mod_vmd
+title: "mod_vmd — 语音信箱提示音检测"
+description: "通过 DESA-2 频率估计算法检测音频流中的语音信箱提示音。"
+sidebar_label: "mod_vmd"
+---
+
+# mod_vmd — 语音信箱提示音检测 {#mod_vmd-—-voicemail-beep-detection}
+
+`mod_vmd` 是拨号计划应用模块（`src/mod/applications/mod_vmd`），用于检测语音信箱系统在问候语结束时播放的特征性提示音。它使用离散能量分离算法 2（DESA-2）估算每帧音频的瞬时频率和幅度，寻找 600～1100 Hz 范围内持续存在的音调。检测处理每帧的时间复杂度为 O(1)，不依赖外部库。
+
+管理员在发起可能转入语音信箱的呼叫时，可以用此模块精确判断何时开始录制留言。确认检测到提示音后，模块设置通道变量并触发自定义事件，使拨号计划或 ESL 应用能立即响应。
+
+> **注意：** FreeSWITCH 源码在模块加载时以 CRITICAL 日志级别（`SWITCH_LOG_CRIT`）输出弃用通知，并建议迁移到持续维护的后继模块 `mod_avmd`。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_vmd`，默认的 `autoload_configs/modules.conf.xml` 中**没有**它，需要手动添加：
+
+```xml
+<load module="mod_vmd"/>
+```
+
+无须外部库或特殊构建标志；模块可随标准 FreeSWITCH 源码树编译。
+
+## 配置 {#configuration}
+
+`mod_vmd` 不提供 `.conf.xml` 文件，也不注册 XML 配置参数。所有调节均通过调用应用或 API 命令之前设置的通道变量完成（见下文[通道变量](#channel-variables)）。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `vmd` | 在当前通道上启动或停止语音信箱提示音检测 | `[start]` \| `stop` |
+
+### `vmd`
+
+向会话的读方向附加 media bug，持续分析收到的音频。可选参数 `start`（或不传参数）启动检测；传入 `stop` 则移除 media bug 并终止检测。在已经启用检测的通道上再次执行 `start`，模块会记录警告并直接返回，不报错。
+
+确认提示音后，模块会：
+
+1. 将通道变量 `vmd_detect` 设置为 `TRUE`。
+2. 发出子类为 `vmd::beep` 的 `CUSTOM` 事件。
+
+拨号计划示例：
+
+```xml
+<extension name="vmdtest">
+  <condition field="destination_number" expression="^vmd(\d{10})$">
+    <action application="answer"/>
+    <action application="vmd"/>
+    <action application="sleep" data="25000"/>
+    <!-- vmd_detect will be TRUE here if a beep was heard -->
+    <action application="info"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+若要在通话中停止检测：
+
+```xml
+<action application="vmd" data="stop"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `vmd` | 通过 UUID 在任意会话上启动或停止检测 | `vmd <uuid> <start\|stop>` |
+
+### `vmd`
+
+API 形式允许 ESL 客户端或 `mod_event_socket` 脚本无需通过拨号计划，就能控制活动会话中的检测过程。
+
+```
+vmd 5ec74a35-e9e4-42cb-8a0d-d68e5e146bab start
+vmd 5ec74a35-e9e4-42cb-8a0d-d68e5e146bab stop
+```
+
+成功返回 `+OK`，参数无效时返回 `-USAGE: <uuid> <command>`。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 设置／读取 | 用途 |
+|---|---|---|
+| `vmd_detect` | 设置 | 确认语音信箱提示音后，模块将其设为 `TRUE`。在 `sleep` 或桥接返回后，拨号计划可以读取。 |
+| `vmd_min_time` | 读取 | 覆盖提示音持续时间下限（单位为 DESA-2 采样点，默认 `8000`）。只在 `vmd` 拨号计划应用启动时读取一次。通过 `vmd <uuid> start` API 启动时不会读取，API 始终使用编译时默认值 `8000`。 |
+
+## 事件 {#events}
+
+`mod_vmd` 发出一个自定义事件子类：
+
+**`vmd::beep`**（`SWITCH_EVENT_CUSTOM`）——确认的提示音结束时触发，包含以下头字段：
+
+| 头字段 | 值 |
+|---|---|
+| `Beep-Status` | `stop` |
+| `Beep-Time` | 整数，以 DESA-2 采样点为单位的提示音持续时间 |
+| `Frequency` | 估算的提示音频率（Hz） |
+| `Unique-ID` | 发起会话的 UUID |
+| `call-command` | `vmd` |
+
+该事件既会排入会话事件队列，也会发送到全局事件系统。
+
+**源码：** `src/mod/applications/mod_vmd`

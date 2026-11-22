@@ -1,0 +1,213 @@
+---
+sidebar_position: 1
+id: mod_amqp
+slug: /module-reference/event-handlers/mod_amqp
+title: "mod_amqp——AMQP 事件与命令总线"
+description: "FreeSWITCH AMQP 事件生产、命令消费和日志转发模块的参数及机制。"
+sidebar_label: "mod_amqp"
+---
+# mod_amqp——AMQP 事件与命令总线 {#mod_amqp-—-amqp-event-and-command-bus}
+
+`mod_amqp` 将 FreeSWITCH 连接到 AMQP 0-9-1 消息代理（例如 RabbitMQ）。模块位于 `src/mod/event_handlers/mod_amqp`，提供三类独立的配置实例：**生产者（producers）**将 FreeSWITCH 事件序列化成 JSON 并发布到指定交换机（exchange）；**命令消费者（commands）**从队列接收纯文本 FreeSWITCH API 命令并执行；**日志（logging）**配置实例将 FreeSWITCH 日志输出转发到交换机。
+
+每类配置实例可以使用按优先级排序的连接列表，并在连接失败后自动重连。模块使用内部消息队列，因此消息代理离线或出现反压时不会阻塞 FreeSWITCH 核心。当内部队列填满时，熔断器会在可配置的时间窗口内丢弃新事件。
+
+<SignalWireCallout
+  title="无需消息代理的事件处理"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="mod-amqp"
+  linkText="查看 RELAY 实时 SDK">
+
+SignalWire 可直接通过 Webhook 和实时 WebSocket API RELAY 推送呼叫及消息事件，无需在交换机与事件消费者之间另外运维消息代理。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+默认**不加载**该模块。标准 `modules.conf.xml` 中的条目被注释：
+
+```xml
+<!-- <load module="mod_amqp"/> -->
+```
+
+取消注释，或通过 `fs_cli` 在运行时加载：
+
+```
+load mod_amqp
+```
+
+模块构建时需要 `librabbitmq`（又称 `rabbitmq-c`）。参见后面的[依赖项](#dependencies)。
+
+## 配置：`amqp.conf.xml` {#configuration-amqpconfxml}
+
+配置文件为 `autoload_configs/amqp.conf.xml`，包含三个顶层部分：`<producers>`、`<commands>` 和 `<logging>`。每部分都包含一个或多个具名 `<profile>` 元素，每个配置实例又包含 `<connections>` 和 `<params>` 块。
+
+### 连接参数（所有配置实例类型共用） {#connection-parameters-shared-by-all-profile-types}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `hostname` | AMQP 消息代理主机名或 IP 地址 | 字符串 | `localhost` |
+| `port` | AMQP 消息代理的 TCP 端口 | 整数 | `5672` |
+| `virtualhost` | AMQP 虚拟主机 | 字符串 | `/` |
+| `username` | AMQP 登录用户名 | 字符串 | `guest` |
+| `password` | AMQP 登录密码 | 字符串 | `guest` |
+| `heartbeat` | AMQP 心跳间隔（秒），`0` 表示禁用 | 整数 | `0` |
+| `ssl_on` | 为该连接启用 TLS | `true` / `false` | `false` |
+| `ssl_verify_peer` | 验证消息代理的 TLS 证书 | `true` / `false` | `true` |
+
+每个配置实例最多可以列出四个连接。模块会依次尝试，采用第一个连接成功的目标。
+
+### 生产者配置实例参数 {#producer-profile-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `exchange-name` | 事件发布到的交换机 | 字符串 | `TAP.Events` |
+| `exchange-type` | AMQP 交换机类型 | `topic`, `direct`, `fanout` | `topic` |
+| `exchange-durable` | 声明交换机为持久化 | `true` / `false` | `true` |
+| `delivery-mode` | AMQP 投递模式；省略时使用消息代理默认值 | `1`（非持久化）、`2`（持久化） | 未设置 |
+| `delivery-timestamp` | 附加 AMQP 时间戳和自定义头 `x_Liquid_MessageSentTimeStamp`（Unix 秒）及 `x_Liquid_MessageSentTimeStampMicro`（Unix 微秒） | `true` / `false` | `true` |
+| `content-type` | 各条消息的 AMQP content-type 头 | 字符串 | `text/json` |
+| `format_fields` | 用于构造路由键的事件头名称列表，以逗号分隔。字段前加 `#` 表示按字面字符串处理。启用 `enable_fallback_format_fields` 后，可在单个字段内用 `\|` 分隔候选值 | 逗号分隔的头名称 | _（无，必填）_ |
+| `enable_fallback_format_fields` | 允许在 `format_fields` 中通过 `\|` 指定备用字段 | `0` / `1` | `0` |
+| `event_filter` | 订阅的 `SWITCH_EVENT_*` 事件名称列表，以逗号分隔。使用 `SWITCH_EVENT_ALL` 订阅所有事件，附加 `^subclass` 可筛选自定义子类 | 逗号分隔的事件类型名称 | `SWITCH_EVENT_ALL` |
+| `send_queue_size` | 熔断器触发前允许缓存的最多消息数 | 整数 | `5000` |
+| `circuit_breaker_ms` | 队列满后丢弃新事件的持续时间（毫秒） | 整数 | `10000` |
+| `reconnect_interval_ms` | 两次重连尝试之间的等待时间（毫秒） | 整数 | `1000` |
+
+### 命令配置实例参数 {#command-profile-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `exchange-name` | 命令队列绑定到的交换机 | 字符串 | `TAP.Commands` |
+| `binding_key` | 将队列绑定到交换机时使用的路由键 | 字符串 | `commandBindingKey` |
+| `queue-name` | 声明的队列名称；省略时由消息代理分配 | 字符串 | _（代理分配）_ |
+| `queue-passive` | 以被动模式声明队列（假定队列已经存在） | `true` / `false` | `false` |
+| `queue-durable` | 声明队列为持久化 | `true` / `false` | `false` |
+| `queue-exclusive` | 声明队列为独占 | `true` / `false` | `false` |
+| `queue-auto-delete` | 消费者断开后删除队列 | `true` / `false` | `true` |
+| `reconnect_interval_ms` | 重连尝试之间的等待时间（毫秒） | 整数 | `1000` |
+
+### 日志配置实例参数 {#logging-profile-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `exchange-name` | 用于发布日志消息的交换机 | 字符串 | `TAP.Events` |
+| `exchange-type` | AMQP 交换机类型 | `topic`, `direct`, `fanout` | `topic` |
+| `exchange-durable` | 声明交换机为持久化 | `true` / `false` | `true` |
+| `log-levels` | 捕获的日志级别列表，以逗号分隔 | `debug`, `info`, `notice`, `warning`, `err`, `crit`, `alert` | _（无）_ |
+| `send_queue_size` | 最多缓存的日志消息数 | 整数 | `5000` |
+| `reconnect_interval_ms` | 重连尝试之间的等待时间（毫秒）。与生产者和命令配置实例不同，日志配置实例不会初始化该值，因此编译默认值为 `0`，此时重连循环会空转。必须显式配置。 | 整数 | `0`（标准配置文件使用 `1000`） |
+
+### 配置示例（随附文件精简版） {#example-configuration-trimmed-from-shipped-file}
+
+```xml
+<configuration name="amqp.conf" description="mod_amqp">
+  <producers>
+    <profile name="default">
+      <connections>
+        <connection name="primary">
+          <param name="hostname" value="localhost"/>
+          <param name="virtualhost" value="/"/>
+          <param name="username" value="guest"/>
+          <param name="password" value="guest"/>
+          <param name="port" value="5673"/>
+          <param name="heartbeat" value="0"/>
+        </connection>
+        <connection name="secondary">
+          <param name="hostname" value="localhost"/>
+          <param name="virtualhost" value="/"/>
+          <param name="username" value="guest"/>
+          <param name="password" value="guest"/>
+          <param name="port" value="5672"/>
+          <param name="heartbeat" value="0"/>
+        </connection>
+      </connections>
+      <params>
+        <param name="exchange-name" value="TAP.Events"/>
+        <param name="exchange-type" value="topic"/>
+        <param name="circuit_breaker_ms" value="10000"/>
+        <param name="reconnect_interval_ms" value="1000"/>
+        <param name="send_queue_size" value="5000"/>
+        <param name="enable_fallback_format_fields" value="1"/>
+        <param name="format_fields" value="#FreeSWITCH,FreeSWITCH-Hostname,Event-Name,Event-Subclass,Unique-ID"/>
+        <param name="event_filter" value="SWITCH_EVENT_CHANNEL_CREATE,SWITCH_EVENT_CHANNEL_DESTROY,SWITCH_EVENT_HEARTBEAT,SWITCH_EVENT_DTMF"/>
+      </params>
+    </profile>
+  </producers>
+  <commands>
+    <profile name="default">
+      <connections>
+        <connection name="primary">
+          <param name="hostname" value="localhost"/>
+          <param name="virtualhost" value="/"/>
+          <param name="username" value="guest"/>
+          <param name="password" value="guest"/>
+          <param name="port" value="5672"/>
+          <param name="heartbeat" value="0"/>
+        </connection>
+      </connections>
+      <params>
+        <param name="exchange-name" value="TAP.Commands"/>
+        <param name="binding_key" value="commandBindingKey"/>
+        <param name="reconnect_interval_ms" value="1000"/>
+        <param name="queue-passive" value="false"/>
+        <param name="queue-durable" value="false"/>
+        <param name="queue-exclusive" value="false"/>
+        <param name="queue-auto-delete" value="true"/>
+      </params>
+    </profile>
+  </commands>
+  <logging>
+    <profile name="default">
+      <connections>
+        <connection name="primary">
+          <param name="hostname" value="localhost"/>
+          <param name="virtualhost" value="/"/>
+          <param name="username" value="guest"/>
+          <param name="password" value="guest"/>
+          <param name="port" value="5672"/>
+          <param name="heartbeat" value="0"/>
+        </connection>
+      </connections>
+      <params>
+        <param name="exchange-name" value="TAP.Logging"/>
+        <param name="send_queue_size" value="5000"/>
+        <param name="reconnect_interval_ms" value="1000"/>
+        <param name="log-levels" value="debug,info,notice,warning,err,crit,alert"/>
+      </params>
+    </profile>
+  </logging>
+</configuration>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `amqp` | 不重启 FreeSWITCH，重新加载 `amqp.conf.xml` | `amqp` |
+
+`amqp` API 命令会销毁现有全部生产者、命令和日志配置实例，再根据当前配置文件重新创建它们。
+
+```
+freeswitch> amqp
+```
+
+## 命令消费者的工作方式 {#how-the-command-consumer-works}
+
+命令配置实例运行时，模块会在指定交换机上声明队列，并用 `binding_key` 完成绑定，然后从队列中消费消息。每条消息体都作为纯文本 FreeSWITCH API 命令（content-type `text/plain`），经由 `switch_console_execute` 执行。
+
+若收到的 AMQP 消息包含自定义头 `x-fs-api-resp-exchange` 和 `x-fs-api-resp-key`，模块会向指定交换机和路由键发送 JSON 响应，包含 `output`、`command`、`status` 三个字段。
+
+## 日志配置实例的工作方式 {#how-the-logging-profile-works}
+
+模块从 FreeSWITCH 日志子系统捕获日志记录，并序列化为 JSON，字段为 `file`、`function`、`line`、`level`、`timestamp`、`timestamp_epoch`、`content`。路由键格式为 `<hostname>.<userdata>.<level>.<file>`，文件名中的 `.` 会替换为 `_`。
+
+## 依赖项 {#dependencies}
+
+`mod_amqp` 的编译与运行都需要 `librabbitmq`（`rabbitmq-c` C 客户端库）。在 Debian/Ubuntu 上通常由 `librabbitmq-dev` 软件包提供。模块的头文件兼容性保护同时支持旧的 `amqp.h` 目录结构和新版 `rabbitmq-c/amqp.h` 目录结构（0.12 及之后版本）。
+
+## 另请参阅 {#see-also}
+
+- [第 25 章：事件套接字](../../integration/event-socket.mdx)
+
+**源码：** `src/mod/event_handlers/mod_amqp`、`conf/vanilla/autoload_configs/amqp.conf.xml`

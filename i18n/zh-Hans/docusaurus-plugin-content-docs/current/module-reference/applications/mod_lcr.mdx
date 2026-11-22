@@ -1,0 +1,190 @@
+---
+sidebar_position: 25
+id: mod_lcr
+slug: /module-reference/applications/mod_lcr
+title: "mod_lcr——最低成本路由"
+description: "使用 ODBC 费率数据库实施最低成本路由的模块配置与应用参考。"
+sidebar_label: "mod_lcr"
+---
+# mod_lcr——最低成本路由 {#mod_lcr-—-least-cost-routing}
+
+`mod_lcr` 是一个应用模块，通过查询 ODBC 可访问的关系型数据库中保存的费率数据，为出站呼叫选择成本最低（或按其他指标排序）的运营商。每次呼叫时，模块将被叫号码展开为多个可匹配的号码前缀，执行 SQL 查询，按费用（也可按质量或可靠性）对返回的运营商路由排序，并组合出 FreeSWITCH 可依次尝试桥接的拨号字符串。
+
+对于在 MySQL 或 PostgreSQL 中维护费率表、希望 FreeSWITCH 自动从多个上游提供商中选路的运营商或转售商，该模块很适合。模块还注册了一个自定义拨号计划解析器：将 SIP 配置实例中的上下文名称设为某个 LCR 配置实例的名称，即可将所有呼叫送入 LCR 引擎，而不必编写显式拨号计划条目。此外，模块注册了 `lcr://` 端点，可在 `bridge` 应用中直接拨打。
+
+<SignalWireCallout
+  title="无需维护费率表的路由经济性"
+  href="https://signalwire.com/docs/platform/voice/sip/bring-your-own-carrier"
+  page="mod-lcr"
+  linkText="查看如何接入自有运营商">
+
+SignalWire 按公开费率通过其运营商网络终接呼叫；接入自有运营商则可继续使用已协商的路由。无需加载或维护费率表数据库。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+在 `load` 命令和 `modules.conf.xml` 中使用的模块名称是 `mod_lcr`。标准默认配置**不会**加载它；对应条目被注释：
+
+```xml
+<!--<load module="mod_lcr"/>-->
+```
+
+如需启用，请取消 `conf/vanilla/autoload_configs/modules.conf.xml` 中对应行的注释（或将其添加至部署使用的同类配置文件）。除在 FreeSWITCH 构建时启用 ODBC 支持（`--enable-core-odbc-support`）外，无需特殊编译标志。
+
+## 配置：`lcr.conf.xml` {#configuration-lcrconfxml}
+
+配置文件位于 `conf/vanilla/autoload_configs/lcr.conf.xml`，包含两部分：全局参数 `<settings>`，以及一个或多个具名路由配置实例 `<profiles>`。
+
+### 全局设置 {#global-settings}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `odbc-dsn` | ODBC 数据源名称（DSN）、用户名和密码，以冒号分隔 | `dsn:user:pass` 字符串 | _（无，必填）_ |
+
+### 配置实例参数 {#profile-parameters}
+
+每个 `<profile>` 元素支持以下 `<param>` 子元素。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `id` | 数值型配置实例 ID，用于按 `lcr` 表中的 `lcr_profile` 列筛选记录；`0` 匹配所有行 | 整数 | `0` |
+| `order_by` | 查询结果的排序顺序；关键字 `rate`、`quality`、`reliability` 映射到数据库列；其他值会原样传入 `ORDER BY` | 由 `rate`、`quality`、`reliability` 或列名组成的逗号分隔列表 | `rate` |
+| `custom_sql` | 完全替换内置 SELECT 查询；使用 `%q` 表示展开后的号码列表，或使用通道变量语法（`${var}`）读取会话变量 | SQL 字符串 | _（内置查询）_ |
+| `reorder_by_rate` | 数据库返回结果后，在内存中再次按费率升序排列路由 | `true` / `false` | `false` |
+| `info_in_headers` | 为出站呼叫腿增加包含运营商名称和费率的 `X-LCR-INFO` SIP 头 | `true` / `false` | `false` |
+| `quote_in_list` | 在 SQL `IN()` 列表中用单引号括住每个号码前缀（PostgreSQL 文本列需要此设置） | `true` / `false` | `false` |
+| `single_bridge` | 每家运营商在路由列表中最多保留一个网关；除网关前后缀外，还按运营商名称去重 | `true` / `false` | `false` |
+| `export_fields` | 要作为出站呼叫腿通道变量导出的其他 SQL 列名 | 逗号分隔的列名 | _（无）_ |
+| `limit_type` | 根据 `lcr` 表规定的每运营商并发呼叫上限执行 `switch_limit` 时使用的后端 | `db` / `hash` | `db` |
+| `enable_sip_redir` | 不直接桥接，而是返回包含全部 LCR 路由的 SIP 302 重定向 | `true` / `false` | `false` |
+
+### 配置示例片段 {#example-excerpt}
+
+```xml
+<configuration name="lcr.conf" description="LCR Configuration">
+  <settings>
+    <param name="odbc-dsn" value="freeswitch-mysql:freeswitch:Fr33Sw1tch"/>
+  </settings>
+  <profiles>
+    <profile name="default">
+      <param name="id" value="0"/>
+      <param name="order_by" value="rate,quality,reliability"/>
+    </profile>
+    <profile name="qual_rel">
+      <param name="id" value="1"/>
+      <param name="order_by" value="quality,reliability"/>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `lcr` | 执行 LCR 查询，并将排序后的路由保存为通道变量 | `<number> [<profile>]` |
+
+### `lcr`
+
+使用指定配置实例查询 `<number>` 的可用路由；省略配置实例时使用默认实例。查询成功后，模块设置一系列带序号的通道变量以及一个组合拨号字符串。它**不会**自行桥接呼叫；拨号计划必须另外执行 `bridge`，使用 `${lcr_auto_route}` 或单独的 `lcr_route_N` 变量。
+
+```xml
+<action application="lcr" data="15555551212"/>
+<action application="bridge" data="${lcr_auto_route}"/>
+```
+
+指定配置实例时：
+
+```xml
+<action application="lcr" data="15555551212 qual_rel"/>
+<action application="bridge" data="${lcr_auto_route}"/>
+```
+
+将通道变量 `intrastate` 设为 `true` 后，查询使用 `intrastate_rate` 列而非 `rate`。若设置了 `lrn` 变量，则在号码前缀展开时还会使用对应的携号转网（LRN）号码。
+
+## 端点和自定义拨号计划 {#endpoint-and-custom-dialplan}
+
+除 `lcr` 应用外，模块还注册了 `lcr` 端点和 `lcr` 拨号计划解析器。二者都会进行 LCR 查询并直接拨打结果路由，而无需显式执行 `bridge` 操作。
+
+### `lcr://` 端点 {#lcr-endpoint}
+
+端点拨号字符串格式为 `lcr/<profile>/<destination>`：`<profile>` 是 LCR 配置实例名称，`<destination>` 为要路由的号码。任何接受拨号字符串的地方（如 `bridge` 或 `originate` API）均可使用。若只提供一个不含 `/` 的字段，该字段视为目标号码，使用默认配置实例。
+
+```xml
+<action application="bridge" data="lcr/default/15555551212"/>
+```
+
+```
+freeswitch@> originate lcr/default/15555551212 &echo
+```
+
+### `lcr` 拨号计划 {#lcr-dialplan}
+
+模块注册了名为 `lcr` 的自定义拨号计划。当 SIP 配置实例（或其他通道）配置为使用 `lcr` 拨号计划时，通道的 **context** 用作 LCR 配置实例名称，被叫号码则在该配置实例下查询。匹配到的路由将加入呼叫的 extension 并自动拨打，因此 XML 中不必定义显式 extension。
+
+例如，某个使用 `lcr` 拨号计划的 SIP 配置实例若设定 `context="default"`，则其全部呼叫都通过名为 `default` 的 LCR 配置实例路由。
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `lcr` | 查询并显示指定号码的 LCR 路由 | `lcr <digits> [<lcr profile>] [caller_id] [intrastate] [lrn <number>] [as xml]` |
+| `lcr_admin` | 显示已加载的 LCR 配置实例 | `lcr_admin show profiles` |
+
+### `lcr`
+
+查询数据库，并在 fs_cli 控制台打印匹配路由的格式化表格（或 XML）。适合交互式调试费率表。
+
+```
+freeswitch@> lcr 15555551212
+freeswitch@> lcr 15555551212 default 18005551212 intrastate
+freeswitch@> lcr 15555551212 default lrn 16175551212
+freeswitch@> lcr 15555551212 default as xml
+```
+
+配置实例之后的参数可以按任意顺序排列：
+
+- `caller_id` —— 一个纯数字参数，可覆盖主叫号码改写查询使用的主叫号码（默认 `18005551212`）。
+- `intrastate` —— 将费率列切换为 `intrastate_rate`。
+- `lrn <number>` —— 指定携号转网（LRN）号码，在展开号码前缀时与被叫号码一同使用。关键字 `lrn` 后必须另给一个独立的号码参数。
+- `as xml` —— 以 XML 格式输出路由列表，而不是默认的控制台表格。
+
+### `lcr_admin`
+
+列出全部已加载配置实例及其设置，包括是否具有州内费率（intrastate）、本地接入与传输区内费率（intralata）或 NPA-NXX 数据。
+
+```
+freeswitch@> lcr_admin show profiles
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `intrastate` | 读取 | 设为 `true` 时，查询使用 `intrastate_rate` 而非 `rate`；应用、拨号计划引擎和端点均会读取。 |
+| `intralata` | 读取 | 设为 `true` 时使用 `intralata_rate`；拨号计划引擎和端点会读取，但 `lcr` 拨号计划应用不会。 |
+| `lrn` | 读取 | 设置后提供携号转网（LRN）号码，在展开号码前缀时与被叫号码一同使用。 |
+| `max_rate` | 读取 | 每分钟费率上限；超过该费率的路由会被跳过。 |
+| `lcr_auto_route` | 设置 | 以竖线分隔的全部匹配路由拨号字符串（启用 `enable_sip_redir` 时以逗号分隔），可直接传给 `bridge`。 |
+| `lcr_route_count` | 设置 | 找到的路由总数。 |
+| `lcr_route_N` | 设置 | 第 N 条路由的拨号字符串（从 1 开始计数）。 |
+| `lcr_rate_N` | 设置 | 第 N 条路由的费率字符串。 |
+| `lcr_carrier_N` | 设置 | 第 N 条路由的运营商名称。 |
+| `lcr_codec_N` | 设置 | 第 N 条路由的编解码器字符串（数据库中未设置时为空）。 |
+| `lcr_carrier` | 设置 | 实际接通（选中）的路由对应的运营商名称，通过 `import` 导出到 B-leg。 |
+| `lcr_rate` | 设置 | 实际接通路由的费率，导出到 B-leg。 |
+| `lcr_user_rate` | 设置 | 实际接通路由面向用户的费率，导出到 B-leg。 |
+| `lcr_rate_field` | 设置 | 本次呼叫选用的 SQL 费率列名（`rate`、`intrastate_rate` 或 `intralata_rate`）。 |
+| `lcr_user_rate_field` | 设置 | 本次呼叫选用的 SQL 用户费率列名。 |
+| `lcr_query_digits` | 设置 | SQL 查询使用的纯数字被叫号码副本。 |
+| `lcr_query_profile` | 设置 | 本次查询使用的配置实例数值 ID。 |
+| `lcr_query_expanded_digits` | 设置 | 传入 SQL `IN()` 子句的逗号分隔号码前缀列表。 |
+| `lcr_query_expanded_lrn_digits` | 设置 | 传入 SQL `IN()` 子句的逗号分隔 LRN 前缀列表。 |
+| `lcr_lrn` | 设置 | 查询使用的 LRN 号码（仅在提供 LRN 时设置）。 |
+
+## 依赖项 {#dependencies}
+
+`mod_lcr` 需要通过 ODBC 连接的关系型数据库（MySQL 或 PostgreSQL）。FreeSWITCH 核心必须通过 `--enable-core-odbc-support` 构建，并安装适当的 ODBC 驱动（例如使用 `unixODBC` 配合 MySQL Connector/ODBC 或 `psqlODBC`），在 `odbc.ini` 中完成配置。模块**不会**自行创建数据库 Schema；MySQL 和 PostgreSQL 的 SQL 脚本位于 `src/mod/applications/mod_lcr/sql/`。
+
+**源码：** `src/mod/applications/mod_lcr`、`conf/vanilla/autoload_configs/lcr.conf.xml`

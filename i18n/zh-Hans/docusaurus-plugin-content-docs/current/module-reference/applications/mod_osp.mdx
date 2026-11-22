@@ -1,0 +1,161 @@
+---
+sidebar_position: 28
+id: mod_osp
+slug: /module-reference/applications/mod_osp
+title: "mod_osp——开放结算协议路由"
+description: "使用 OSP Toolkit 进行跨运营商呼叫授权、路由选择与使用量上报。"
+sidebar_label: "mod_osp"
+---
+# mod_osp——开放结算协议路由 {#mod_osp-—-open-settlement-protocol-routing}
+
+`mod_osp` 将 FreeSWITCH 与采用开放结算协议（OSP）的结算中心集成。入站呼叫到达时，`osplookup` 拨号计划应用联系已配置的 OSP 服务器，获取一个或多个授权目标，然后填充拨号计划用于桥接呼叫的通道变量。某条路由失败时，`ospnext` 可以从之前的授权响应中取得下一个目标，无需再次往返请求服务器。呼叫结束后，模块的报告状态处理器自动向 OSP 服务器发送使用量通知。
+
+当互联合作伙伴或批发运营商要求使用 OSP 进行授权和 CDR 上报时，该模块很合适。它支持 SIP、H.323、IAX 和 Skype 信令协议，并可以工作在直接模式（FreeSWITCH 是发起设备）或间接模式（FreeSWITCH 位于接入代理之后）。
+
+## 加载模块 {#loading-the-module}
+
+默认的 `modules.conf.xml` **不包含**此模块，因此不会自动加载。请在 `autoload_configs/modules.conf.xml` 中添加以下行以在启动时启用，或者通过 `fs_cli` 在运行时加载：
+
+```
+load mod_osp
+```
+
+编译之前需要在系统上安装 **OSP Toolkit**（`libosp`）。详见下文依赖项。
+
+## 配置：`osp.conf.xml` {#configuration-ospconfxml}
+
+`mod_osp` 读取 `autoload_configs/osp.conf.xml`。文件包含全局选项的 `<settings>` 块，以及用于描述 OSP 提供商连接的 `<profiles>` 块。每个配置实例最多可以列出八个 `service-point-url` 条目。
+
+### 全局设置参数 {#global-settings-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `debug-info` | 启用详细调试日志 | `enabled`、`disabled` | `disabled` |
+| `log-level` | 调试消息使用的日志级别 | `console`、`alert`、`crit`、`error`、`warning`、`notice`、`info`、`debug` | `debug` |
+| `crypto-hardware` | 通过 OSP Toolkit 使用硬件加密加速 | `enabled`、`disabled` | `disabled` |
+| `default-protocol` | 无法识别出站模块时使用的信令协议 | `sip`、`h323`、`iax`、`skype` | `sip` |
+| `sip` | SIP 端点：SIP 呼叫腿使用的 FreeSWITCH 模块和配置实例 | `module="<name>" profile="<name>"` | `module="sofia" profile="external"` |
+| `h323` | H.323 端点模块和配置实例 | `module="<name>" profile="<name>"` | 未设置 |
+| `iax` | IAX 端点模块和配置实例 | `module="<name>" profile="<name>"` | 未设置 |
+| `skype` | Skype 端点模块和配置实例 | `module="<name>" profile="<name>"` | 未设置 |
+
+### 配置实例参数 {#profile-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `service-point-url` | OSP 服务点 URL（可重复配置，最多 8 个） | HTTP 或 HTTPS URL | 必需 |
+| `device-ip` | FreeSWITCH 向 OSP 服务器报告的自身地址（IP:port） | `address:port` | 无 |
+| `ssl-lifetime` | SSL 会话生存期（秒） | 整数 | `300` |
+| `http-max-connections` | 到 OSP 服务器的最大并发 HTTP 连接数 | `1`～`1000` | `20` |
+| `http-persistence` | HTTP keep-alive 持续时间（秒） | 整数 | `60` |
+| `http-retry-delay` | HTTP 重试之间等待的秒数 | `0`～`10` | `0` |
+| `http-retry-limit` | HTTP 最大重试次数 | `0`～`100` | `2` |
+| `http-timeout` | HTTP 请求超时时间（毫秒） | `200`～`60000` | `10000` |
+| `work-mode` | FreeSWITCH 是边缘设备（`direct`）还是位于代理之后（`indirect`） | `direct`、`indirect` | `direct` |
+| `service-type` | 请求的 OSP 服务类型 | `voice`、`npquery` | `voice` |
+| `max-destinations` | 每次授权请求的最大目标数 | `1`～`12` | `12` |
+
+### `osp.conf.xml` 示例片段 {#example-excerpt-from-ospconfxml}
+
+```xml
+<configuration name="osp.conf" description="OSP Module Configuration">
+  <settings>
+    <param name="debug-info" value="disabled"/>
+    <param name="log-level" value="info"/>
+    <param name="crypto-hardware" value="disabled"/>
+    <param name="sip" module="sofia" profile="external"/>
+    <param name="default-protocol" value="sip"/>
+  </settings>
+
+  <profiles>
+    <profile name="default">
+      <param name="service-point-url" value="http://127.0.0.1:5045/osp"/>
+      <param name="device-ip" value="127.0.0.1:5080"/>
+      <param name="ssl-lifetime" value="300"/>
+      <param name="http-max-connections" value="20"/>
+      <param name="http-persistence" value="60"/>
+      <param name="http-retry-delay" value="0"/>
+      <param name="http-retry-limit" value="2"/>
+      <param name="http-timeout" value="10000"/>
+      <param name="work-mode" value="direct"/>
+      <param name="service-type" value="voice"/>
+      <param name="max-destinations" value="12"/>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `osplookup` | 向 OSP 服务器查询已授权路由，并填充路由通道变量 | `[profile-name]` |
+| `ospnext` | 切换到此前 `osplookup` 返回的下一个目标 | *（无）* |
+
+### `osplookup`
+
+向具名配置实例的服务点发送 OSP 授权请求（AuthReq）。成功时，它将第一条目标的桥接字符串设置为 `osp_auto_route`，并在通道变量中保存事务句柄和路由元数据。省略可选 `profile-name` 参数时使用名为 `default` 的配置实例。
+
+```xml
+<action application="osplookup" data="default"/>
+<action application="bridge" data="${osp_auto_route}"/>
+```
+
+### `ospnext`
+
+读取 `osplookup` 保存的事务句柄，从之前的 OSP 服务器响应中获取下一个目标。将 `osp_auto_route` 更新为新的桥接字符串，并递增 `osp_route_count`。当桥接失败且希望尝试下一条已授权路由时可调用。
+
+```xml
+<action application="ospnext"/>
+<action application="bridge" data="${osp_auto_route}"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `osp` | 显示当前模块设置和配置实例状态 | `osp status` |
+
+### `fs_cli` 示例 {#fs_cli-example}
+
+```
+freeswitch@> osp status
+```
+
+输出先列出全局标志（`debug-info`、`log-level`、`crypto-hardware`、已配置的端点、`default-protocol`），然后列出各配置实例的参数以及 OSP 提供商句柄是否活动。
+
+## 通道变量 {#channel-variables}
+
+### 模块读取的变量（输入） {#variables-the-module-reads-input}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `osp_source_device` | 读取 | 间接模式下的实际源设备 IP（覆盖主叫网络地址） |
+| `osp_source_nid` | 读取 | 传给 OSP 服务器的源网络 ID |
+| `osp_custom_info_1` … `osp_custom_info_8` | 读取 | 最多八个随 AuthReq 提交的自定义信息字符串 |
+| `osp_networkid_userparam` | 读取 | 构造出站 URI 时使用的目标网络 ID 用户参数名称 |
+| `osp_networkid_uriparam` | 读取 | 构造出站 URI 时使用的目标网络 ID URI 参数名称 |
+| `osp_outstring_userparam` | 读取 | 固定的出站用户参数字符串 |
+| `osp_outstring_uriparam` | 读取 | 固定的出站 URI 参数字符串 |
+| `osp_user_phone` | 读取 | 为真时在出站 Request-URI 中追加 `user=phone` |
+| `osp_outbound_proxy` | 读取 | 出站 SIP 代理 IP 地址 |
+
+### 模块设置的变量（输出） {#variables-the-module-sets-output}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `osp_profile_name` | 读写 | 本次呼叫使用的 OSP 配置实例名称，由 `ospnext` 和报告处理器再次读取 |
+| `osp_transaction_handle` | 读写 | OSP Toolkit 事务句柄（整数），由 `ospnext` 和报告处理器再次读取 |
+| `osp_transaction_id` | 读写 | OSP 事务 ID（uint64），由 `ospnext` 和报告处理器再次读取 |
+| `osp_lookup_status` | 写入 | `osplookup` 应用的返回状态 |
+| `osp_next_status` | 写入 | `ospnext` 应用的返回状态 |
+| `osp_route_total` | 读写 | OSP 服务器返回的目标总数，由 `ospnext` 和报告处理器再次读取 |
+| `osp_route_count` | 读写 | 当前目标索引（从 1 开始，调用 `ospnext` 后递增），由 `ospnext` 和报告处理器再次读取 |
+| `osp_auto_route` | 写入 | 当前目标的桥接字符串；没有更多路由时取消设置 |
+| `osp_termination_cause` | 读写 | 尝试目标时的终止原因码；路由成功后清除，供 `ospnext` 和报告处理器读取 |
+
+## 依赖项 {#dependencies}
+
+`mod_osp` 依赖 TransNexus 的 **OSP Toolkit** 库（`libosp`），它不包含在 FreeSWITCH 源码树中，也不会默认构建。编译本模块之前，必须在 `osp/` 目录下安装 toolkit 头文件（例如 `/usr/include/osp/osp.h`）。
+
+**源码：** `src/mod/applications/mod_osp`、`conf/vanilla/autoload_configs/osp.conf.xml`

@@ -1,0 +1,778 @@
+---
+sidebar_position: 1
+id: xml-dialplan
+slug: /dialplan/xml
+title: "第 12 章：XML 拨号计划"
+description: "FreeSWITCH 的主要呼叫路由引擎：mod_dialplan_xml 如何针对每通入站呼叫评估分机规则、条件和操作。"
+sidebar_label: "12. XML 拨号计划"
+---
+
+# 第 12 章：XML 拨号计划 {#chapter-12-the-xml-dialplan}
+
+XML 拨号计划是 FreeSWITCH 的主要呼叫路由引擎，由 `mod_dialplan_xml` 提供。该模块针对每通入站呼叫，按顺序评估分机规则（extension）和条件（condition），决定需要执行哪些应用（application）。路由逻辑保存在普通 XML 文件中，启动时加载到 FreeSWITCH XML 注册表，也可以通过 `reloadxml` 按需重新加载。
+
+<SignalWireCallout
+  title="为每通呼叫提供独立的拨号计划文档"
+  href="https://signalwire.com/docs/swml"
+  page="xml-dialplan"
+  linkText="查看托管拨号计划 SWML">
+
+由 FreeSWITCH 团队创立的 SignalWire 使用 SWML 表达路由逻辑：这是一种由你的服务器返回或存储在平台上的 JSON/YAML 呼叫控制文档。分机、条件和操作可映射为 [`execute`](https://signalwire.com/docs/swml/reference/calling/execute?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=xml-dialplan)、[`connect`](https://signalwire.com/docs/swml/reference/calling/connect?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=xml-dialplan) 和 [`transfer`](https://signalwire.com/docs/swml/reference/calling/transfer?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=xml-dialplan) 等方法，针对每通呼叫动态评估，而不需要重新加载 XML。
+
+</SignalWireCallout>
+
+## 拨号计划模型 {#the-dialplan-model}
+
+`mod_dialplan_xml` 实现 `XML` 拨号计划接口。呼叫到达时，FreeSWITCH 调用 `XML` 拨号计划处理器，依次执行：
+
+1. 确定呼叫所属的上下文（context）。
+2. 按文档顺序遍历该上下文中的所有 `extension` 元素。
+3. 对每个分机规则，按顺序评估全部 `condition` 元素。
+4. 条件匹配时，将 `action` 应用加入执行队列；不匹配时，将对应的 `anti-action` 应用加入队列。
+5. 默认在找到第一个匹配的分机规则后停止搜索，除非该规则设置了 `continue="true"`。
+
+拨号计划 XML 位于 `conf/dialplan/`。每个文件包含以 `<include>` 元素包裹的 `<context>` 元素。多个文件可以通过 `X-PRE-PROCESS` 包含指令共同向同一个上下文添加规则。
+
+---
+
+## 上下文（Context） {#contexts}
+
+上下文是有名称、彼此隔离的路由表。除非显式将呼叫在上下文之间转接，否则一个上下文中的分机规则不会影响另一个上下文中的呼叫。
+
+```xml
+<include>
+  <context name="default">
+    <!-- extensions go here -->
+  </context>
+</include>
+```
+
+`name` 属性可以自行命名。默认配置提供三个上下文：`default`、`public` 和 `features`。
+
+### 呼叫如何进入上下文 {#how-a-call-enters-a-context}
+
+每通呼叫的主叫配置资料（caller profile）都带有一个上下文字符串。`mod_dialplan_xml` 用该字符串匹配 `context` 元素的 `name` 属性。若找不到匹配项，FreeSWITCH 会尝试回退到 `global` 上下文（如果存在）；否则路由失败。
+
+上下文由以下两种方式之一设置：
+
+- **SIP Profile 上下文。** 每个 SIP Profile 都有 `context` 参数（通常位于 `conf/sip_profiles/`）。到达该 Profile 的未经认证呼叫会直接进入所指定的上下文。
+- **用户目录上下文。** 已认证的 SIP 注册用户使用其目录条目中的 `user_context` 变量（见下文 `user_context` 章节）。
+
+### default 上下文 {#the-default-context}
+
+`default` 上下文（`conf/vanilla/dialplan/default.xml`）负责处理已经认证的内部呼叫方，包含本地分机（1000～1019）、语音信箱、会议、呼叫驻留、内部对讲、群组呼叫及功能码等规则。`public` 上下文中的呼叫通过验证后，会转到这里。
+
+### public 上下文 {#the-public-context}
+
+`public` 上下文（`conf/vanilla/dialplan/public.xml`）负责处理来自 external SIP Profile（通常为端口 5080）的未经认证入站呼叫。它相当于安全边界：只接受特定目的号码，并将其转入 `default` 上下文，避免允许任意路由而遭到盗打话费攻击。
+
+```xml
+<extension name="public_extensions">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="transfer" data="$1 XML default"/>
+  </condition>
+</extension>
+```
+
+未匹配任何分机规则而运行到 `public` 末尾的呼叫会被丢弃。
+
+### 通过用户目录关联：user_context {#linking-from-the-directory-user_context}
+
+在用户目录（通常是 `conf/directory/`）中，每个用户元素都可以包含 `user_context` 变量：
+
+```xml
+<variable name="user_context" value="default"/>
+```
+
+注册的 SIP 端点认证并发起呼叫时，FreeSWITCH 会将 `user_context` 指定的上下文写入该呼叫方的 caller profile。这样可以在不修改 SIP Profile 的情况下，让不同用户群进入不同的路由上下文。
+
+---
+
+## 分机规则（Extension） {#extensions}
+
+`extension` 元素是一组有序条件，是拨号计划路由逻辑的基本单元。它支持以下属性：
+
+| 属性 | 用途 | 默认值 |
+|-----------|---------|---------|
+| `name` | 描述性标签，出现在日志中，也用于下文所述的 `auto_hunt` 查找。必填。 | 必填 |
+| `continue` | 为 `"true"` 时，即使本规则已匹配，仍继续评估下一条分机规则。 | `"false"` |
+
+**`auto_hunt`：** 通道变量 `auto_hunt` 为 `true` 时，`mod_dialplan_xml` 会先在当前上下文中寻找 `name` 属性与 `destination_number` 完全相同的分机规则，再回退到顺序评估。这可以按名称直接定位某条规则，而不完全依赖正则表达式匹配。
+
+```xml
+<extension name="echo-test">
+  <condition field="destination_number" expression="^9196$">
+    <action application="answer"/>
+    <action application="echo"/>
+  </condition>
+</extension>
+```
+
+### continue 属性 {#the-continue-attribute}
+
+默认情况下，搜索会在第一个所有条件都匹配的分机规则处停止。若设置 `continue="true"`，无论该分机规则是否匹配，都会继续评估下一条规则。常用于将设置变量、记录日志等具有附带效果的规则，串联在最终执行路由的规则之前。
+
+```xml
+<extension name="global" continue="true">
+  <condition field="${call_debug}" expression="^true$" break="never">
+    <action application="info"/>
+  </condition>
+  <!-- additional conditions ... -->
+</extension>
+```
+
+---
+
+## 条件（Condition） {#conditions}
+
+`condition` 元素用于对字段值进行正则表达式匹配。一个分机规则可以包含多个条件，所有条件都按照文档顺序评估，并受到 `break` 属性的约束。
+
+```xml
+<condition field="destination_number" expression="^(10[01][0-9])$">
+  <action application="bridge" data="user/$1@${domain_name}"/>
+</condition>
+```
+
+### 字段来源 {#field-sources}
+
+`field` 属性指定待检查的值，支持两种形式：
+
+- **主叫配置资料字段名**（不带特殊语法的标识符）：从 caller profile 结构中解析。
+- **通道变量表达式**（包含 `$`）：先从通道变量表展开，再进行匹配。
+
+常见字段来源：
+
+| 字段 | 含义 |
+|-------|---------|
+| `destination_number` | 拨打的号码（SIP 中为 Request-URI 的用户部分） |
+| `caller_id_number` | 主叫号码 |
+| `caller_id_name` | 主叫名称 |
+| `source` | 创建通道的模块，例如 `mod_sofia` |
+| `network_addr` | 呼叫来源 IP 地址 |
+| `rdnis` | 重定向 DNIS（如存在） |
+| `${channel_variable}` | 任意通道变量，在匹配时展开 |
+
+如果 `field` 包含 `$`，引擎首先调用 `switch_channel_expand_variables()`。如果只是字段名，则调用 `switch_caller_get_field_by_name()` 从 caller profile 取值。默认拨号计划中的示例：
+
+```xml
+<!-- bare caller profile field -->
+<condition field="destination_number" expression="^9196$"/>
+
+<!-- channel variable as field -->
+<condition field="${rtp_has_crypto}" expression="^(AES_CM_128_HMAC_SHA1_32|AES_CM_128_HMAC_SHA1_80)$"/>
+<condition field="${call_debug}" expression="^true$"/>
+```
+
+### expression 属性与正则表达式匹配 {#the-expression-attribute-and-regex-matching}
+
+`expression` 是针对已解析 `field` 值测试的 POSIX 扩展正则表达式，由 `switch_regex_perform()` 执行匹配。也可以将表达式写成子 `<expression>` 元素（适合包含不便写入 XML 属性的字符时，例如 CDATA 包裹的内容）。
+
+```xml
+<!-- attribute form -->
+<condition field="destination_number" expression="^(30\d{2})$"/>
+
+<!-- child element form, used when the expression contains XML-special characters -->
+<condition field="${sip_refer_to}">
+  <expression><![CDATA[<sip:callpark@${domain_name};orbit=(\d+)>]]></expression>
+</condition>
+```
+
+当正则表达式包含 `^` 与 `$` 锚点时，匹配会限定在整个字段值的起止位置；不写锚点则可以在字段值的任意位置匹配。
+
+### 捕获组引用 {#capture-references}
+
+`expression` 中使用 `(`、`)` 定义捕获组后，引擎会生成 `$1` 至 `$N` 反向引用，供同一条件下后续 `action` 和 `anti-action` 的 `data` 属性使用。变量 `${DP_MATCH}` 也会被设置为正则表达式匹配到的完整字符串（通过 `switch_capture_regex`）。
+
+```xml
+<extension name="Local_Extension">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="export" data="dialed_extension=$1"/>
+    <action application="bridge" data="user/$1@${domain_name}"/>
+  </condition>
+</extension>
+```
+
+这里 `$1` 会解析为 `(10[01][0-9])` 捕获的四位号码。
+
+### break 属性 {#the-break-attribute}
+
+`break` 属性决定每个条件完成评估（无论匹配与否）后的处理方式，作用域为当前条件。
+
+| 取值 | 效果 |
+|-------|--------|
+| `on-true` | 当前条件匹配（为真）时，不再评估本分机规则中的后续条件。 |
+| `on-false` | 当前条件不匹配（为假）时，不再评估本分机规则中的后续条件。这是默认值。 |
+| `always` | 无条件停止评估后续条件。 |
+| `never` | 无论匹配结果如何，始终继续评估下一条件。 |
+
+省略 `break` 时默认使用 `on-false`：一个条件匹配失败后，本分机规则内的后续条件都不会评估，该规则也不会匹配。
+
+```xml
+<!-- Run info app regardless, then continue to the next condition -->
+<condition field="${call_debug}" expression="^true$" break="never">
+  <action application="info"/>
+</condition>
+```
+
+### regex 属性（多正则模式） {#the-regex-attribute-multi-regex-mode}
+
+`condition` 元素可以使用 `regex` 属性，代替（或同时使用）单个 `field`/`expression` 对。存在 `regex` 时，会切换到多正则模式：统一评估其子级 `<regex>` 元素，并根据汇总结果决定父条件是否通过。
+
+每个子 `<regex>` 采用与普通条件相同的 `field` 和 `expression` 属性，也可携带时间属性。没有 `field` 和时间属性的 `<regex>` 被视为始终匹配的无条件规则。
+
+| `regex` 取值 | 通过规则 |
+|---------------|-----------|
+| `any` | 至少一个子 `<regex>` 通过；在第一个通过处停止。 |
+| `all` | 所有子 `<regex>` 都必须通过；在第一个失败处停止。 |
+| `xor` | 恰好一个子 `<regex>` 通过；会评估全部子项。 |
+
+当 `regex="any"` 或 `regex="all"` 时，引擎会短路求值：`any` 在首次成功时停止，`all` 在首次失败时停止；`xor` 总是评估所有子项。
+
+每个子 `<regex>` 的捕获变量分别存入 `${DP_REGEX_MATCH_N}`（`N` 从 1 开始，对应子项序号）。另外，`${DP_MATCH}` 保存最后一个成功匹配且带捕获组的子项的结果。每次开始多正则评估时，都会清除以 `DP_REGEX_MATCH` 为前缀的通道变量。
+
+```xml
+<!-- Pass if destination matches 1000-1019 OR caller is from 192.168.1.x -->
+<condition regex="any">
+  <regex field="destination_number" expression="^(10[01][0-9])$"/>
+  <regex field="network_addr" expression="^192\.168\.1\.\d+$"/>
+  <action application="bridge" data="user/${DP_REGEX_MATCH_1}@${domain_name}"/>
+</condition>
+```
+
+```xml
+<!-- Pass only if BOTH source is mod_sofia AND destination matches -->
+<condition regex="all">
+  <regex field="source" expression="^mod_sofia$"/>
+  <regex field="destination_number" expression="^(10[01][0-9])$"/>
+  <action application="bridge" data="user/$1@${domain_name}"/>
+</condition>
+```
+
+### 无条件匹配 {#absolute-conditions}
+
+没有 `field` 属性（也没有时间属性）的 `condition` 是始终成功的无条件匹配，其中的 `action` 一定会执行。
+
+```xml
+<condition>
+  <action application="set" data="outside_call=true"/>
+</condition>
+```
+
+### 基于时间的条件 {#time-based-conditions}
+
+`condition` 除了使用 `field`/`expression` 对，也可以使用日期和时间属性（或两者同时使用）。支持的属性包括 `year`、`yday`、`mon`、`mday`、`week`、`mweek`、`wday`、`hour`、`minute` 和 `minute-of-day`。同一条件中的多个时间属性采用逻辑与关系。
+
+```xml
+<!-- Matches Monday through Friday, 9:00 to 18:59 -->
+<condition wday="2-6" hour="9-18">
+  <action application="set" data="open=true"/>
+</condition>
+```
+
+范围使用 `low-high` 格式。`wday` 取值 1（星期日）至 7（星期六），`hour` 取值 0～23。可以通过通道变量 `tod_tz_offset`（整数小时偏移量）或 `timezone`（IANA 时区名称）指定时区。
+
+### 嵌套条件与 require-nested {#nested-conditions-and-require-nested}
+
+当某个 `condition` 包含子级 `condition` 元素时，即构成嵌套条件。只有外层条件匹配时才会评估内层条件。这不同于顺序排列的同级条件——后者都是 `extension` 的直接子元素。
+
+外层条件通过时，`mod_dialplan_xml` 将外层 `<condition>` 作为新的根元素，递归调用 `parse_exten`，按顺序评估其全部子 `<condition>`。
+
+**`require-nested`** 是**外层 `<condition>` 元素**的属性（而非 `<extension>` 的属性）。它控制嵌套子条件失败时，是否导致外层条件也失败。默认 `true`，子条件失败会向上传播；设置为 `false` 时，无论嵌套条件返回什么结果，都认为外层条件通过。
+
+```xml
+<!-- Sequential (peer) conditions: all three must pass -->
+<extension name="unpark">
+  <condition field="source" expression="mod_sofia"/>
+  <condition field="destination_number" expression="^parking$"/>
+  <condition field="${sip_to_params}" expression="fifo\=(\d+)">
+    <action application="answer"/>
+    <action application="fifo" data="$1@${domain_name} out nowait"/>
+  </condition>
+</extension>
+```
+
+```xml
+<!-- Truly nested: inner condition evaluated only if outer matches -->
+<condition field="destination_number" expression="^(10[01][0-9])$" require-nested="false">
+  <condition field="${user_exists}" expression="^true$">
+    <action application="bridge" data="user/$1@${domain_name}"/>
+  </condition>
+  <!-- require-nested="false" means extension still matches even if inner fails -->
+</condition>
+```
+
+在顺序条件示例中，三个条件处于同级：它们都是 `extension` 的直接子元素，必须全部通过。只有当一个 `condition` 是另一个 `condition` 的直接 XML 子元素时，才是真正的嵌套条件。
+
+---
+
+## 操作与反向操作 {#actions-and-anti-actions}
+
+### action
+
+`action` 元素指定包围它的条件匹配时需要执行的拨号计划应用。属性如下：
+
+| 属性 | 用途 |
+|-----------|---------|
+| `application` | 要调用的 FreeSWITCH 应用名称。必填。 |
+| `data` | 传给应用的参数字符串。可选，默认为空；如果元素具有非空文本内容，则使用文本内容替代该属性作为 `data`。 |
+| `inline` | 为 `"true"` 时，在拨号计划评估过程中立即执行应用，而不是加入队列。默认 `"false"`。只有模块定义中标记 `SAF_ROUTING_EXEC` 的应用支持 inline 执行；其他应用会失败并导致挂机。 |
+| `loop` | 整数；重复执行应用的次数。默认 `1`。 |
+
+`action` 按文档顺序加入队列，并在拨号计划评估结束后执行（除非设置了 `inline="true"`）。
+
+**内联操作（Inline action）**适合需要在拨号计划评估过程中、执行应用队列之前设置通道变量（`set`、`export`、`unset`）或执行查询的应用。并不是所有应用都支持 inline 执行。
+
+```xml
+<action application="set" data="ringback=${us-ring}"/>
+<action application="set" data="call_timeout=30"/>
+<action application="bridge" data="user/${dialed_extension}@${domain_name}"/>
+```
+
+### anti-action
+
+`anti-action` 元素指定包围它的条件**不匹配**时要执行的应用。它支持与 `action` 相同的 `application`、`data`、`inline`、`loop` 属性，包括使用元素文本内容作为 `data`。反向操作适合在同一条件块中提供替代行为。
+
+```xml
+<condition field="${rtp_has_crypto}" expression="^(AES_CM_128_HMAC_SHA1_32|AES_CM_128_HMAC_SHA1_80)$">
+  <action application="answer"/>
+  <action application="playback" data="misc/call_secured.wav"/>
+  <anti-action application="answer"/>
+  <anti-action application="playback" data="${hold_music}"/>
+</condition>
+```
+
+---
+
+## 通过 transfer 递归和重新进入拨号计划 {#recursion-and-re-entry-via-transfer}
+
+`transfer` 应用可使用新的目的号码、上下文以及可选的拨号计划类型重新进入拨号计划。它不会创建一通新呼叫，而是让当前通道重新执行拨号计划评估。
+
+语法：`transfer <destination_number> [<dialplan_type> [<context>]]`
+
+```xml
+<!-- Transfer to extension 1000 in the default context using the XML dialplan -->
+<action application="transfer" data="1000 XML default"/>
+
+<!-- Transfer to whatever was captured in $1, within the current XML default context -->
+<action application="transfer" data="$1 XML default"/>
+
+<!-- Transfer to a different dialplan type -->
+<action application="transfer" data="$1 enum"/>
+```
+
+省略 `dialplan_type` 时默认使用 `XML`。省略 `context` 时，呼叫保留在当前上下文。`public` 上下文专门通过 `transfer` 将呼叫移交给 `default`：
+
+```xml
+<extension name="public_extensions">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="transfer" data="$1 XML default"/>
+  </condition>
+</extension>
+```
+
+`transfer` 上的 `-bleg` 和 `-both` 标志分别用于将转接应用于已桥接呼叫的 B-leg 或两条呼叫腿，示例见 `features` 上下文：
+
+```xml
+<action application="transfer" data="-bleg ${digits} XML default"/>
+<action application="transfer" data="-both 30${dialed_extension:2} XML default"/>
+```
+
+---
+
+## 快速入门：最小可用拨号计划 {#getting-started-a-minimal-working-dialplan}
+
+下面给出一个自包含上下文示例，用于路由四位本地分机，匹配失败则回退至语音信箱。
+
+**步骤 1：** 确认已加载 `mod_dialplan_xml`。检查 `conf/autoload_configs/modules.conf.xml`：
+
+```xml
+<load module="mod_dialplan_xml"/>
+```
+
+**步骤 2：** 设置 SIP Profile 的上下文。在 `conf/sip_profiles/internal.xml`（或对应文件）中设置：
+
+```xml
+<param name="context" value="default"/>
+```
+
+已经认证的注册用户会用目录变量 `user_context` 覆盖此设置。
+
+**步骤 3：** 编写最小上下文。将以下内容放入 `conf/dialplan/default.xml`：
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<include>
+  <context name="default">
+
+    <!-- Route calls to local extensions 1000-1099 -->
+    <extension name="local_extensions">
+      <condition field="destination_number" expression="^(10[0-9]{2})$">
+        <action application="set" data="call_timeout=30"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="bridge" data="user/$1@${domain_name}"/>
+        <action application="answer"/>
+        <action application="sleep" data="1000"/>
+        <action application="bridge" data="loopback/app=voicemail:default ${domain_name} $1"/>
+      </condition>
+    </extension>
+
+    <!-- Voicemail access -->
+    <extension name="voicemail_access">
+      <condition field="destination_number" expression="^\*98$">
+        <action application="answer"/>
+        <action application="voicemail" data="check default ${domain_name}"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>
+```
+
+**步骤 4：** 应用配置。在 FreeSWITCH 控制台中运行：
+
+```
+reloadxml
+```
+
+**步骤 5：** 验证路由。将 SIP 设备注册为分机 1001，并呼叫分机 1000。如果 1000 已注册，将振铃 30 秒；无人接听则转至语音信箱。
+
+**上述示例使用的关键参数：**
+
+| 变量 | 用途 |
+|----------|---------|
+| `call_timeout` | 桥接尝试结束之前允许振铃的最大秒数。 |
+| `hangup_after_bridge` | 为 `true` 时，在 B-leg 断开后挂断 A-leg。 |
+| `continue_on_fail` | 为 `true` 时，即使 `bridge` 应用失败也继续执行后续操作。 |
+| `domain_name` | SIP 域名，由 Profile 自动设置。 |
+
+---
+
+## 变量展开与内联函数 {#variable-expansion-and-inline-functions}
+
+FreeSWITCH 会在 `action` 和 `anti-action` 的 `data` 字符串、包含 `$` 的 `condition` 的 `field` 值，以及 `condition` 的 `expression` 值中展开变量引用和内联 API 调用。展开由 `src/switch_event.c` 中的 `switch_event_expand_headers_check` 完成。停止之前，最多支持 100 层递归展开。
+
+### 通道变量展开 {#channel-variable-expansion}
+
+`${variable_name}` 会被替换为同名通道变量的值。变量未设置时，引用展开为空字符串。
+
+```xml
+<action application="bridge" data="user/${dialed_extension}@${domain_name}"/>
+```
+
+支持以下两种修饰符：
+
+- `${variable_name:N}` —— 从开头（正数）或末尾（负数）偏移 `N` 个字符。
+- `${variable_name:N:M}` —— 从偏移量 `N` 起取 `M` 个字符。
+
+```xml
+<!-- Remove the first character of caller_id_number -->
+<action application="set" data="stripped=${caller_id_number:1}"/>
+
+<!-- Take 3 characters starting at position 1 -->
+<action application="set" data="area_code=${caller_id_number:1:3}"/>
+```
+
+### 预处理变量 {#preprocessor-variables}
+
+`$${variable_name}` 是预处理替换，而不是运行时展开。加载或重新加载 XML 配置文件时，会使用由 `X-PRE-PROCESS` 指令设置的全局变量值进行一次替换。它不能引用通道状态，也不会随每通呼叫变化。
+
+### 内联 API 展开 {#inline-api-expansion}
+
+`${api_name(args)}` 会在呼叫时调用 FreeSWITCH API 命令，并将其输出替换进表达式。API 名称与参数字符串通过第一个空格或左括号分隔；调用 API 之前，参数字符串本身也会展开变量。使用 API 展开要求设置核心标志 `SCF_API_EXPANSION`（默认已设置）。
+
+拨号计划中常用的内联 API 调用：
+
+| 表达式 | 返回内容 |
+|-----------|-----------------|
+| `${sofia_contact(internal/1001@example.com)}` | 用户 1001 的已注册 SIP Contact URI |
+| `${create_uuid()}` | 新生成的 UUID 字符串 |
+| `${cond(${call_timeout} > 0 ? ${call_timeout} : 30)}` | 条件选择值（见下文） |
+| `${expr(1 + 1)}` | 通过 mod_expr 计算的算术结果（见下文） |
+| `${enum_auto(+12125551212)}` | 指定号码的 ENUM 查询结果 |
+
+```xml
+<!-- Bridge directly to a registered contact URI -->
+<action application="bridge" data="${sofia_contact(internal/${dialed_extension}@${domain_name})}"/>
+
+<!-- Generate a unique identifier for this call leg -->
+<action application="set" data="my_ref=${create_uuid()}"/>
+```
+
+### cond 内联函数 {#the-cond-inline-function}
+
+`${cond(A OP B ? TRUE_VALUE : FALSE_VALUE)}` 计算比较表达式并返回两个候选值之一。它由 `mod_commands` 中的 `cond` API 实现。`cond_function` 解析的语法如下：
+
+```
+A OP B ? TRUE_VALUE : FALSE_VALUE
+```
+
+其中 `A` 和 `B` 是操作数，`OP` 可为 `==`、`!=`、`>`、`>=`、`<`、`<=`。操作数可以使用单引号包裹以强制字符串比较；未加引号的数字操作数按浮点数比较。如果两个操作数都是非数字字符串，`==` 和 `!=` 执行字符串比较，大小关系运算符则比较字符串长度。`TRUE_VALUE` 或 `FALSE_VALUE` 内也可以包含变量引用（会在调用 `cond` 之前展开）。
+
+```xml
+<!-- Use a variable timeout if set, otherwise default to 30 -->
+<action application="set" data="effective_timeout=${cond(${call_timeout} != 0 ? ${call_timeout} : 30)}"/>
+
+<!-- Route to voicemail if the user does not exist -->
+<action application="transfer" data="${cond(${user_exists} == true ? ${dialed_extension} : 9999)} XML default"/>
+```
+
+### 使用 expr 进行算术运算 {#arithmetic-with-expr}
+
+`${expr(EXPRESSION)}` 使用 `mod_expr` 提供的 `expr` API 计算数字表达式。表达式支持标准算术运算符（`+`、`-`、`*`、`/`）以及一组内置函数。结果以数字字符串返回，并移除末尾多余的零。
+
+`expr` 支持以下内置函数：
+
+| 函数 | 说明 |
+|---------|------------|
+| `abs(x)` | 绝对值 |
+| `mod(x, y)` | 取模 |
+| `pow(x, y)` | x 的 y 次幂 |
+| `sqrt(x)` | 平方根 |
+| `floor(x)` | 向下取整 |
+| `ceil(x)` | 向上取整 |
+| `min(x, ...)` | 一个或多个值中的最小值 |
+| `max(x, ...)` | 一个或多个值中的最大值 |
+| `log(x)` | 以 10 为底的对数 |
+| `ln(x)` | 自然对数 |
+| `exp(x)` | e 的 x 次幂 |
+| `ipart(x)` | 整数部分 |
+| `fpart(x)` | 小数部分 |
+| `if(cond, a, b)` | `cond` 非零时返回 `a`，否则返回 `b` |
+| `and(a, b)`、`or(a, b)`、`not(a)` | 按位运算 |
+
+还支持常量 `M_PI`、`M_E` 及其他相关数学常量。
+
+```xml
+<!-- Multiply the call duration variable by 0.0167 to convert seconds to minutes -->
+<action application="set" data="duration_min=${expr(${billsec} * 0.0167)}"/>
+```
+
+注意：`conf/vanilla/autoload_configs/modules.conf.xml` 默认会加载 `mod_expr`。`expr` 函数只处理数值，不支持字符串操作。
+
+### 子字符串偏移量 {#substring-offsets}
+
+`:offset` 和 `:offset:length` 修饰符可以直接用于通道变量名，无需额外调用 API：
+
+```xml
+<!-- ${number:1} strips the leading + from +12125551212 -->
+<action application="set" data="e164_local=${caller_id_number:1}"/>
+
+<!-- ${number:1:10} takes 10 digits starting at position 1 -->
+<action application="set" data="ten_digit=${destination_number:1:10}"/>
+```
+
+### 速查表 {#quick-reference}
+
+| 表达式 | 结果 |
+|-----------|--------|
+| `${domain_name}` | 通道变量 `domain_name` 的值 |
+| `${caller_id_number:1}` | 去掉首字符后的主叫号码 |
+| `${sofia_contact(internal/1001@example.com)}` | 分机 1001 的已注册 Contact URI |
+| `${create_uuid()}` | 新 UUID |
+| `${cond(3 > 2 ? yes : no)}` | `yes` |
+| `${expr(2 + 2)}` | `4` |
+| `${cond(${var} == '' ? default : ${var})}` | `var` 为空时返回 `default`，否则返回 `var` 的值 |
+
+---
+
+## Chatplan 与文本消息 {#chatplan-and-text-messaging}
+
+Chatplan 是与呼叫拨号计划并行的文本消息路由引擎。它使用与 XML 拨号计划相同的 `context` / `extension` / `condition` / `action` XML 模型，但处理的是消息事件而非呼叫会话。实现位于 `mod_sms`（`src/mod/applications/mod_sms/mod_sms.c`）。
+
+Chatplan 部分在 `conf/vanilla/freeswitch.xml` 中声明：
+
+```xml
+<section name="chatplan" description="Regex/XML Chatplan">
+  <X-PRE-PROCESS cmd="include" data="chatplan/*.xml"/>
+</section>
+```
+
+Chatplan 文件位于 `conf/chatplan/`。默认配置仅附带 `conf/vanilla/chatplan/default.xml` 这一上下文。
+
+### Chatplan 的工作原理 {#how-the-chatplan-works}
+
+Sofia Profile 收到入站 SIP MESSAGE 时，`mod_sofia` 会创建 `SWITCH_EVENT_MESSAGE` 事件，填入 SIP 请求头后调用 `switch_core_chat_send`。该函数将事件路由到 `mod_sms` 注册的 `GLOBAL_SMS` 聊天接口。`mod_sms` 随后调用 `chatplan_hunt` 评估 Chatplan。
+
+`chatplan_hunt` 从事件中读取 `context` 头（不存在则默认 `"default"`），找到对应的 `<context>` 元素，然后按文档顺序遍历分机规则，使用与 XML 拨号计划相同的 field/expression/break 逻辑评估 `<condition>`。Chatplan 明确不支持嵌套条件；遇到时引擎会记录错误并停止。
+
+包含 `$` 的条件字段值会使用 `switch_event_expand_headers` 对消息事件头展开。没有 `$` 的字段则通过 `switch_event_get_header` 解析。
+
+执行操作之前，每个操作的 `data` 字符串会先通过 `switch_event_expand_headers` 展开，再传递给聊天应用。
+
+### 可用作条件字段的事件头 {#event-fields-available-as-condition-fields}
+
+| 字段 | 内容 |
+|-------|---------|
+| `to` | 消息接收方的 `user@domain` |
+| `from` | 消息发送方的 `user@domain` |
+| `from_user` | 发送方地址的用户部分 |
+| `from_host` | 发送方地址的主机部分 |
+| `to_user` | 接收方地址的用户部分 |
+| `to_host` | 接收方地址的主机部分 |
+| `proto` | 聊天协议标识；SIP MESSAGE 对应 `sofia` |
+| `context` | Chatplan 上下文，从 SIP Profile 的 `context` 参数设置 |
+| `type` | 消息正文的 MIME 内容类型，例如 `text/plain` |
+| `sip_profile` | 接收消息的 SIP Profile 名称 |
+
+消息正文存放在事件 body 中（内部名称 `_body`）。若需在操作的 `data` 字符串中访问它，可使用 `${_body}`。
+
+### 聊天应用 {#chat-applications}
+
+`mod_sms` 注册了以下聊天应用：
+
+| 应用 | 用途 |
+|------------|---------|
+| `reply` | 向原始发送端点发送回复；`data` 参数是回复正文。 |
+| `send` | 将消息转发到指定的目标协议；`data` 是目标 proto，省略时使用事件头 `dest_proto`。 |
+| `set` | 设置消息事件头；`data` 格式为 `header=value`，省略值会删除该头。 |
+| `unset` | 删除消息事件头；`data` 是头名称。 |
+| `fire` | 将消息事件发布到 FreeSWITCH 事件系统。 |
+| `stop` | 停止执行 Chatplan，不再运行后续应用。 |
+| `final` | 将消息标记为最终已投递并停止执行。 |
+| `info` | 以 INFO 级别记录全部消息事件头和正文；`data` 可选指定日志级别。 |
+| `system` | 执行 shell 命令；`data` 是命令字符串。 |
+
+`inline` 和 `loop` 属性的作用与 XML 拨号计划相同。标记 inline 的应用在评估 Chatplan 时立即执行，其他应用先入队，待 Chatplan 评估结束后再执行。
+
+### Chatplan 示例 {#chatplan-example}
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<include>
+  <context name="default">
+
+    <!-- Echo the message body back to the sender -->
+    <extension name="echo">
+      <condition field="to" expression="^echo@">
+        <action application="reply" data="You said: ${_body}"/>
+        <action application="stop"/>
+      </condition>
+    </extension>
+
+    <!-- Route messages addressed to a local extension to that user's SIP endpoint -->
+    <extension name="local_sms">
+      <condition field="to_user" expression="^(10[0-9]{2})$">
+        <action application="send" data="sofia"/>
+      </condition>
+    </extension>
+
+    <!-- Log and drop everything else -->
+    <extension name="default_drop">
+      <condition field="to" expression="^(.*)$">
+        <action application="info"/>
+        <action application="stop"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>
+```
+
+默认配置不会加载 `mod_sms`（在 `modules.conf.xml` 中被注释）。要启用 Chatplan，请取消 `mod_sms` 的注释，并确保 Chatplan XML 文件存在。
+
+---
+
+## ENUM 号码查询 {#enum-number-lookup}
+
+ENUM（E.164 号码映射，RFC 3761）通过对电话号码数字倒序并附加 DNS 根域后发起 DNS NAPTR 查询，将 E.164 电话号码解析为 SIP URI。`mod_enum` 将 ENUM 实现为拨号计划应用、API 命令以及独立的拨号计划接口。该模块默认加载。
+
+### ENUM 的工作原理 {#how-enum-works}
+
+1. 将 E.164 号码（例如 `+12125551212`）的数字倒序并以点分隔，再追加配置的根域，形成 DNS 名称：`2.1.2.1.5.5.5.2.1.2.1.e164.org`。
+2. 对该 DNS 名称执行 NAPTR 查询。
+3. 每条 NAPTR 记录包含服务标签（例如 `E2U+SIP`）、正则表达式和替换字符串。将正则作用于原号码，替换结果形成 URI。
+4. 将得到的 URI 与 `enum.conf.xml` 中的 `<route>` 条目匹配，生成最终的桥接字符串。
+
+### enum.conf.xml 参数 {#enumconfxml-parameters}
+
+配置文件：`conf/autoload_configs/enum.conf.xml`。
+
+| 参数 | 用途 | 默认值 |
+|----------|---------|---------|
+| `default-root` | 标准 ENUM 查询所用的 DNS 根域 | `e164.org` |
+| `default-isn-root` | ISN（ITAD 用户号码）查询所用的 DNS 根域 | `freenum.org` |
+| `auto-reload` | 为 `true` 时，在 `SWITCH_EVENT_RELOADXML` 事件上重新加载配置 | `true` |
+| `query-timeout-ms` | DNS 查询超时，单位毫秒 | `200` |
+| `query-timeout-retry` | DNS 查询重试次数 | `2` |
+| `random-nameserver` | 为 `true` 时，随机选择一个已配置 DNS 服务器 | `false` |
+| `nameserver` | ENUM 查询专用 DNS 服务器 IP（最多 10 条）；未设置时使用系统解析器。 | 系统解析器 |
+
+注意：旧参数 `query-timeout`（不带 `-ms`）仍能解析，但被视为秒数并乘以 1000。优先使用 `-ms` 形式。
+
+### 路由条目 {#route-entries}
+
+`<routes>` 部分将 NAPTR 服务标签映射为 FreeSWITCH 桥接字符串。每个 `<route>` 包含三个属性：
+
+| 属性 | 用途 |
+|----------|---------|
+| `service` | 要匹配的 NAPTR 服务标签，例如 `E2U+SIP` |
+| `regex` | 应用于 NAPTR 替换结果 URI 的正则表达式 |
+| `replace` | 桥接字符串模板；使用 `$N` 语法引用 `regex` 捕获组 |
+
+执行替换之后，还会对 `replace` 字符串展开变量，因此可以包含 `${variable}`。一般在通道上设置 `${use_profile}`，以便选择桥接使用的 Sofia Profile。
+
+默认的 `enum.conf.xml` 提供三条路由：
+
+```xml
+<routes>
+  <route service="E2U+SIP"  regex="sip:(.*)"
+         replace="sofia/${use_profile}-ipv6/$1;transport=udp|sofia/${use_profile}/$1;transport=udp"/>
+  <route service="E2T+SIP"  regex="sip:(.*)"
+         replace="sofia/${use_profile}-ipv6/$1;transport=tcp|sofia/${use_profile}/$1;transport=tcp"/>
+  <route service="E2T+SIPS" regex="sip:(.*)"
+         replace="sofia/${use_profile}-ipv6/$1;transport=tls|sofia/${use_profile}/$1;transport=tls"/>
+</routes>
+```
+
+### enum 拨号计划应用 {#the-enum-dialplan-application}
+
+`enum [<number> [<root>]]`
+
+在拨号计划中执行时，`enum` 针对 `number`（省略则使用 `destination_number`）向 `root`（省略则使用配置的 `default-root`）进行 ENUM 查询。成功后设置以下通道变量：
+
+| 变量 | 内容 |
+|---------|---------|
+| `enum_route_1`、`enum_route_2`、…… | 按优先级排列的各条受支持路由 |
+| `enum_route_count` | 查找到的受支持路由总数 |
+| `enum_auto_route` | 用 `\|` 连接的全部受支持路由，可直接作为 `bridge` 的 `data` 参数 |
+
+```xml
+<action application="enum" data="${destination_number} e164.org"/>
+<action application="bridge" data="${enum_auto_route}"/>
+```
+
+### enum API 命令 {#the-enum-api-command}
+
+`enum [reload | <number> [<root>]]`
+
+从 FreeSWITCH 控制台或内联 API 展开调用时，`enum` 执行查询，并打印找到的全部 NAPTR 记录表（包括支持和不支持的路由）。使用 `enum reload` 可重新加载 `enum.conf.xml`，不必执行完整的 `reloadxml`。
+
+`enum_auto` API 执行与应用相同的查询，但只返回以竖线分隔的受支持路由列表字符串，适合内联展开：
+
+```xml
+<action application="bridge" data="${enum_auto(${destination_number})}"/>
+```
+
+### 在拨号计划中使用 ENUM 路由 {#routing-via-enum-in-the-dialplan}
+
+典型做法是：尝试 ENUM 解析，找到路由则桥接；否则继续尝试 PSTN 网关。
+
+```xml
+<extension name="enum_outbound">
+  <condition field="destination_number" expression="^(\+1[2-9]\d{9})$">
+    <!-- Perform ENUM lookup and store routes -->
+    <action application="enum" data="$1"/>
+    <!-- Bridge using the ENUM result if any routes were found -->
+    <action application="bridge" data="${enum_auto_route}"/>
+  </condition>
+</extension>
+```
+
+如果希望将 mod_enum 直接用作拨号计划接口（该呼叫完全绕过 XML 拨号计划），可以在转接时指定拨号计划类型：
+
+```xml
+<action application="transfer" data="${destination_number} enum"/>
+```
+
+这会调用 `enum_dialplan_hunt`，执行 ENUM 查询并构建主叫分机规则，按照 NAPTR 优先级依次桥接到各条受支持路由。

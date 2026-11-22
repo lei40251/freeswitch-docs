@@ -1,0 +1,70 @@
+---
+sidebar_position: 6
+id: appendix-signalwire-map
+slug: /reference/signalwire-map
+title: "附录 D：SignalWire 功能映射"
+description: "本手册中的各项 FreeSWITCH 功能及其 SignalWire 托管平台对应能力。"
+sidebar_label: "附录 D：SignalWire 功能映射"
+---
+import ThemedImage from '@theme/ThemedImage';
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
+# 附录 D：SignalWire 功能映射 {#appendix-d-the-signalwire-capability-map}
+
+<a
+  className="sw-map-logo"
+  href="https://signalwire.com/?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  <ThemedImage
+    alt="SignalWire"
+    sources={{
+      light: useBaseUrl('/img/signalwire-logo-color.svg'),
+      dark: useBaseUrl('/img/signalwire-logo-white.svg'),
+    }}
+  />
+</a>
+
+FreeSWITCH 也作为托管平台运行。由 FreeSWITCH 团队创立的 SignalWire，在一组 API 后面运行着同一套引擎，包括 SWML（一种 JSON 或 YAML 格式的呼叫控制标记语言）、REST API、实时 WebSocket SDK 和无代码流程构建器。本附录将本手册记录的每项功能映射至相应的托管能力，便于你逐项权衡自托管与平台托管，也可以同时运行两者。
+
+你可以通过以下三种方式使用本映射表：
+
+1. **扩展现有部署。** 保留自己的 FreeSWITCH 服务器，同时增加托管能力，例如 SIP 中继、SMS，或可以通过某条拨号计划 Extension 访问的 AI 智能体。参见[第 30 章](../integration/signalwire.mdx)及[为 FreeSWITCH 添加 AI 的指南](https://signalwire.com/docs/platform/freeswitch/add-ai-to-freeswitch?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)。
+2. **让下一个项目托管运行。** 每一行的 SignalWire 列都对应你已熟悉章节的 API 形式。
+3. **迁移现有业务负载。** 由于底层引擎相同，相关概念几乎可以一一对应地迁移。
+
+## 功能映射表 {#capability-map}
+
+| 功能 | 本手册中的对应章节 | SignalWire 上的对应能力 |
+| --- | --- | --- |
+| 呼叫路由 | [XML 拨号计划](../dialplan/xml-dialplan.mdx) | [SWML](https://signalwire.com/docs/swml?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：为每次呼叫提供的 JSON/YAML 文档；也可使用 [呼叫流程构建器](https://signalwire.com/docs/call-flow-builder?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 无代码构建呼叫流程 |
+| 拨号计划应用 | [拨号计划工具参考](../dialplan/dptools-reference.mdx) | [SWML 呼叫方法](https://signalwire.com/docs/swml/reference/calling?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：`bridge` 对应 [`connect`](https://signalwire.com/docs/swml/reference/calling/connect?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)，`playback` 对应 [`play`](https://signalwire.com/docs/swml/reference/calling/play?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)，`record_session` 对应 [`record_call`](https://signalwire.com/docs/swml/reference/calling/record-call?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) |
+| DID 路由 | [入站呼叫与 public 上下文](../dialplan/inbound-public-context.mdx) | [电话号码管理](https://signalwire.com/docs/platform/phone-numbers?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：每个号码可以路由到脚本、流程、智能体或 SIP 端点 |
+| 基于时间的路由 | [时间与条件路由](../dialplan/time-and-condition-routing.mdx) | 在 SWML 中使用 [`switch`](https://signalwire.com/docs/swml/reference/calling/switch?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 和 [`cond`](https://signalwire.com/docs/swml/reference/calling/cond?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)；也可以在返回文档的服务器端为每次呼叫执行路由逻辑 |
+| IVR 菜单 | [IVR 菜单](../applications/ivr-menus.mdx) | 在 SWML 中使用 [`prompt`](https://signalwire.com/docs/swml/reference/calling/prompt?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 和 [`switch`](https://signalwire.com/docs/swml/reference/calling/switch?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)，或通过支持对话的 [AI 智能体](https://signalwire.com/docs/swml/reference/calling/ai?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 实现 |
+| 语音信箱 | [语音信箱](../applications/voicemail.mdx) | [呼叫流程构建器](https://signalwire.com/docs/call-flow-builder?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 的语音信箱节点；或使用 SWML 中的 [`record`](https://signalwire.com/docs/swml/reference/calling/record?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) |
+| 会议 | [会议](../applications/conferencing.mdx) | SWML 中的 [`join_conference`](https://signalwire.com/docs/swml/reference/calling/join-conference?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)；[视频会议室](https://signalwire.com/docs/platform/video?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)可使用 [`join_room`](https://signalwire.com/docs/swml/reference/calling/join-room?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 加入 |
+| 队列与呼叫中心 | [队列：FIFO 与呼叫中心](../applications/queues-fifo-callcenter.mdx) | SWML 中的 [`enter_queue`](https://signalwire.com/docs/swml/reference/calling/enter-queue?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)；由 AI 智能体负责第一层应答 |
+| 呼叫录音 | [音频文件与流媒体](../media/audio-files-and-streaming.mdx) | [`record_call`](https://signalwire.com/docs/swml/reference/calling/record-call?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：通过一行调用完成录音，并包含存储与检索能力 |
+| 传真与 T.38 | [传真与 T.38](../applications/fax-t38.mdx) | SWML 中的 [`send_fax`](https://signalwire.com/docs/swml/reference/calling/send-fax?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 和 [`receive_fax`](https://signalwire.com/docs/swml/reference/calling/receive-fax?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) |
+| SIP 中继与网关 | [网关](../users-endpoints/gateways.mdx) | [SIP 中继](https://signalwire.com/docs/platform/voice/sip/trunking?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 和[自带运营商](https://signalwire.com/docs/platform/voice/sip/bring-your-own-carrier?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)；通过 [FreeSWITCH 连接器](https://signalwire.com/docs/apis/rest/freeswitch-connector?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 将你的 FreeSWITCH 实例映射为平台资源 |
+| SIP Profile 与注册 | [Sofia SIP 配置实例](../users-endpoints/sip-profiles-sofia.mdx) | SIP 端点和域作为平台资源管理；注册服务器及其 TLS 边缘由平台代为运营 |
+| WebRTC | [通过 Verto 使用 WebRTC](../users-endpoints/webrtc-verto.mdx)、[通过 SIP over WSS 使用 WebRTC](../users-endpoints/webrtc-sip-wss.mdx) | 使用 [浏览器 SDK](https://signalwire.com/docs/browser-sdk?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)，在网页中实现音视频呼叫 |
+| 事件控制（ESL） | [事件套接字](../integration/event-socket.mdx)、[ESL：入站连接](../programming/esl-inbound.mdx)、[ESL：出站连接](../programming/esl-outbound.mdx) | [RELAY](https://signalwire.com/docs/server-sdks/guides/relay-client?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：实时 WebSocket API，提供带类型定义的 Python 和 TypeScript SDK |
+| 动态配置 | [使用 mod_xml_curl 的动态配置](../integration/xml-curl.mdx) | 平台原生模式：每次呼叫都可以从你的服务器获取 SWML 文档 |
+| 脚本编程 | [脚本语言](../integration/scripting.mdx)、[脚本 API](../programming/scripting-apis.mdx) | [SignalWire SDK](https://signalwire.com/docs/server-sdks?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：以普通 Python 或 TypeScript 服务编写呼叫逻辑 |
+| 语音 AI 智能体 | FreeSWITCH 没有对应功能 | [SWML `ai`](https://signalwire.com/docs/swml/reference/calling/ai?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 和 [AI 平台](https://signalwire.com/docs/platform/ai?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：根据代码中定义的步骤运行的智能体 |
+| TTS 与 ASR | [ASR 与 TTS 模块](../module-reference/asr-tts/index.mdx) | 通过语音标识字符串选择 [17 家 TTS 供应商](https://signalwire.com/docs/platform/voice/tts?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)；另提供 [`live_transcribe`](https://signalwire.com/docs/swml/reference/calling/live-transcribe?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 和 [`live_translate`](https://signalwire.com/docs/swml/reference/calling/live-translate?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) |
+| SMS 短信 | [mod_sms](../module-reference/applications/mod_sms.mdx) | [短信 API](https://signalwire.com/docs/platform/messaging?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)，可在控制台中办理短信活动注册 |
+| 答录机检测 | [mod_avmd](../module-reference/applications/mod_avmd.mdx)；[mod_com_amd](../module-reference/applications/mod_com_amd.mdx)（商业版） | SWML 中的 [`detect_machine`](https://signalwire.com/docs/swml/reference/calling/detect-machine?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)，包含商业 AMD 引擎（`mod_com_amd`） |
+| 从拨号计划调用 HTTP | [mod_curl](../module-reference/applications/mod_curl.mdx) | SWML 中的 [`request`](https://signalwire.com/docs/swml/reference/calling/request?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)；AI 智能体也可调用无服务器函数 |
+| CDR 与日志 | [呼叫详细记录](../integration/call-detail-records.mdx) | 通过 [REST API](https://signalwire.com/docs/apis?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map) 查询日志，并通过 Webhook 接收实时呼叫事件 |
+| 容量设置 | [变量与核心设置](../configuration-system/variables-and-core-settings.mdx) | 弹性平台容量；`max-sessions` 不存在托管对应项，因为容量规划由平台负责 |
+| Twilio 风格标记语言 | FreeSWITCH 未覆盖 | [兼容性 API](https://signalwire.com/docs/compatibility-api?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)：cXML 与 REST，可作为 TwiML 应用的直接替代接口 |
+
+## 从哪里开始 {#where-to-start}
+
+- **15 分钟，不用服务器：** [注册并提供第一个 SWML 文档](https://signalwire.com/docs/platform/getting-started?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)。
+- **保留自己的服务器，今天就添加 AI：** [通过 SIP 将某条拨号计划 Extension 指向托管智能体](https://signalwire.com/docs/platform/freeswitch/add-ai-to-freeswitch?utm_source=freeswitch-docs&utm_medium=appendix&utm_campaign=same-engine&utm_content=capability-map)。
+- **将当前部署连接到云平台：** [第 30 章：SignalWire 集成](../integration/signalwire.mdx)。

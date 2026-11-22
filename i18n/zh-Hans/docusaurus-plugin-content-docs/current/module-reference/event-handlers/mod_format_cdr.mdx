@@ -1,0 +1,95 @@
+---
+sidebar_position: 10
+id: mod_format_cdr
+slug: /module-reference/event-handlers/mod_format_cdr
+title: "mod_format_cdr——将 JSON/XML CDR 写入磁盘或通过 HTTP 发送"
+description: "将 JSON 或 XML 格式 CDR 写入磁盘和 HTTP 端点的配置说明。"
+sidebar_label: "mod_format_cdr"
+---
+# mod_format_cdr——将 JSON/XML CDR 写入磁盘或通过 HTTP 发送 {#mod_format_cdr-—-jsonxml-cdr-to-disk-or-http}
+
+`mod_format_cdr` 在每个呼叫腿挂机时生成一条呼叫详细记录（CDR），输出为 JSON 或 XML 文档。记录可以写入本地磁盘，通过 HTTP POST 发送到一个或多个 Web 端点，或同时执行两种方式。可以同时启用多个具名配置实例，建立互不影响的交付流水线；例如将 XML 写入磁盘，同时向远程计费服务器发送 JSON。
+
+模块位于 `src/mod/event_handlers`，注册 `on_reporting` 状态处理回调。收到 SIGHUP（带有 `Trapped-Signal: HUP` 的 `SWITCH_EVENT_TRAP`）时，如果启用了 `rotate`，模块会轮转日志目录。
+
+## 加载模块 {#loading-the-module}
+
+模块名称是 `mod_format_cdr`。它**不属于**默认的 `modules.conf.xml` 加载集合，需要手动添加：
+
+```xml
+<load module="mod_format_cdr"/>
+```
+
+无需特殊构建标志；模块作为标准 FreeSWITCH 源码树的一部分构建。
+
+## 配置：`format_cdr.conf.xml` {#configuration-format_cdrconfxml}
+
+配置文件为 `conf/autoload_configs/format_cdr.conf.xml`，在 `<profiles>` 块中包含一个或多个 `<profile>` 元素。每个配置实例相互独立，并对每次呼叫执行。
+
+### 参数 {#parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `format` | CDR 数据输出格式。 | `xml`、`json` | `xml` |
+| `url` | 接收 CDR 的 HTTP POST 地址。可重复配置最多 20 个，用于故障切换。省略或留空则禁用 HTTP 投递。 | HTTP/HTTPS URL | *（无，仅磁盘）* |
+| `cred` | 传给 libcurl 的 HTTP Basic 或其他认证凭据。 | `user:pass` 字符串 | *（无）* |
+| `log-dir` | 磁盘输出目录。空值默认 `${prefix}/logs/format_cdr`；相对路径基于 `${prefix}/logs/` 解析。设置了 `url` 时，完全省略该参数可关闭磁盘写入。 | 绝对/相对路径，或空值 | *（无）* |
+| `log-file` | 每份 CDR 文件的文件名模板，可展开通道变量。未指定时为 `<uuid>.cdr.<format>`（启用 `prefix-a-leg` 时为 `a_<uuid>.cdr.<format>`）。 | 可包含 `${variable}` 展开的文件名字符串 | `<uuid>.cdr.<format>` |
+| `err-log-dir` | HTTP POST 失败时写入 CDR 文件的目录。可重复配置最多 20 个。省略时默认与 `log-dir` 相同。 | 绝对/相对路径，或空值 | 与 `log-dir` 相同 |
+| `log-b-leg` | 是否为 B-leg（发起的）通道生成 CDR。为 `false` 时跳过 B-leg，除非该通道设置了 `force_process_cdr`。 | `true`、`false` | `true`（代码默认值；默认配置文件设为 `false`） |
+| `prefix-a-leg` | 为 `true` 时，在 A-leg 呼叫的 CDR 文件名前加 `a_`；不影响 B-leg。 | `true`、`false` | `false`（代码默认值；默认配置文件设为 `true`） |
+| `log-http-and-disk` | 为 `true` 时，即使 HTTP 投递成功仍写入磁盘。 | `true`、`false` | `false` |
+| `encode` | HTTP POST 请求体编码。`true` 表示 URL 编码（`application/x-www-form-urlencoded`）；`false` 表示纯文本；`base64` 表示 Base64 编码；`textxml` 表示原始请求体并设置 `Content-Type: text/xml`；`appljson` 表示原始请求体并设置 `Content-Type: application/json`。 | `true`、`false`、`base64`、`textxml`、`appljson` | *（未设置；示例配置使用 `true`）* |
+| `encode-values` | 为 `true` 时，生成 JSON CDR 时对各个 JSON 字段值进行 URL 编码；标准的未转义 JSON 应设为 `false`。 | `true`、`false` | `false`（代码默认值；默认配置文件设为 `true`） |
+| `retries` | 首次失败后额外重试的 HTTP POST 次数（`retries=2` 表示最多尝试 3 次）。 | 非负整数 | `0` |
+| `delay` | 重试之间等待的秒数。如果 `retries` 非零且 `delay` 为 `0`，自动设为 `5`。 | 非负整数 | `0`（设置重试时变为 `5`） |
+| `timeout` | libcurl 传输超时（秒）；`0` 表示不超时。 | 非负整数 | `0` |
+| `rotate` | 为 `true` 时，在 SIGHUP 到达后于 `log-dir` 下按当前时间戳创建子目录（`YYYY-MM-DD-HH-MM-SS`）。 | `true`、`false` | `false` |
+| `auth-scheme` | libcurl HTTP 认证方式。以 `=` 开头表示仅使用指定方式（不使用位掩码）。 | `basic`、`digest`、`NTLM`、`GSS-NEGOTIATE`、`any` | `basic` |
+| `disable-100-continue` | 为 `true` 时禁止发送 `Expect: 100-continue` 请求头；lighttpd 等部分 HTTP 服务器需要此设置。 | `true`、`false` | `false` |
+| `enable-cacert-check` | 为 `true` 时，要求 libcurl 使用系统 CA 证书包验证服务端证书。 | `true`、`false` | `false` |
+| `enable-ssl-verifyhost` | 为 `true` 时，验证 TLS 证书中的主机名与目标主机一致。 | `true`、`false` | `false` |
+| `ssl-cert-path` | 双向 TLS 使用的 PEM 格式客户端公钥证书路径。 | 绝对文件路径 | *（无）* |
+| `ssl-key-path` | 双向 TLS 使用的 PEM 格式客户端私钥路径。 | 绝对文件路径 | *（无）* |
+| `ssl-key-password` | `ssl-key-path` 指定的私钥密码短语。 | 字符串 | *（无）* |
+| `ssl-cacert-file` | 用于对端验证的自定义 PEM 格式 CA 证书路径。 | 绝对文件路径 | *（无）* |
+| `ssl-version` | 强制使用特定 TLS 版本。 | `SSLv3`、`TLSv1` | *（由 libcurl 自动协商）* |
+
+### 配置示例 {#example-configuration}
+
+```xml
+<configuration name="format_cdr.conf" description="Multi Format CDR CURL logger">
+  <profiles>
+    <profile name="default">
+      <settings>
+        <param name="format" value="xml"/>
+        <!-- <param name="url" value="http://localhost/cdr_curl/post.php"/> -->
+        <param name="log-dir" value=""/>
+        <param name="log-b-leg" value="false"/>
+        <param name="prefix-a-leg" value="true"/>
+        <param name="encode" value="true"/>
+        <param name="encode-values" value="true"/>
+      </settings>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+可以同时配置多个配置实例。为每个实例指定唯一的 `name` 属性，即可运行并行的交付流水线（例如一个实例通过 HTTP 发送 JSON，另一个将 XML 写入本地目录）。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `format_cdr_base` | 读取 | 覆盖单次呼叫的 `log-dir`。如果挂机时通道上已设置该变量，模块将 CDR 写入此目录，而不是配置实例设置的 `log-dir`。 |
+| `force_process_cdr` | 读取 | 当 B-leg 上设置为真值且 `log-b-leg` 为 `false` 时，仍强制模块为该 B-leg 生成并发送 CDR。 |
+
+## 事件 {#events}
+
+`mod_format_cdr` 不注册自定义 `SWITCH_EVENT_CUSTOM` 子类。它内部使用 `SWITCH_EVENT_TRAP` 检测 SIGHUP，以便轮转日志。
+
+## 相关文档 {#see-also}
+
+- [第 27 章：呼叫详细记录](../../integration/call-detail-records.mdx)
+
+**源码：** `src/mod/event_handlers/mod_format_cdr`、`conf/vanilla/autoload_configs/format_cdr.conf.xml`

@@ -1,0 +1,95 @@
+---
+sidebar_position: 3
+id: mod_blacklist
+slug: /module-reference/applications/mod_blacklist
+title: "mod_blacklist — 基于列表的呼叫拦截"
+description: "将纯文本字符串列表加载到内存，并提供运行时查询、添加、删除和持久化条目的 API。"
+sidebar_label: "mod_blacklist"
+---
+
+# mod_blacklist — 基于列表的呼叫拦截 {#mod_blacklist-—-list-based-call-blocking}
+
+`mod_blacklist` 是应用程序模块（`src/mod/applications/mod_blacklist`），把一个或多个包含任意字符串的纯文本文件载入内存哈希表。每个文件对应一个命名列表。模块提供统一的 `blacklist` API 命令，拨号计划逻辑和外部脚本可调用它来检查某个值（如主叫号码）是否在列表中，以及在不重启 FreeSWITCH 的情况下动态添加或删除条目。
+
+当需要对字符串集合执行简单、快速的成员检查时（例如拦截骚扰电话、只允许已知号码，或标记特定目标号码前缀），且希望直接通过 `fs_cli` 或 ESL 维护这些集合，而不修改拨号计划 XML，可以使用此模块。
+
+## 加载模块 {#loading-the-module}
+
+`load` 命令及 `modules.conf.xml` 中的模块名为 `mod_blacklist`。默认的 `autoload_configs/modules.conf.xml` 中**没有**它，需要手动添加：
+
+```xml
+<load module="mod_blacklist"/>
+```
+
+无须特殊构建标志；模块使用标准 FreeSWITCH 构建系统编译。
+
+## 配置：`blacklist.conf.xml` {#configuration-blacklistconfxml}
+
+`mod_blacklist` 读取位于 FreeSWITCH `autoload_configs/` 目录的 `mod_blacklist.conf`。虽然磁盘文件名是 `blacklist.conf.xml`，模块内部通过 `switch_xml_open_cfg` 请求的配置 `name` 属性却是 `mod_blacklist.conf`——FreeSWITCH 定位配置时匹配的是这个名称，而非文件名。配置在 `<lists>` 块中声明一个或多个 `<list>` 元素，每个元素将名称映射到磁盘上的纯文本文件。文本文件每行一条记录，读入哈希表时以去掉首尾空白的字符串为键。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `name` | API 调用与拨号计划中引用该列表的标识符 | 非空字符串 | _必需_ |
+| `filename` | 列表条目所在纯文本文件的绝对路径 | FreeSWITCH 进程可读取的文件路径 | _必需_ |
+
+随附配置将所有列表都注释掉。以下是最小可用示例：
+
+```xml
+<configuration name="mod_blacklist.conf" description="Blacklist module">
+  <lists>
+    <!-- One entry per line in the referenced file. -->
+    <list name="blocked_callers" filename="$${conf_dir}/blacklists/blocked_callers.list"/>
+  </lists>
+</configuration>
+```
+
+`filename` 引用的列表文件是纯文本文件，每行一个值，例如：
+
+```
+15551234567
+15559876543
+```
+
+## API 命令 {#api-commands}
+
+`mod_blacklist` 注册一个 API 命令：`blacklist`。所有列表管理操作都通过参数中的子命令完成。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `blacklist check` | 若 `item` 存在于 `listname` 中则返回 `true`，否则返回 `false` | `blacklist check <listname> <item>` |
+| `blacklist add` | 将 `item` 加入内存列表（直到执行 `save` 才会持久化） | `blacklist add <listname> <item>` |
+| `blacklist del` | 从内存列表移除 `item` | `blacklist del <listname> <item>` |
+| `blacklist save` | 用当前内存列表覆盖对应的配置文件 | `blacklist save <listname>` |
+| `blacklist reload` | 重新读取 `blacklist.conf.xml`，从磁盘重载全部列表 | `blacklist reload` |
+| `blacklist help` | 打印命令语法摘要 | `blacklist help` |
+
+`fs_cli` 示例：
+
+```
+freeswitch@internal> blacklist check blocked_callers 15551234567
+true
+
+freeswitch@internal> blacklist add blocked_callers 15550000001
++OK
+
+freeswitch@internal> blacklist del blocked_callers 15550000001
++OK
+
+freeswitch@internal> blacklist save blocked_callers
++OK
+
+freeswitch@internal> blacklist reload
++OK
+```
+
+典型拨号计划会根据命名列表检查主叫号码，若找到则拒绝呼叫：
+
+```xml
+<extension name="blacklist_check">
+  <condition field="${blacklist(check blocked_callers ${caller_id_number})}" expression="^true$">
+    <action application="reject" data="call_rejected"/>
+  </condition>
+</extension>
+```
+
+**源码：** `src/mod/applications/mod_blacklist`、`conf/vanilla/autoload_configs/blacklist.conf.xml`

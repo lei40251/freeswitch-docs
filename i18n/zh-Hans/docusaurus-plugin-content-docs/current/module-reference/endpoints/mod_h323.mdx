@@ -1,0 +1,135 @@
+---
+sidebar_position: 2
+id: mod_h323
+slug: /module-reference/endpoints/mod_h323
+title: "mod_h323——H.323 端点（ooH323c）"
+description: "配置 ooH323c H.323 端点、网守注册、H.245 与 RTP。"
+sidebar_label: "mod_h323"
+---
+# mod_h323——H.323 端点（ooH323c） {#mod_h323-—-h323-endpoint-ooh323c}
+
+`mod_h323` 是 FreeSWITCH 端点模块（位于 `src/mod/endpoints`），使用基于 PTLib 的 ooH323c 库实现 H.323 信令。它将 FreeSWITCH 注册为 H.323 终端或网关，在 TCP 1720 端口监听 Q.931 信令，并处理 H.245 能力协商和 RTP 媒体建立。
+
+需要与传统 H.323 设备（PBX、网守、视频会议端点或 H.323 中继）互通，并支持网守注册、FastStart、H.245 隧道或 H.323 呼叫腿上的 T.38 传真中继时，可使用此模块。
+
+## 加载模块 {#loading-the-module}
+
+需要加载的模块名为 `mod_h323`。默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，因此启动时自动加载前必须手动添加。
+
+在 `autoload_configs/modules.conf.xml` 中添加：
+
+```xml
+<load module="mod_h323"/>
+```
+
+构建此模块还需要 PTLib 和 ooH323c（参见[依赖项](#dependencies)）。
+
+## 配置：`h323.conf.xml` {#configuration-h323confxml}
+
+模块在加载（及重新加载）时读取 `h323.conf`。文件包含全局参数的 `<settings>` 块，以及一个或多个 TCP 监听定义的 `<listeners>` 块。
+
+### 设置参数 {#settings-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `trace-level` | 发送到 FreeSWITCH 日志的 PTLib/ooH323c 跟踪详细程度 | 整数（0 为关闭；越大越详细） | `0` |
+| `context` | 入站呼叫的拨号计划上下文 | 任意有效上下文字符串 | `default` |
+| `dialplan` | 入站呼叫的拨号计划引擎 | `XML`、`Asterisk` 等 | `XML` |
+| `codec-prefs` | 要通告的编解码器列表，以逗号分隔 | FreeSWITCH 编解码器名：`PCMA`、`PCMU`、`GSM`、`G729`、`G723`、`G729b`、`G729a`、`G729ab`、`G723.1`、`G723.1-5k3`、`G723.1a-5k3`、`G723.1a-6k3` | *（无，所有受支持编解码器）* |
+| `use-rtp-timer` | 启用 FreeSWITCH RTP 定时器 | `true` / `false` | `false` |
+| `rtp-timer-name` | 当 `use-rtp-timer` 为 true 时使用的定时器名称 | `soft` 或任意已安装定时器 | `soft` |
+| `ptime-override-value` | 覆盖协商出的打包时长（毫秒） | 整数毫秒；省略或设为 `-1` 以禁用 | `-1`（禁用） |
+| `jitter-size` | 音频抖动缓冲区大小（毫秒）；可使用 `min,max` 范围 | 整数或 `min,max`，如 `60` 或 `20,100`；值 `< 10` 时设为 0（无抖动缓冲区） | *（库默认值）* |
+| `faststart` | 启用 H.323 FastStart | `true` / `false` | `true` |
+| `h245tunneling` | 在 H.225 内启用 H.245 隧道 | `true` / `false` | `true` |
+| `h245insetup` | 在 Setup PDU 中包含 H.245 地址 | `true` / `false` | `true` |
+| `dtmfinband` | 检测带内 DTMF | `true` / `false` | `false` |
+| `endpoint-name` | 向网守通告的 H.323 本地用户名/别名 | 任意字符串 | `FreeSwitch` |
+| `progress-indication` | Progress/Connect PDU 中发送的进度指示符（Q.931 PI 字段） | 整数 1～8（7 保留，强制转换为 8） | `8` |
+| `alerting-indication` | Alerting PDU 中发送的进度指示符 | 整数 0～8（0 表示省略；7 转换为 8） | `0` |
+| `fax-old-asn` | 使用标准发布前的 T.38-IFP ASN 编码变体 | `true` / `false` | `false` |
+| `gk-address` | 网守 IP 或主机名；留空禁用，`*` 表示局域网自动发现 | IP、主机名、`*` 或空值 | *（禁用）* |
+| `gk-identifer` | 可选网守标识符（GK 名称） | 字符串 | *（无）* |
+| `gk-interface` | 网守 RAS 所用的本地 UDP 接口（IP:port） | `IP:port` 或空值 | *（无）* |
+| `gk-retry` | 网守注册重试间隔（秒） | 整数 | `30` |
+| `gk-prefix` | 向网守通告的 E.164 前缀（可重复配置） | 数字字符串 | *（无）* |
+
+### 监听器参数 {#listener-parameters}
+
+`<listeners>` 中每个 `<listener>` 元素定义一个 TCP 监听套接字。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `h323-ip` | 本地监听 IP 地址 | IP 或 FreeSWITCH 全局变量 | `$${local_ip_v4}` |
+| `h323-port` | Q.931 信令的 TCP 端口 | 整数 | `1720` |
+
+### 配置示例 {#configuration-example}
+
+```xml
+<configuration name="h323.conf" description="H323 Endpoints">
+  <settings>
+    <param name="trace-level" value="10"/>
+    <param name="context" value="default"/>
+    <param name="dialplan" value="XML"/>
+    <param name="codec-prefs" value="PCMA,PCMU,GSM,G729"/>
+    <param name="use-rtp-timer" value="true"/>
+    <param name="rtp-timer-name" value="soft"/>
+    <!-- <param name="ptime-override-value" value="20"/> -->
+    <param name="gk-address" value=""/>
+    <param name="gk-identifer" value=""/>
+    <param name="gk-interface" value=""/>
+    <param name="gk-retry" value="30"/>
+    <param name="faststart" value="true"/>
+    <param name="h245tunneling" value="true"/>
+    <param name="h245insetup" value="true"/>
+    <param name="jitter-size" value="60"/>
+    <param name="progress-indication" value="8"/>
+    <param name="alerting-indication" value="8"/>
+    <param name="endpoint-name" value="fs"/>
+    <param name="fax-old-asn" value="true"/>
+  </settings>
+  <listeners>
+    <listener name="default">
+      <param name="h323-ip" value="$${local_ip_v4}"/>
+      <param name="h323-port" value="1720"/>
+    </listener>
+  </listeners>
+</configuration>
+```
+
+## 发起与接收呼叫 {#originating-and-receiving-calls}
+
+### 接收呼叫 {#receiving-calls}
+
+入站 H.323 呼叫到达已配置的监听器（默认 TCP 1720）。模块创建会话，并将其放入 `context` 参数指定的拨号计划上下文。目标号码优先取自 H.225 `destinationAddress` 别名列表；如果不存在别名，则取自 Q.931 Called-Party-Number。通道命名为 `h323/<destination>`。
+
+### 发起呼叫 {#originating-calls}
+
+在拨号计划中或通过 `originate` 使用 `h323` 端点前缀：
+
+```
+originate h323/12125551212@192.0.2.10 &echo
+```
+
+目的地址字符串直接传给 ooH323c 的 `MakeCall` 函数。如果配置了网守，则号码可由网守解析，而不是直接拨号。
+
+## 通道变量 {#channel-variables}
+
+模块在运行时读取以下通道变量：
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `progress-indication` | 读取 | 以单次呼叫为单位覆盖全局 `progress-indication` 设置，控制 Progress PDU 的 PI 值。 |
+| `alerting-indication` | 读取 | 以单次呼叫为单位覆盖全局 `alerting-indication` 设置，控制 Alerting PDU 的 PI 值。 |
+| `fax_enable_t38_insist` | 读取 | 设置为 `true` 时，发给对端的 T.38 re-INVITE 包含 insist 标志（`numeric_arg = 1`）。 |
+| `timer_name` | 读取 | 如果 `use-rtp-timer` 已禁用，可以通过此变量指定 RTP 会话使用的定时器（如 `soft`）。 |
+
+## 依赖项 {#dependencies}
+
+编译 `mod_h323` 前，构建系统必须能够找到 **PTLib** 和 **ooH323c**（Open H.323 C 库）。它们不随 FreeSWITCH 提供，也不会默认构建。请在执行 `./configure` 和 `make mod_h323` 之前，通过发行版软件包管理器安装或自行从源码编译。
+
+## 相关文档 {#see-also}
+
+- [第 11 章：其他端点](../../users-endpoints/other-endpoints.mdx)
+
+**源码：** `src/mod/endpoints/mod_h323`、`src/mod/endpoints/mod_h323/h323.conf.xml`

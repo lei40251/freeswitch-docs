@@ -1,0 +1,335 @@
+---
+sidebar_position: 6
+id: fax-t38
+slug: /applications/fax
+title: "第 24 章：传真与 T.38"
+description: "通过 mod_spandsp 使用 G.711 或 T.38 接收、发送传真，以及在网关模式下转换传真传输。"
+sidebar_label: "24. 传真与 T.38"
+---
+
+# 第 24 章：传真与 T.38 {#chapter-24-fax-and-t38}
+
+FreeSWITCH 通过基于 SpanDSP 库构建的 `mod_spandsp` 模块提供传真功能。该模块包含两个拨号计划应用，用于经音频（G.711）或 T.38（UDPTL）发送、接收传真文档；还提供 T.38 网关模式，在协商了不同传输方式的传真端点之间进行桥接，以及一组控制会话级行为的通道变量。
+
+<SignalWireCallout
+  title="无需调试 T.38 即可使用传真"
+  href="https://signalwire.com/docs/swml/reference/calling/send-fax"
+  page="fax-t38"
+  linkText="查看 SWML 中的 send_fax">
+
+SignalWire 通过基于 JSON/YAML 的呼叫控制标记语言 SWML 中的 [`send_fax`](https://signalwire.com/docs/swml/reference/calling/send-fax?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=fax-t38) 和 [`receive_fax`](https://signalwire.com/docs/swml/reference/calling/receive-fax?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=fax-t38) 方法收发传真。平台负责处理 T.38 协商与运营商差异，用户获得文档 URL 和状态 Webhook。
+
+</SignalWireCallout>
+
+## 概述 {#overview}
+
+必须先加载 `mod_spandsp`，传真应用才能使用。该模块注册 `rxfax`、`txfax`、`stopfax` 与 `t38_gateway` 四个应用，在模块加载和重新加载时读取 `autoload_configs/spandsp.conf.xml`。
+
+传真会话初始以 G.711 音频模式运行。如果启用了 T.38 且远端支持，模块会发起或接受 re-INVITE，在通话中途切换到 UDPTL 传输。调用传真应用时，抖动缓冲区会自动禁用。
+
+应在调用传真应用前关闭回声消除。在拨号计划中调用 `rxfax` 或 `txfax` 前先执行 `disable_ec` 应用。下文示例使用的其他拨号计划应用（`set`、`answer`、`playback`、`hangup`）见[拨号计划工具参考](../dialplan/dptools-reference.mdx)。
+
+---
+
+## 模块配置 {#module-configuration}
+
+### spandsp.conf.xml 的结构 {#spandspconfxml-structure}
+
+配置文件包含两个与传真相关的部分：`<modem-settings>` 用于配置软件调制解调器，`<fax-settings>` 用于配置传真行为。`<descriptors>` 部分用于呼叫进程音检测，不属于传真文档传输。
+
+```xml
+<configuration name="spandsp.conf" description="SpanDSP config">
+  <fax-settings>
+    <param name="use-ecm"      value="true"/>
+    <param name="verbose"      value="false"/>
+    <param name="disable-v17"  value="false"/>
+    <param name="ident"        value="SpanDSP Fax Ident"/>
+    <param name="header"       value="SpanDSP Fax Header"/>
+    <param name="spool-dir"    value="$${temp_dir}"/>
+    <param name="file-prefix"  value="faxrx"/>
+    <!-- <param name="t38-tx-reinvite-packet-count" value="100"/> -->
+    <!-- <param name="t38-rx-reinvite-packet-count" value="50"/> -->
+  </fax-settings>
+</configuration>
+```
+
+### 传真设置参数参考 {#fax-settings-parameter-reference}
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `use-ecm` | 启用 ITU-T T.30 错误纠正模式（ECM）。 | `true`、`false` | `true` |
+| `verbose` | 启用 SpanDSP 库的详细日志。 | `true`、`false` | `false` |
+| `verbose-log-level` | SpanDSP 详细输出使用的 FreeSWITCH 日志级别。 | 日志级别字符串，如 `INFO`、`DEBUG` | `DEBUG` |
+| `disable-v17` | 禁用 V.17 调制解调器支持，将最高传输速率限制在 9600 bps。 | `true`、`false` | `false` |
+| `enable-tep` | 启用电话扩展处理器（TEP）前导序列。 | `true`、`false` | `false` |
+| `enable-colour` | 启用彩色传真支持。 | `true`、`false` | `false` |
+| `enable-image-resizing` | 启用图像缩放压缩。 | `true`、`false` | `false` |
+| `enable-colour-to-bilevel` | 接收时将彩色图像转换为二值图像。 | `true`、`false` | `false` |
+| `enable-grayscale-to-bilevel` | 接收时将灰度图像转换为二值图像。 | `true`、`false` | `false` |
+| `enable-t38` | 当远端提出 T.38 时允许协商。 | `true`、`false` | `true` |
+| `enable-t38-request` | 检测到音频传真音后主动请求 T.38 re-INVITE。 | `true`、`false` | `false` |
+| `ident` | 发送给远端的本地工作站标识（TSI）。 | 字符串 | `SpanDSP Fax Ident` |
+| `header` | 打印在发出传真页面上的页眉文字。 | 字符串 | `SpanDSP Fax Header` |
+| `spool-dir` | `rxfax` 未指定文件名时存放接收传真文件的目录。 | 路径 | `$${temp_dir}` |
+| `file-prefix` | 自动生成接收传真文件名时使用的前缀。 | 字符串 | `faxrx` |
+| `t38-tx-reinvite-packet-count` | 发送传真时，发出 T.38 re-INVITE 前处理的音频包数量。 | 整数 0–999 | `100` |
+| `t38-rx-reinvite-packet-count` | 接收传真时，发出 T.38 re-INVITE 前处理的音频包数量。 | 整数 0–999 | `50` |
+
+---
+
+## 使用 rxfax 接收传真 {#receiving-a-fax-with-rxfax}
+
+`rxfax` 应用会接听呼叫（若尚未接听）、将编解码器切换为线性 PCM，然后接收传入的传真文档并保存为 TIFF 文件。
+
+**语法：**
+
+```
+rxfax [/path/to/output.tif]
+```
+
+文件名参数可选。省略时，`rxfax` 使用 `spool-dir` 和 `file-prefix` 配置值自动生成文件名，格式如下：
+
+```
+{spool-dir}/{file-prefix}-{session_count}-{timestamp}.tif
+```
+
+应用完成后，通道变量 `fax_filename` 会被设置为实际写入文件的路径。
+
+**最简拨号计划操作：**
+
+```xml
+<action application="rxfax" data="/var/spool/fax/inbound.tif"/>
+```
+
+**启用 T.38 并禁用回声消除：**
+
+```xml
+<action application="disable_ec"/>
+<action application="set" data="fax_enable_t38=true"/>
+<action application="set" data="fax_ident=+15551234567"/>
+<action application="set" data="fax_header=My Company Fax"/>
+<action application="answer"/>
+<action application="playback" data="silence_stream://2000"/>
+<action application="rxfax" data="/var/spool/fax/inbound.tif"/>
+<action application="hangup"/>
+```
+
+---
+
+## 使用 txfax 发送传真 {#sending-a-fax-with-txfax}
+
+`txfax` 应用从本地 TIFF 文件向远端发送传真文档。调用 `txfax` 前，通道必须已经应答或处于桥接状态；`txfax` 本身不负责应答通道。
+
+**语法：**
+
+```
+txfax /path/to/document.tif
+```
+
+文件名为必填参数，指定路径中的文件必须存在。要选择页码范围，应设置通道变量 `fax_start_page` 与 `fax_end_page`；此应用不接受位置式页码范围参数。
+
+**最简拨号计划操作：**
+
+```xml
+<action application="txfax" data="/var/spool/fax/outbound.tif"/>
+```
+
+**按会话覆盖配置：**
+
+```xml
+<action application="set" data="fax_ident=+15551234567"/>
+<action application="set" data="fax_header=My Company - Page %p of %t"/>
+<action application="set" data="fax_enable_t38=true"/>
+<action application="set" data="fax_start_page=0"/>
+<action application="txfax" data="/var/spool/fax/outbound.tif"/>
+<action application="hangup"/>
+```
+
+---
+
+## T.38 协议支持 {#t38-protocol-support}
+
+T.38 是 ITU-T 制定的标准，用于通过 IP 网络中的 UDPTL 数据包（而非音频）传递传真信号。`mod_spandsp` 支持两种 T.38 工作方式：在 `rxfax`/`txfax` 中协商 T.38，以及专用的 T.38 网关模式。
+
+### 通过 rxfax 与 txfax 协商 T.38 {#t38-negotiation-via-rxfax-and-txfax}
+
+当 `fax_enable_t38` 为 `true`（或在 `spandsp.conf.xml` 中设置 `enable-t38`）时，传真应用会接受远端的 T.38 re-INVITE，并在通话中途从音频切换到 UDPTL。该转换在传真会话期间透明完成。
+
+当 `fax_enable_t38_request` 为 `true`（或全局设置了 `enable-t38-request`）时，模块会在处理指定数量的音频包后自行发送 re-INVITE，请求启用 T.38。门限分别通过 `fax_t38_tx_reinvite_packet_count`（发送）或 `fax_t38_rx_reinvite_packet_count`（接收）设置。
+
+当 `fax_enable_t38_insist` 为 `true` 时，发出的 re-INVITE 或响应会带有使 FreeSWITCH 强制要求 T.38 的标志；如果远端拒绝，将挂断会话。
+
+结果变量 `fax_t38_status` 表示协商结果：`negotiated`、`requested`、`refused` 或 `off`。
+
+### T.38 网关模式 {#t38-gateway-mode}
+
+`t38_gateway` 应用使一个 B2BUA 呼叫腿进入 T.38 网关模式，在一条腿上的音频传真信号与另一条腿上的 T.38 UDPTL 之间转换。适用于一端支持 T.38 而另一端不支持的情况。
+
+**语法：**
+
+```
+t38_gateway [self|peer] [nocng]
+```
+
+| 参数 | 用途 |
+|---|---|
+| `self` | 对当前（A）腿应用网关处理。 |
+| `peer` | 对对端（B）腿应用网关处理（默认）。 |
+| `nocng` | 不等待传真音检测，立即进入网关模式。 |
+
+未指定 `nocng` 时，`t38_gateway` 会监听 CED（2100 Hz）或 V.21 前导序列，然后才激活网关。音检测超时由通道变量 `t38_gateway_detect_timeout` 控制（整数，单位秒，默认 `20`）。
+
+通道变量 `t38_gateway_redundancy` 设置网关的 UDPTL 冗余级别（整数，默认 `3`）。这个值同时用于 FEC span 和 FEC entries 数量。
+
+**示例：在已桥接呼叫中以内联方式启用网关：**
+
+```xml
+<action application="set" data="execute_on_answer=t38_gateway peer"/>
+<action application="bridge" data="sofia/gateway/mycarrier/${destination_number}"/>
+```
+
+---
+
+## 通道变量参考 {#channel-variable-reference}
+
+通道变量可在单个会话级别覆盖 `spandsp.conf.xml` 中的全局默认值。输入变量会在传真应用开始前读取；结果变量由应用在结束时设置。
+
+### 输入变量 {#input-variables}
+
+| 变量 | 用途 |
+|---|---|
+| `fax_ident` | 覆盖本会话的全局 `ident` 设置（发送给远端的工作站标识）。 |
+| `fax_header` | 覆盖本会话的全局 `header` 设置（页面页眉文字）。 |
+| `fax_timezone` | 格式化页眉时间戳所使用的时区名称。 |
+| `fax_use_ecm` | 覆盖本会话的 `use-ecm`（`true` 或 `false`）。 |
+| `fax_disable_v17` | 禁用本会话的 V.17（`true` 或 `false`）。 |
+| `fax_enable_tep` | 启用本会话的 TEP 前导序列（`true` 或 `false`）。 |
+| `fax_enable_colour` | 启用本会话的彩色传真（`true` 或 `false`）。 |
+| `fax_enable_image_resizing` | 启用本会话的图像缩放（`true` 或 `false`）。 |
+| `fax_enable_colour_to_bilevel` | 启用本会话的彩色转二值图像（`true` 或 `false`）。 |
+| `fax_enable_grayscale_to_bilevel` | 启用本会话的灰度转二值图像（`true` 或 `false`）。 |
+| `fax_enable_t38` | 启用本会话的 T.38 协商（`true` 或 `false`）。 |
+| `fax_enable_t38_request` | 启用本会话主动发送 T.38 re-INVITE（`true` 或 `false`）。 |
+| `fax_enable_t38_insist` | 强制要求 T.38；远端拒绝时挂断（`true` 或 `false`）。 |
+| `fax_t38_tx_reinvite_packet_count` | 发送传真时，发出 T.38 re-INVITE 前处理的音频包数量（整数）。 |
+| `fax_t38_rx_reinvite_packet_count` | 接收传真时，发出 T.38 re-INVITE 前处理的音频包数量（整数）。 |
+| `fax_spool` | 覆盖 `rxfax` 自动生成文件名时使用的 `spool-dir`。 |
+| `fax_prefix` | 覆盖 `rxfax` 自动生成文件名时使用的 `file-prefix`。 |
+| `fax_start_page` | 要发送的起始页（从 0 开始计数；仅 `txfax`）。 |
+| `fax_end_page` | 要发送的结束页（从 0 开始计数；仅 `txfax`；`-1` 表示最后一页）。 |
+| `fax_force_caller` | 无论呼叫方向如何，强制传真会话作为主叫（`true`）或被叫应答方（`false`）。 |
+| `fax_verbose` | 启用本会话的 SpanDSP 详细日志（`true` 或 `false`）。 |
+| `fax_verbose_log_level` | 本会话详细输出所用的 FreeSWITCH 日志级别。 |
+| `fax_trace_dir` | 本会话 SpanDSP 跟踪日志的写入目录路径。 |
+| `t38_gateway_detect_timeout` | 激活 `t38_gateway` 前等待传真音的秒数（整数；默认 `20`）。 |
+| `t38_leg` | 由 `t38_gateway` 设置，记录应用网关处理的呼叫腿（`self` 或 `peer`，默认 `peer`）。 |
+| `t38_gateway_redundancy` | `t38_gateway` 模式的 UDPTL 冗余级别（整数；默认 `3`）；同时用于 FEC span 和 FEC entries 数量。 |
+| `t38_peer` | 用于配对 `t38_gateway` 会话两侧呼叫腿的对端 UUID；`t38_gateway` 会自动在两腿上设置。 |
+| `t38_trace` | 为 `true` 时，将 `t38_gateway` 会话原始音频跟踪记录到 `<temp_dir>/<uuid>_read.raw` 与 `<uuid>_write.raw`。 |
+
+### 结果变量 {#result-variables}
+
+`rxfax` 或 `txfax` 完成时会在通道上设置以下变量，后续拨号计划操作或 ESL 事件处理器均可读取。
+
+| 变量 | 用途 |
+|---|---|
+| `fax_success` | 传真成功完成为 `1`，否则为 `0`。 |
+| `fax_result_code` | T.30 完成状态的数字代码。 |
+| `fax_result_text` | T.30 完成状态代码的人类可读描述。 |
+| `fax_filename` | 接收时写入、发送时读取的 TIFF 文件路径。 |
+| `fax_document_transferred_pages` | 本会话实际传输的页数。 |
+| `fax_document_total_pages` | 文件总页数（`txfax` 为发送页数；`rxfax` 为写入 TIFF 的页数）。 |
+| `fax_image_resolution` | 最后一页的扫描行分辨率，格式为 `{x}x{y}`（米/像素）。 |
+| `fax_file_image_resolution` | 最后一页的文件分辨率。 |
+| `fax_image_pixel_size` | 最后一页的像素尺寸，格式为 `{width}x{height}`。 |
+| `fax_file_image_pixel_size` | TIFF 文件中存储的像素尺寸。 |
+| `fax_image_size` | 压缩图像大小（字节）。 |
+| `fax_bad_rows` | 最后一页检测到的损坏行数。 |
+| `fax_longest_bad_row_run` | 连续损坏行的最长长度。 |
+| `fax_encoding` | 最后一页使用的数字压缩编码代码。 |
+| `fax_encoding_name` | 压缩类型的字符串名称，如 `T.6`。 |
+| `fax_transfer_rate` | 已协商的调制解调器比特率（bit/s）。 |
+| `fax_ecm_used` | 本会话使用 ECM 时为 `on`，否则为 `off`。 |
+| `fax_ecm_requested` | 请求 ECM 时为 `1`，否则为 `0`（网关模式下分别是 `true` 和 `false`）。 |
+| `fax_t38_status` | T.38 结果：`negotiated`、`requested`、`refused` 或 `off`。 |
+| `fax_v17_disabled` | 本会话禁用了 V.17 时为 `1`，否则为 `0`。 |
+| `fax_local_station_id` | 本会话使用的本地工作站标识。 |
+| `fax_remote_station_id` | 从远端接收的工作站标识。 |
+| `fax_remote_country` | 远端传真设备报告的国家（T.30 阶段 B 协商时设置；未提供则为空字符串）。 |
+| `fax_remote_vendor` | 远端传真设备报告的厂商字符串（T.30 阶段 B 协商时设置；未提供则为空字符串）。 |
+| `fax_remote_model` | 远端传真设备报告的型号字符串（T.30 阶段 B 协商时设置；未提供则为空字符串）。 |
+| `fax_trace_file` | 本会话 SpanDSP 跟踪日志文件的完整路径；仅设置了输入变量 `fax_trace_dir` 时才会设置。 |
+
+### 完成回调钩子 {#completion-hooks}
+
+`mod_spandsp` 在传真生命周期的多个时间点支持标准 `execute_on_*` 和 `system_on_*` 通道变量钩子。`execute_on_*` 执行拨号计划应用（如 `lua fax_result.lua`）；`system_on_*` 则先展开通道变量，再通过 `system()` 执行主机命令。应在调用 `rxfax` 或 `txfax` 前设置这些通道变量。
+
+| 变量 | 触发时机 | 操作类型 |
+|---|---|---|
+| `execute_on_fax_phase_b` | T.30 阶段 B：初始传输协商完成、交换工作站标识后。 | 拨号计划应用 |
+| `execute_on_fax_phase_d` | T.30 阶段 D：每一页传输完成后。 | 拨号计划应用 |
+| `system_on_fax_result` | 传真会话结束时，无论成功或失败。 | `system()` 命令 |
+| `execute_on_fax_result` | 传真会话结束时，无论成功或失败（在 `system_on_fax_result` 之后）。 | 拨号计划应用 |
+| `system_on_fax_success` | 传真会话成功结束时。 | `system()` 命令 |
+| `execute_on_fax_success` | 传真会话成功结束时（在 `system_on_fax_success` 之后）。 | 拨号计划应用 |
+| `system_on_fax_failure` | 传真会话因错误结束时。 | `system()` 命令 |
+| `execute_on_fax_failure` | 传真会话因错误结束时（在 `system_on_fax_failure` 之后）。 | 拨号计划应用 |
+
+第 6.2 节中列出的结果变量会在这些钩子执行之前填好，所以 `execute_on_fax_result` 处理程序可以直接读取 `fax_success`、`fax_result_code`、`fax_document_transferred_pages` 和 `fax_filename`。
+
+---
+
+## 默认拨号计划示例 {#default-dialplan-examples}
+
+标准配置中的 `conf/vanilla/dialplan/default.xml` 包含两个传真分机，用于演示最简用法。
+
+### fax_receive（分机 9178） {#fax_receive-extension-9178}
+
+接听呼叫，播放两秒静音以等待传真 CED 音稳定，将接收的传真保存至临时文件，然后挂机。
+
+```xml
+<extension name="fax_receive">
+  <condition field="destination_number" expression="^9178$">
+    <action application="answer"/>
+    <action application="playback" data="silence_stream://2000"/>
+    <action application="rxfax" data="$${temp_dir}/rxfax.tif"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+### fax_transmit（分机 9179） {#fax_transmit-extension-9179}
+
+从临时文件发送传真。调用 `txfax` 时通道已经处于桥接状态；因为出站桥接已应答会话，无须再显式执行 `answer`。
+
+```xml
+<extension name="fax_transmit">
+  <condition field="destination_number" expression="^9179$">
+    <action application="txfax" data="$${temp_dir}/txfax.tif"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+### 使用 T.38 并记录结果的实际入站传真示例 {#practical-inbound-fax-with-t38-and-result-logging}
+
+以下是一个完整的入站传真分机示例，展示如何覆盖会话级设置、启用 T.38，并通过 `execute_on_fax_result` 处理结果。
+
+```xml
+<extension name="inbound_fax">
+  <condition field="destination_number" expression="^1234$">
+    <action application="set" data="fax_ident=+15551234567"/>
+    <action application="set" data="fax_header=ACME Corp"/>
+    <action application="set" data="fax_enable_t38=true"/>
+    <action application="set" data="fax_enable_t38_request=true"/>
+    <action application="set" data="execute_on_fax_result=lua fax_result.lua"/>
+    <action application="disable_ec"/>
+    <action application="answer"/>
+    <action application="playback" data="silence_stream://2000"/>
+    <action application="rxfax" data="/var/spool/fax/${uuid}.tif"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+`rxfax` 完成后，FreeSWITCH 执行 `execute_on_fax_result` 指定的应用。此时 `fax_success`、`fax_result_code`、`fax_document_transferred_pages` 与 `fax_filename` 等结果变量均可访问。

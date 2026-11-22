@@ -1,0 +1,86 @@
+---
+sidebar_position: 2
+id: mod_bert
+slug: /module-reference/applications/mod_bert
+title: "mod_bert — 误码率测试"
+description: "通过发送数字毫瓦测试码型并测量接收误码率，在呼叫腿上执行 G.711 μ-law BERT 测试。"
+sidebar_label: "mod_bert"
+---
+
+# mod_bert — 误码率测试 {#mod_bert-—-bit-error-rate-test}
+
+`mod_bert` 是拨号计划应用模块（`src/mod/applications/mod_bert`），用于在活动呼叫腿上执行简单的误码率测试（BERT）。它仅适用于 G.711 μ-law（PCMU）音频：模块持续发送 ITU-T 数字毫瓦测试码型，把每个接收帧与相同码型比较，在可配置的滑动窗口内累计错误样本，从而计算误码百分比。
+
+管理员可使用 `mod_bert` 验证互联链路、编解码器透传能力或对媒体路径进行压力测试。模块在同步建立、同步丢失和超时时触发自定义事件，使外部工具无需分析日志就能记录通过／失败状态。
+
+## 加载模块 {#loading-the-module}
+
+`load` 命令及 `modules.conf.xml` 中的模块名为 `mod_bert`。默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，需要手动添加：
+
+```xml
+<load module="mod_bert"/>
+```
+
+无须特殊构建标志或外部库；该模块随标准 FreeSWITCH 源码树编译。
+
+## 配置：`bert.conf.xml` {#configuration-bertconfxml}
+
+`mod_bert` 没有随附配置文件，也没有通过 `switch_xml_config` 注册配置参数。所有调节均通过执行应用前设置的通道变量完成。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `bert_test` | 在当前呼叫腿执行 BERT，直到通道挂断或误码阈值触发挂断 | _无_ |
+
+### `bert_test`
+
+应用先应答通道，然后进入读写循环：
+
+1. 反复发送 8 字节的 G.711 μ-law 数字毫瓦测试码型。
+2. 读取收到的每一帧，并统计与预期码型不匹配的样本数量。
+3. 每个测量窗口结束时计算误码百分比并触发对应事件。
+
+该应用不接受内联参数，所有行为由通道变量控制（见下文[通道变量](#channel-variables)）。
+
+```xml
+<action application="bert_test"/>
+```
+
+典型的回环 BERT 测试拨号计划上下文：
+
+```xml
+<extension name="bert">
+  <condition field="destination_number" expression="^bert$">
+    <action application="set" data="bert_timeout_ms=15000"/>
+    <action application="set" data="bert_max_err=5.0"/>
+    <action application="set" data="bert_hangup_on_error=true"/>
+    <action application="bert_test"/>
+  </condition>
+</extension>
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 设置／读取 | 用途 |
+|---|---|---|
+| `bert_window_ms` | 读取 | 每个误码率测量窗口的持续时间（毫秒），默认 `1000`。 |
+| `bert_timeout_ms` | 读取 | 初始同步建立前的等待时间（毫秒），超时后触发事件；默认 `10000`。 |
+| `bert_max_err` | 读取 | 每个窗口允许的最大误码百分比，超过后判定同步丢失；默认 `10.0`。 |
+| `bert_hangup_on_error` | 读取 | 若为 `true`，同步丢失或超时触发时挂断通道；默认未设置（不挂断）。 |
+| `bert_debug_io_file` | 读取 | 原始 μ-law 调试文件的基础路径。设置后，模块写入 `<path>.in`（接收音频）和 `<path>.out`（发送音频）。 |
+| `bert_timer_name` | 读取 | FreeSWITCH 定时器名称（例如 `soft`），用于独立于读取阻塞而安排写入帧；未设置则不使用独立定时器。 |
+| `bert_stats_sync_lost` | 设置 | 在某窗口内同步丢失时设为 `true`，开始时为 `false`。 |
+| `bert_stats_sync_lost_count` | 设置 | 该通道上同步丢失事件的累计次数。 |
+
+## 事件 {#events}
+
+`mod_bert` 发出三种自定义 `SWITCH_EVENT_CUSTOM` 子类。所有事件均含 `switch_channel_event_set_basic_data` 填充的标准通道头字段。
+
+| 事件子类 | 触发条件 | 附加头字段 |
+|---|---|---|
+| `mod_bert::timeout` | 通道未能在 `bert_timeout_ms` 内建立同步。 | _无（标准通道头字段除外）_ |
+| `mod_bert::lost_sync` | 在此前已同步的窗口中，误码率超过 `bert_max_err`。 | `sync_lost_percent`、`sync_lost_count`、`cng_count`、`err_samples` |
+| `mod_bert::in_sync` | 误码率首次降至 `bert_max_err` 或以下（同步已建立）。 | _无（标准通道头字段除外）_ |
+
+**源码：** `src/mod/applications/mod_bert`

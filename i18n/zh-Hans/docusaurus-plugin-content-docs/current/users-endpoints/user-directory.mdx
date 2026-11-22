@@ -1,0 +1,336 @@
+---
+sidebar_position: 1
+id: user-directory
+slug: /users-and-endpoints/user-directory
+title: "第 6 章：用户目录"
+description: "FreeSWITCH 用于 SIP 认证、路由、主叫号码和语音信箱的 XML 身份信息存储，按域名和用户记录组织。"
+sidebar_label: "6. 用户目录"
+---
+
+# 第 6 章：用户目录 {#chapter-6-the-user-directory}
+
+用户目录是 FreeSWITCH 基于 XML 的身份信息存储，供 SIP 认证、呼叫路由、主叫号码显示及语音信箱凭据查询使用。它将用户组织到一个或多个域名中，每个域名包含若干用户记录，记录由认证参数和通道变量构成；这些变量会被设置到该用户发起或接收的呼叫上。
+
+<SignalWireCallout
+  title="目录条目变成订阅用户"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="user-directory"
+  linkText="查看平台资源">
+
+SignalWire 将用户建模为订阅者资源，并通过 REST API 创建平台可路由到的地址，而不是编写 XML。认证凭据、可达性及每用户处理程序都是资源配置，而非部署在服务器上的文件。
+
+</SignalWireCallout>
+
+## 目录结构和文件布局 {#directory-structure-and-file-layout}
+
+FreeSWITCH 配置树的 directory 部分位于 `conf/directory/`。顶层入口是 `conf/directory/default.xml`，它在 `<include>` 块中包装一个 `<domain>` 元素。用户记录以独立的 XML 文件保存在 `conf/directory/default/` 下，并在启动时通过 `X-PRE-PROCESS` include 指令加载：
+
+```xml
+<X-PRE-PROCESS cmd="include" data="default/*.xml"/>
+```
+
+该指令会在解析配置时，将 `conf/directory/default/` 下的每个 `.xml` 文件合并到外层的 `<users>` 块。每个被包含的文件都必须是有效的 XML 片段，用 `<include>` 标签包装，并包含一个或多个 `<user>` 元素。
+
+这些文件会合并，而不是相互覆盖。向 `conf/directory/default/` 添加文件即可注册新用户，无需修改 `default.xml`。合并顺序由 glob 展开结果决定，FreeSWITCH 按文件名字母顺序排序。
+
+---
+
+## 域名 {#domains}
+
+### 默认域名 {#the-default-domain}
+
+用户目录按域名组织，对应 SIP 地址中 `@` 右侧的部分。默认配置定义了一个域名，其名称为预处理变量 `$${domain}`：
+
+```xml
+<domain name="$${domain}">
+  ...
+</domain>
+```
+
+`$${domain}` 变量在 `conf/vars.xml` 中设置：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
+```
+
+默认情况下，`$${domain}` 解析为本机主要 IPv4 地址。如需使用主机名，可以把该行改为目标主机名，例如：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="domain=pbx.example.com"/>
+```
+
+目录树中可以同时存在多个 `<domain>` 块，以支持多租户部署。每个域名的 `name` 属性必须唯一。
+
+### 域级参数与变量 {#domain-level-params-and-variables}
+
+`<domain>` 元素可以有自己的 `<params>` 和 `<variables>` 块。这些值应用于域内所有用户，但可由同名的用户级声明覆盖。
+
+默认 `default.xml` 配置了两个域级参数及若干变量：
+
+```xml
+<domain name="$${domain}">
+  <params>
+    <param name="dial-string" value="{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})},${verto_contact(${dialed_user}@${dialed_domain})}"/>
+    <param name="jsonrpc-allowed-methods" value="verto"/>
+  </params>
+
+  <variables>
+    <variable name="record_stereo" value="true"/>
+    <variable name="default_gateway" value="$${default_provider}"/>
+    <variable name="default_areacode" value="$${default_areacode}"/>
+    <variable name="transfer_fallback_extension" value="operator"/>
+  </variables>
+  ...
+</domain>
+```
+
+域级 `dial-string` 参数为发起 `user/` 通道时提供默认的 Contact 解析表达式。也可以在用户级设置，以覆盖该用户的路由规则。
+
+**域级参数参考：**
+
+| 参数 | 用途 | 值 | 默认值 |
+|---|---|---|---|
+| `dial-string` | 在此域名中发起 `user/` 呼叫时的默认 Contact 解析表达式。可由用户级 `dial-string` 覆盖。 | FreeSWITCH 拨号字符串表达式 | 无 |
+| `jsonrpc-allowed-methods` | 此域名的 Verto WebSocket 连接允许调用的 JSON-RPC 方法族，以逗号分隔。 | `verto` 等 | 无 |
+| `jsonrpc-allowed-event-channels` | 此域名的 Verto 客户端可订阅的事件通道族，以逗号分隔。 | 通道族名称 | 无 |
+
+---
+
+## 定义用户 {#defining-a-user}
+
+每个用户都由一个 `<user>` 元素表示，必须具有 `id` 属性。`id` 值是 SIP 地址的左侧部分，在其域名内必须唯一。
+
+### 用户属性 {#user-attributes}
+
+| 属性 | 用途 | 说明 |
+|---|---|---|
+| `id` | 域名内唯一的用户标识，对应 SIP 用户名。 | 必填 |
+| `number-alias` | 解析到此用户记录的备用号码字符串，使电话号码可以映射到字母数字形式的 `id`。 | 可选 |
+| `cidr` | 向节点引用该域名的任意 ACL（`network-list` ACL）添加一个与指定 CIDR 范围关联的 `<user-id>@<domain>` 标记。它本身不会绕过摘要认证；SIP 配置实例必须通过 `apply-inbound-acl`/`apply-register-acl` 引用该 ACL，基于 IP 的放行才会生效。 | 可选 |
+
+同时使用 `cidr` 和 `number-alias` 的示例：
+
+```xml
+<user id="brian" number-alias="1000" cidr="192.0.2.0/24">
+```
+
+最简用户记录可在 `<include>` 片段中包含 `<params>` 和 `<variables>` 块：
+
+```xml
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="$${default_password}"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+      <variable name="outbound_caller_id_name" value="$${outbound_caller_name}"/>
+      <variable name="outbound_caller_id_number" value="$${outbound_caller_id}"/>
+      <variable name="callgroup" value="techsupport"/>
+    </variables>
+  </user>
+</include>
+```
+
+### 用户参数 {#user-params}
+
+`<params>` 保存 FreeSWITCH 在注册和呼叫建立期间读取的认证凭据和用户配置，它们不会自动设置为呼叫通道变量。
+
+### 用户变量 {#user-variables}
+
+`<variables>` 保存 FreeSWITCH 为与该用户相关的每条呼叫腿设置的通道变量。呼叫存续期间，拨号计划、CDR 和其他子系统都可以读取这些变量。
+
+---
+
+## 参数参考 {#parameter-reference}
+
+### 常用用户参数 {#common-user-params}
+
+| 参数 | 用途 | 值 | 默认值 |
+|---|---|---|---|
+| `password` | SIP 摘要认证密码，由 mod_sofia 通过 MD5 摘要验证用户凭据。 | 任意字符串 | 无（摘要认证必填） |
+| `a1-hash` | 预计算的 `user:domain:password` MD5 哈希（HA1），可代替 `password`，避免以明文保存凭据。 | 32 字符十六进制字符串 | 无 |
+| `allow-empty-password` | 为 `true` 时允许没有 `password` 或 `a1-hash` 的用户认证。默认禁用；启用存在安全风险。 | `true`、`false` | `true`（核心默认值；在 Sofia 配置实例上设为 `false` 可拒绝） |
+| `auth-acl` | 注册来源 IP 除通过摘要认证外，还必须通过的具名 ACL。如果 IP 未通过 ACL，注册会被拒绝，不论凭据是否正确。 | 在 `conf/autoload_configs/acl.conf.xml` 定义的 ACL 列表名称 | 无 |
+| `sip-forbid-register` | 为 `true` 时，无条件以 403 拒绝该用户的 REGISTER 请求。 | `true`、`false` | `false` |
+| `dial-string` | 发起 `user/id@domain` 时用于解析 Contact 的表达式，可按用户覆盖域级 `dial-string`。 | FreeSWITCH 拨号字符串表达式 | 从域级继承 |
+| `mwi-account` | 替代的 `user@domain` 地址；注册时向该用户 UA 报告此地址的消息等待指示器（MWI）状态。适用于 SIP 用户名不同于语音信箱标识的情况。 | `user@domain` 字符串 | 默认使用正在注册的用户和域名 |
+| `reverse-auth-user` | FreeSWITCH 对发给该用户 UA 的出站 SIP 请求（INVITE）进行认证时提交的用户名，适用于远端 UA 向 FreeSWITCH 发起挑战的情况。 | SIP 用户名字符串 | 无 |
+| `reverse-auth-pass` | FreeSWITCH 对发给该用户 UA 的出站 SIP 请求进行认证时提交的密码，与 `reverse-auth-user` 一起使用。 | 任意字符串 | 无 |
+| `user-agent-filter` | 应用于入站 REGISTER 请求 `User-Agent` 头的正则表达式；不匹配时拒绝注册。 | POSIX 正则表达式字符串 | 无（不过滤） |
+| `max-registrations-per-extension` | 此用户允许的最大同时注册数；超过上限的 REGISTER 尝试会被拒绝。 | 整数 | 无限制 |
+| `jsonrpc-allowed-methods` | 按用户覆盖在 Verto WebSocket 连接中允许的 JSON-RPC 方法族。 | `verto` 等 | 从域级继承 |
+| `http-allowed-api` | 此用户允许访问的 HTTP API 端点列表，以逗号分隔。 | API 名称 | 无 |
+
+### 语音信箱参数 {#voicemail-params}
+
+所有 `vm-*` 参数都由 mod_voicemail 从用户的 `<params>` 块读取。它们不是通道变量，也不会设置到呼叫腿上。
+
+| 参数 | 用途 | 值 | 默认值 |
+|---|---|---|---|
+| `vm-password` | 访问该用户语音信箱使用的 PIN。特殊值 `user-choose` 允许呼叫者首次访问时自行设置 PIN。省略时将 `password` 参数用作 PIN。 | 数字字符串或 `user-choose` | 回退到 `password` |
+| `vm-a1-hash` | 预计算的 `user:domain:vm-password` MD5 哈希，可替代 `vm-password`，避免保存明文 PIN。 | 32 字符十六进制字符串 | 无 |
+| `vm-enabled` | 为 `false` 时禁用该用户语音信箱。路由到语音信箱的呼叫会收到无效分机提示。 | `true`、`false` | `true` |
+| `vm-mailto` | 新语音留言作为音频附件或通知发送到的邮箱地址。 | 邮箱地址字符串 | 无 |
+| `vm-notify-mailto` | 收到新语音留言时接收简短通知（不含音频附件）的邮箱地址。 | 邮箱地址字符串 | 无 |
+| `vm-mailfrom` | 语音信箱邮件通知 `From` 头中使用的发件人地址。 | 邮箱地址字符串 | 回退到配置实例的 `email-from` 参数（默认配置：`${voicemail_account}@${voicemail_domain}`） |
+| `vm-cc` | 每条新留言的副本被转发到的语音信箱，格式为 `user@domain`。 | `user@domain` 字符串 | 无 |
+| `vm-email-all-messages` | 为 `true` 时，无论配置实例是否全局启用邮件，每条新留言都会发送邮件。 | `true`、`false` | `false` |
+| `vm-notify-email-all-messages` | 为 `true` 时，每条新留言都会发送仅通知邮件（不带附件）。 | `true`、`false` | `false` |
+| `vm-attach-file` | 为 `true` 时，将语音留言音频文件附加到通知邮件。此参数没有配置实例级等效项；未设置时不附加文件。 | `true`、`false` | `false` |
+| `vm-keep-local-after-email` | 为 `true` 时，留言发送邮件后仍保存在信箱中；为 `false` 时，邮件发送后从信箱删除。 | `true`、`false` | `true` |
+| `vm-skip-instructions` | 为 `true` 时，不向留言者播放提示音之后的录音说明。 | `true`、`false` | `false` |
+| `vm-disk-quota` | 此用户存储的语音留言大小总上限（字节）；达到配额后拒绝新留言。 | 整数（字节） | 无限制 |
+| `vm-storage-dir` | 此用户保存语音留言录音的目录路径，覆盖配置实例默认值。 | 文件系统路径 | 回退到配置实例的 `storage-dir` 参数（默认未设置，即 `$${storage_dir}/voicemail/<profile>/<domain>/<user>`） |
+| `vm-domain-storage-dir` | 按域名划分的语音信箱存储目录路径。已弃用的 `storage-dir` 是该参数的别名。 | 文件系统路径 | 回退到配置实例的 `storage-dir` 参数（默认未设置） |
+| `vm-alternate-greet-id` | 使用其欢迎语来代替此用户欢迎语的另一个用户 `id`。适用于共享或虚拟语音信箱。 | 用户 `id` 字符串 | 无 |
+| `vm-message-ext` | 此用户录制留言的文件扩展名，覆盖配置实例默认值。 | 扩展名字符串（如 `mp3`、`wav`） | 回退到配置实例的 `file-extension` 参数（`wav`） |
+| `vm-operator-extension` | 主叫在语音信箱欢迎语播放期间按 `0` 时拨打的分机。 | 分机字符串 | 无 |
+| `vm-convert-cmd` | 保存录音或发送邮件前转换音频文件所用的 Shell 命令。 | 命令字符串 | 回退到配置实例的 `convert-cmd` 参数（默认未设置，因此不转换） |
+| `vm-convert-ext` | `vm-convert-cmd` 生成的文件扩展名。 | 扩展名字符串 | 回退到配置实例的 `convert-ext` 参数（默认未设置） |
+
+### 常用用户变量 {#common-user-variables}
+
+| 变量 | 用途 | 值 | 默认值 |
+|---|---|---|---|
+| `user_context` | FreeSWITCH 路由该用户入站呼叫时使用的拨号计划上下文。 | 任意已定义上下文名称 | 无 |
+| `toll_allow` | 该用户被允许使用的呼叫类别标签，以逗号分隔。拨号计划通过检查此变量授权呼叫类型。 | 与拨号计划条件匹配的任意字符串标签 | 无 |
+| `accountcode` | 与此用户关联的呼叫写入 CDR 记录时使用的计费或报告标识。 | 任意字符串 | 无 |
+| `effective_caller_id_name` | 此用户发起内部呼叫时显示的主叫姓名。 | 任意字符串 | 无 |
+| `effective_caller_id_number` | 此用户发起内部呼叫时显示的主叫号码。 | E.164 或分机号 | 无 |
+| `outbound_caller_id_name` | 此用户通过外部网关呼叫时使用的主叫姓名。 | 任意字符串 | 默认配置中为 `$${outbound_caller_name}` |
+| `outbound_caller_id_number` | 此用户通过外部网关呼叫时使用的主叫号码。 | E.164 号码 | 默认配置中为 `$${outbound_caller_id}` |
+| `callgroup` | `group_call` API 和组代接功能使用的组标签，用于将用户归入逻辑呼叫组。 | 任意字符串 | 无 |
+| `presence_id` | 此用户发布的呈现状态标识，格式为 `user@domain`。BLF 和状态订阅需要它。 | `user@domain` 字符串 | 无 |
+| `process_cdr` | 控制是否为此用户相关的呼叫写入 CDR 记录。 | `true`、`false`、`a_leg`、`b_leg` | `true` |
+| `record_stereo` | 为 `true` 时，以立体声录制通话，两条呼叫腿分别占用不同声道。默认配置在域级设置。 | `true`、`false` | `false` |
+| `default_gateway` | 用作此用户默认出站路由的网关名称。 | 网关名称 | 默认配置中为 `$${default_provider}` |
+| `transfer_fallback_extension` | 盲转失败、未能接通时拨打的分机。 | 分机字符串 | 默认配置中为 `operator` |
+
+---
+
+## 用户组 {#groups}
+
+同一域名内，用户可组织成具名 `<group>` 元素。用户组有两个用途：使 `group_call` API 能按组寻呼多个用户，并提供在 directory API 输出中显示的组标签。
+
+默认 `default.xml` 定义了四个组。`default` 组使用 glob include 加载全部用户文件：
+
+```xml
+<groups>
+  <group name="default">
+    <users>
+      <X-PRE-PROCESS cmd="include" data="default/*.xml"/>
+    </users>
+  </group>
+
+  <group name="sales">
+    <users>
+      <user id="1000" type="pointer"/>
+      <user id="1001" type="pointer"/>
+      <user id="1002" type="pointer"/>
+      <user id="1003" type="pointer"/>
+      <user id="1004" type="pointer"/>
+    </users>
+  </group>
+
+  <group name="billing">
+    <users>
+      <user id="1005" type="pointer"/>
+      <user id="1006" type="pointer"/>
+      <user id="1007" type="pointer"/>
+      <user id="1008" type="pointer"/>
+      <user id="1009" type="pointer"/>
+    </users>
+  </group>
+
+  <group name="support">
+    <users>
+      <user id="1010" type="pointer"/>
+      <user id="1011" type="pointer"/>
+      <user id="1012" type="pointer"/>
+      <user id="1013" type="pointer"/>
+      <user id="1014" type="pointer"/>
+    </users>
+  </group>
+</groups>
+```
+
+`<group>` 元素可以有自己的 `<params>` 块。组的 `<params>` 中的 `dial-string` 和 `group-dial-string` 参数，会在 `group_call` 解析组成员时覆盖域级的 `dial-string`。
+
+### 指针用户 {#pointer-users}
+
+带 `type="pointer"` 的 `<user>` 元素本身不定义用户记录，而是告诉目录查询在域名内的其他位置继续查找完整用户记录（通常是实际记录所在的 `default` 组）。指针条目允许用户归属多个组而无需重复定义。
+
+```xml
+<user id="1000" type="pointer"/>
+```
+
+FreeSWITCH 解析指针时，会在不带 `type="pointer"` 限制的情况下使用同一个 `id` 重新查询目录，并使用找到的用户记录中的参数和变量。
+
+### 呼叫用户组 {#calling-a-group}
+
+`group_call` API 生成一个拨号字符串，可同时或依次呼叫具名组的全部成员。在拨号计划中可通过 API 展开语法调用它：
+
+```xml
+<action application="bridge" data="${group_call(sales@$${domain})}"/>
+```
+
+语法为 `group_call(groupname@domain)`。可选的后缀标志控制发起呼叫的模式：
+
+| 标志 | 模式 |
+|---|---|
+| `+A` | 同时呼叫（所有成员同时桥接，以逗号分隔） |
+| `+F` | 顺序呼叫（逐个尝试成员，以竖线分隔） |
+| `+E` | 企业级呼叫发起（使用 enterprise originate 分隔符） |
+
+未指定标志时，默认模式为同时呼叫（`+A`）。
+
+---
+
+## 用户目录与 SIP 认证 {#directory-and-sip-authentication}
+
+SIP UA 发送携带摘要认证凭据的 REGISTER 或 INVITE 时，FreeSWITCH 通过 mod_sofia 查询用户目录。查询使用 SIP `From` 或 `To` 头中的域名，具体取决于配置实例设置，返回用户的 `password` 或 `a1-hash` 参数。
+
+如果存在 `password`，FreeSWITCH 在内部计算 HA1 摘要 `MD5(user:domain:password)`，再与 SIP Authorization 头中的凭据比较。如果存在 `a1-hash`，则直接使用存储的哈希，不必在本地计算 MD5。每个用户只应设置二者之一。
+
+如果配置了 `auth-acl`，请求来源 IP 必须通过指定 ACL，否则不论凭据检查结果如何，注册都会被拒绝。
+
+将 `sip-forbid-register` 设为 `true`，会无条件以 403 响应拒绝该用户的 REGISTER 请求，不论凭据是否正确。
+
+`<user>` 元素上的 `cidr` 属性（参见前文“用户属性”）本身不参与摘要认证路径。构建 ACL 时，FreeSWITCH 遍历目录，对每个带 `cidr` 的 `<user>`，将与该地址范围关联的 `<user-id>@<domain>` 标记加入节点名称包含该域名的任何 `network-list` ACL。之后 SIP 配置实例必须通过 `apply-inbound-acl` 或 `apply-register-acl` 引用该 ACL，才会启用基于 IP 的认证；没有这种引用时，`cidr` 属性不会生效，请求仍按正常流程接受摘要认证挑战。
+
+FreeSWITCH 具体使用哪个域名进行查询，取决于 SIP 配置实例中的 `auth-calls` 和相关设置。SIP 配置实例章节对此作了介绍。
+
+---
+
+## 使用 user\_context 路由入站呼叫 {#routing-inbound-calls-with-user_context}
+
+已注册用户发起呼叫时，端点模块（mod_sofia 或 mod_verto）会从已认证用户的目录记录中读取 `user_context` 变量，并将其作为该呼叫腿的拨号计划上下文。
+
+```xml
+<variable name="user_context" value="default"/>
+```
+
+因此，只要为不同用户分配不同的 `user_context` 值，就能将其呼叫路由到不同上下文。如果用户的 `user_context` 设为 `restricted`，其呼叫将在 `conf/dialplan/` 中的 `restricted` 上下文匹配；`user_context` 设为 `default` 的用户则使用标准的 `default` 上下文。
+
+若用户级和域级变量都没有 `user_context`，端点模块就回退到配置实例的默认上下文。拨号计划章节介绍了上下文结构。
+
+---
+
+## 可扩展的参数与变量 {#open-ended-params-and-variables}
+
+`<params>` 和 `<variables>` 块允许使用任意名称-值对。内置模块无法识别的参数在认证和注册期间会被静默忽略。定义在 `<variables>` 中的变量则会无条件设置到与该用户关联的每条呼叫腿上，并在拨号计划、CDR 模块及读取通道变量的应用中持续可用。
+
+这意味着用户记录可以保存任意数据，供自定义拨号计划逻辑使用：
+
+```xml
+<variable name="department" value="engineering"/>
+<variable name="max_calls" value="5"/>
+```
+
+这些值会作为该用户每条呼叫腿上的 `${department}` 和 `${max_calls}` 通道变量出现。（目录 `<variable>` 是通道变量，引用时只使用一个 `$`；`$${...}` 形式专用于 `vars.xml` 设置的全局预处理变量。）不做值校验，接受任意字符串。

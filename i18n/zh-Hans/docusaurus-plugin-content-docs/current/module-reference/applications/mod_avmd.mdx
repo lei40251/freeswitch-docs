@@ -1,0 +1,178 @@
+---
+sidebar_position: 1
+id: mod_avmd
+slug: /module-reference/applications/mod_avmd
+title: "mod_avmd——答录机提示音检测"
+description: "使用 DESA-2 算法检测语音信箱提示音，并触发事件和通道变量。"
+sidebar_label: "mod_avmd"
+---
+# mod_avmd——答录机提示音检测 {#mod_avmd-—-answering-machine-and-beep-detection}
+
+`mod_avmd`（高级语音信箱检测，Advanced Voicemail Detection）在呼叫腿上附加媒体钩子，实时分析音频流，以检测 440～2000 Hz 范围内的单频提示音。检测采用改进的 DESA-2 算法，通过多个并行检测线程运行可配置的振幅和频率估计器。确认检测到提示音后，模块触发 `avmd::beep` 事件，并设置后续拨号计划动作或脚本可检查的通道变量。
+
+构建预测式拨号或点击呼叫流程时，如果需要跳过语音信箱问候语，并在录音提示音响起后立即作出响应，例如播放预录语音或在留下不必要录音前断开，可采用此模块。
+
+`mod_avmd` 检测的是提示音；它**不判断应答者是人还是机器**。有关这种分类，请参见商业模块 [`mod_com_amd`](./mod_com_amd.mdx)。
+
+<SignalWireCallout
+  title="将 AMD 与提示音检测合并为一种方法"
+  href="https://signalwire.com/docs/swml/reference/calling/detect-machine"
+  page="mod-avmd"
+  linkText="查看 SWML 中的 detect_machine">
+
+托管的 SignalWire 将答录机和传真检测整合到 SWML（基于 JSON/YAML 的呼叫控制标记语言）的 `detect_machine` 方法中。平台包含商业 AMD 引擎（`mod_com_amd`），因此可以直接获得商业级检测，无需单独购买许可证或加载模块。设置 `detect_message_end: true` 后，检测会在提示音或问候语结束时停止，适用于该模块服务的预测拨号场景。结果通过 `status_url` Webhook 发送；`wait` 控制阻塞式或异步检测。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_avmd`。默认的 `modules.conf.xml` 加载列表**不包含**该模块，需要手动添加：
+
+```xml
+<load module="mod_avmd"/>
+```
+
+无需特殊构建标志；启用应用模块组后，会作为标准 FreeSWITCH 构建的一部分编译。
+
+## 配置：`avmd.conf.xml` {#configuration-avmdconfxml}
+
+`mod_avmd` 加载时读取 `autoload_configs/avmd.conf.xml`，每次触发 `reloadxml` 事件或调用 `avmd reload` API 命令时重新读取。所有参数位于单一的 `<settings>` 块中。每会话参数可在拨号计划层覆盖（见[拨号计划应用](#dialplan-applications)）。
+
+### 参数参考 {#parameter-reference}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `debug` | 记录 DESA-2 中间计算值 | `0` / `1` | `0` |
+| `report_status` | 记录检测状态、会话启停诊断信息及配置转储 | `0` / `1` | `1` |
+| `fast_math` | 使用内存映射的反余弦查找表加速计算（仅非 Windows） | `0` / `1` | `0` |
+| `require_continuous_streak` | 声明检测到提示音前，要求连续出现 SMA 频率样本（不中断重置） | `0` / `1` | `1` |
+| `sample_n_continuous_streak` | 需要连续满足条件的频率 SMA 样本数 | 整数 0～65535 | `3` |
+| `sample_n_to_skip` | 每帧开始和重置后跳过的样本数，以丢弃不准确的初始估计 | 整数 0～65535 | `0` |
+| `require_continuous_streak_amp` | 与 `require_continuous_streak` 相同，但用于振幅估计器 | `0` / `1` | `1` |
+| `sample_n_continuous_streak_amp` | 需要连续满足条件的振幅 SMA 样本数 | 整数 0～65535 | `3` |
+| `simplified_estimation` | 在 [0, π/2] 区间以 x 近似 sin(x)，提高频率估计速度 | `0` / `1` | `1` |
+| `inbound_channel` | 对入站呼叫腿（写入流）启用检测 | `0` / `1` | `0` |
+| `outbound_channel` | 对出站呼叫腿（读取流）启用检测 | `0` / `1` | `1` |
+| `detection_mode` | 提示音判定条件：`0` 仅振幅，`1` 仅频率，`2` 两者都满足 | `0`、`1`、`2` | `2` |
+| `detectors_n` | 每会话并行检测线程数 | 整数 0～255 | `36` |
+| `detectors_lagged_n` | 每会话额外的滞后检测线程数 | 整数 0～255 | `1` |
+
+### 配置示例 {#configuration-example}
+
+```xml
+<configuration name="avmd.conf" description="AVMD config">
+    <settings>
+        <param name="debug"                          value="0"/>
+        <param name="report_status"                  value="1"/>
+        <param name="fast_math"                      value="0"/>
+        <param name="require_continuous_streak"      value="1"/>
+        <param name="sample_n_continuous_streak"     value="3"/>
+        <param name="sample_n_to_skip"               value="0"/>
+        <param name="require_continuous_streak_amp"  value="1"/>
+        <param name="sample_n_continuous_streak_amp" value="3"/>
+        <param name="simplified_estimation"          value="1"/>
+        <param name="inbound_channel"                value="0"/>
+        <param name="outbound_channel"               value="1"/>
+        <param name="detection_mode"                 value="2"/>
+        <param name="detectors_n"                    value="36"/>
+        <param name="detectors_lagged_n"             value="1"/>
+    </settings>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `avmd_start` | 为当前会话附加媒体钩子，开始检测提示音 | 可选的逗号分隔 `key=value` 对，用于覆盖任意全局配置 |
+| `avmd_stop` | 移除媒体钩子并停止检测，触发 `avmd::stop` 事件 | 无 |
+| `avmd` | 已弃用的合并启停接口（新拨号计划不应使用） | 传入 `stop` 停止；无参数则启动 |
+
+### `avmd_start`
+
+在当前会话启动检测。不提供参数时使用全局配置值。可以通过逗号分隔的 `key=value` 参数覆盖任意一部分配置；这些值仅影响当前会话。
+
+```xml
+<!-- Start detection on an inbound leg, using frequency+amplitude mode -->
+<action application="avmd_start" data="inbound_channel=1,outbound_channel=0,detection_mode=2"/>
+```
+
+```xml
+<!-- Start with global defaults (outbound leg, detection_mode=2) -->
+<action application="avmd_start"/>
+```
+
+### `avmd_stop`
+
+停止检测并触发 `avmd::stop` 事件，其中包含最终提示音状态和总运行时间。
+
+```xml
+<action application="avmd_stop"/>
+```
+
+### 典型拨号计划模式 {#typical-dialplan-pattern}
+
+```xml
+<extension name="detect_beep">
+    <condition field="destination_number" expression="^5551234$">
+        <action application="avmd_start" data="outbound_channel=1,detection_mode=2"/>
+        <action application="bridge"     data="sofia/gateway/mycarrier/15551234"/>
+        <action application="avmd_stop"/>
+    </condition>
+</extension>
+```
+
+## API 命令 {#api-commands}
+
+`avmd` API 命令可从 `fs_cli` 或 ESL 调用。完整语法如下：
+
+```
+avmd <uuid> < start | stop >
+avmd set  < inbound | outbound | default >
+avmd load < inbound | outbound >
+avmd reload
+avmd show
+```
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `avmd <uuid> start` | 按 UUID 在现有会话上启动检测 | `avmd <uuid> start` |
+| `avmd <uuid> stop` | 停止会话检测 | `avmd <uuid> stop` |
+| `avmd set inbound` | 将全局方向设为 inbound=1、outbound=0（只修改内存） | `avmd set inbound` |
+| `avmd set outbound` | 将全局方向设为 inbound=0、outbound=1（只修改内存） | `avmd set outbound` |
+| `avmd set default` | 将所有全局设置恢复出厂默认值（只修改内存） | `avmd set default` |
+| `avmd load inbound` | 重新加载 XML 配置，然后将方向设为入站 | `avmd load inbound` |
+| `avmd load outbound` | 重新加载 XML 配置，然后将方向设为出站 | `avmd load outbound` |
+| `avmd reload` | 从磁盘重新加载 XML 配置 | `avmd reload` |
+| `avmd show` | 显示当前全局设置及活动会话数量 | `avmd show` |
+
+### `fs_cli` 示例 {#fs_cli-examples}
+
+```
+avmd 3e7a2707-cd5a-4b5e-8c7f-1234abcd start
+avmd 3e7a2707-cd5a-4b5e-8c7f-1234abcd stop
+avmd reload
+avmd show
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `avmd_detect` | 写入 | 检测到提示音时设置为 `TRUE` |
+| `avmd_total_time` | 写入 | 从检测开始到检测停止的经过时间，单位毫秒 |
+| `execute_on_avmd_beep` | 读取 | 检测到提示音后，模块通过 `switch_channel_execute_on` 立即执行的拨号计划动作字符串 |
+
+## 事件 {#events}
+
+`mod_avmd` 注册并触发三个 `SWITCH_EVENT_CUSTOM` 自定义事件子类：
+
+| 事件子类 | 触发时机 | 额外事件头 |
+|---|---|---|
+| `avmd::start` | `avmd_start`（或 `avmd <uuid> start`）成功附加媒体钩子时 | `Unique-ID`、`Start-time` |
+| `avmd::beep` | 在音频流上检测到提示音时 | `Unique-ID`、`Beep-Status`（`DETECTED`）、`Frequency`、`Frequency-variance`、`Amplitude`、`Amplitude-variance`、`Detection-time`、`Detector-resolution`、`Detector-offset`、`Detector-index` |
+| `avmd::stop` | `avmd_stop`（或 `avmd <uuid> stop`）移除媒体钩子时 | `Unique-ID`、`Beep-Status`（`DETECTED` 或 `NOTDETECTED`）、`Total-time` |
+
+每个事件都会发送给发起会话队列和全局事件总线。
+
+**源码：** `src/mod/applications/mod_avmd`、`conf/vanilla/autoload_configs/avmd.conf.xml`

@@ -1,0 +1,359 @@
+---
+sidebar_position: 4
+id: scripting
+slug: /integration/scripting
+title: "第 28 章：脚本集成"
+description: "将 Lua、Perl、Python、JavaScript（V8）、Java 嵌入 FreeSWITCH，用于呼叫流程、动态 XML 和事件响应。"
+sidebar_label: "28. 脚本集成"
+---
+
+# 第 28 章：脚本集成 {#chapter-28-scripting-integration}
+
+FreeSWITCH 在交换机进程内部嵌入脚本语言运行时，使脚本能够通过拨号计划控制呼叫流程、动态提供 XML 配置、响应事件，并作为后台守护程序运行。Lua 是默认嵌入式语言，会自动加载；Perl、Python 3、V8（JavaScript）及 Java 则作为可选模块提供，接入方式基本一致。
+
+<SignalWireCallout
+  title="使用 Python 实现呼叫逻辑，而不必嵌入运行时"
+  href="https://signalwire.com/docs/server-sdks/guides/build-ai-agents"
+  page="scripting"
+  linkText="查看 SignalWire SDK">
+
+SignalWire SDK 允许将呼叫逻辑实现为普通 Python 或 TypeScript 服务，无需在交换机内嵌 `mod_lua` 或脚本解释器。同一 SDK 也可构建托管的语音 AI 坐席，并按代码中定义的步骤执行。
+
+</SignalWireCallout>
+
+## 嵌入式脚本概览 {#embedded-scripting-overview}
+
+语言模块直接运行在 FreeSWITCH 进程中。脚本使用独立的 Lua 状态（或对应语言的运行时），通过模块提供的 SWIG 绑定完整访问 FreeSWITCH C API。脚本不是独立外部进程，因此不需要进程间通信（IPC）。
+
+`mod_lua` 默认通过 `modules.conf.xml` 加载。其他语言模块（`mod_perl`、`mod_python3`、`mod_v8`、`mod_java`）在默认配置中均被注释，必须显式启用。
+
+每种语言模块都注册类似的集成入口：
+
+- 拨号计划**应用**（例如 `lua`），在活动呼叫腿的上下文中执行脚本。
+- **API 命令**，在没有关联呼叫腿的环境中执行脚本。
+- **XML 处理器**绑定，通过脚本动态提供配置。
+- **事件钩子**机制，用于响应交换机事件。
+
+---
+
+## 脚本目录 {#script-directory}
+
+FreeSWITCH 使用内置预处理变量 `$${script_dir}` 解析相对脚本路径。此变量在编译时设置，标准安装中通常是 `/usr/local/freeswitch/scripts`。可以在 `fs_cli` 中查询当前值：
+
+```
+eval $${script_dir}
+```
+
+传给 `lua` 应用或 `luarun` API 的脚本名称如果不以 `/` 开头，FreeSWITCH 会在加载前添加 `$${script_dir}` 和路径分隔符。绝对路径则直接使用，不进行此解析。
+
+---
+
+## lua.conf.xml 参考 {#luaconfxml-reference}
+
+`lua.conf.xml` 位于 `$${conf_dir}/autoload_configs/`。模块加载时读取一次。在 `fs_cli` 中执行 `reload mod_lua` 可触发重新加载。
+
+### 参数表 {#parameter-table}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `script-directory` | 向 Lua `LUA_PATH` 环境变量追加搜索路径，使 `require` 能找到 `.lua` 模块。使用 `?.lua` 通配模式；允许多个条目。 | 包含 `?` 通配符的路径，如 `$${script_dir}/?.lua` | 无 |
+| `module-directory` | 向 Lua `LUA_CPATH` 添加原生 C 扩展模块（`.so` 或 `.dll`）搜索路径；允许多个条目。 | 包含 `?` 通配符的路径，如 `/usr/lib/lua/5.1/?.so` | 无 |
+| `xml-handler-script` | FreeSWITCH 通过 `xml-handler-bindings` 注册的 XML 段落需要解析时运行的 Lua 脚本。必须放在 `xml-handler-bindings` 之前。 | `.lua` 文件的绝对或相对路径 | 无 |
+| `xml-handler-bindings` | 将 `xml-handler-script` 注册为一个或多个配置段落的 XML 获取处理器。要求在同一 `<settings>` 块中先设置 `xml-handler-script`。 | `dialplan`、`directory`、`configuration`、`phrases`，或空格分隔的组合 | 无 |
+| `startup-script` | 模块加载时，在独立后台线程中启动 Lua 脚本。允许多个条目，每个 `<param>` 一个脚本。 | 脚本文件名（相对于 `$${script_dir}` 解析） | 无 |
+
+`<settings>` 中与 `<param>` 同级的 `<hook>` 元素可将 Lua 脚本绑定到 FreeSWITCH 事件。详见[事件钩子](#event-hooks)。
+
+### 配置示例 {#configuration-example}
+
+```xml
+<configuration name="lua.conf" description="LUA Configuration">
+  <settings>
+
+    <!-- Add directories to LUA_PATH for require() resolution -->
+    <param name="script-directory" value="$${script_dir}/?.lua"/>
+
+    <!-- Add directories to LUA_CPATH for native C modules -->
+    <param name="module-directory" value="/usr/local/lib/lua/5.1/?.so"/>
+
+    <!-- XML handler: must appear before xml-handler-bindings -->
+    <param name="xml-handler-script" value="xml_handler.lua"/>
+    <param name="xml-handler-bindings" value="dialplan"/>
+
+    <!-- Background daemon scripts launched at module load -->
+    <param name="startup-script" value="event_daemon.lua"/>
+
+    <!-- Event hook -->
+    <hook event="CUSTOM" subclass="conference::maintenance" script="catch-event.lua"/>
+
+  </settings>
+</configuration>
+```
+
+---
+
+## 从拨号计划调用脚本 {#invoking-scripts-from-the-dialplan}
+
+拨号计划中的 `lua` 应用在呼叫腿上同步执行脚本。脚本运行期间呼叫被占用。模块会自动将 `session` 对象注入脚本，并命名为全局变量 `session`。
+
+**语法：**
+
+```
+<action application="lua" data="script_name.lua [arg1 arg2 ...]"/>
+```
+
+如果传入了参数，脚本可通过全局表 `argv` 读取。`argv[0]` 为脚本文件名，实际参数从 `argv[1]` 开始。
+
+**拨号计划示例：**
+
+```xml
+<extension name="ivr-entry">
+  <condition field="destination_number" expression="^1000$">
+    <action application="lua" data="ivr_menu.lua option1 option2"/>
+  </condition>
+</extension>
+```
+
+由于使用相对路径，上例的 `ivr_menu.lua` 会解析为 `$${script_dir}/ivr_menu.lua`。也可以指定绝对路径，例如 `/opt/scripts/ivr_menu.lua`。
+
+`lua` 应用使用 `SAF_SUPPORT_NOMEDIA`、`SAF_ROUTING_EXEC`、`SAF_ZOMBIE_EXEC` 标志注册，因此可以在无媒体通道、路由阶段以及 Zombie 通道上调用。
+
+---
+
+## 从控制台运行脚本 {#running-scripts-from-the-console}
+
+`fs_cli` 或 ESL API 提供两条命令。
+
+### `luarun`
+
+在独立后台线程中运行脚本，并立即返回 `+OK`；此时没有关联的呼叫 Session。
+
+```
+luarun script_name.lua [arg1 arg2 ...]
+```
+
+### `lua`
+
+同步执行脚本，并将输出返回到命令流中。如果经由 `/api/` 或 `/webapi/` 下的 HTTP API 端点调用，错误会以 HTML 形式返回；否则使用纯文本。
+
+```
+lua script_name.lua [arg1 arg2 ...]
+```
+
+`luarun` 不会长时间阻塞控制台；`lua` 则会阻塞直到脚本执行完毕。
+
+---
+
+## 将 Lua 用作 XML 处理器 {#lua-as-an-xml-handler}
+
+当 FreeSWITCH 需要解析配置段落时，会调用已注册的 XML 处理器。Lua 脚本可以为 `dialplan`、`directory`、`configuration` 或 `phrases` 提供 XML，从而替代或补充静态文件。
+
+### 绑定处理器 {#wiring-the-handler}
+
+在 `lua.conf.xml` 中通过两个参数接入处理器，顺序必须为 `xml-handler-script` 在前，`xml-handler-bindings` 在后。
+
+```xml
+<param name="xml-handler-script" value="xml_handler.lua"/>
+<param name="xml-handler-bindings" value="dialplan"/>
+```
+
+FreeSWITCH 需要获取已绑定段落的 XML 时，会调用脚本，并通过 Lua 全局变量传入上下文：
+
+- `XML_REQUEST`：包含 `section`、`tag_name`、`key_name`、`key_value` 键的表，用于描述请求的 XML 内容。
+- `params`：FreeSWITCH 事件对象，在可用时包含通道变量及其他上下文头字段。
+
+脚本返回前，必须将全局变量 `XML_STRING` 设置为所请求段落的有效 XML 字符串。FreeSWITCH 会使用与静态文件相同的解析器解析 `XML_STRING`。
+
+**最简处理器框架：**
+
+```lua
+-- xml_handler.lua
+local req = XML_REQUEST
+-- req.section, req.tag_name, req.key_name, req.key_value are populated by FreeSWITCH
+
+XML_STRING = [[
+<document type="freeswitch/xml">
+  <section name="dialplan">
+    <!-- dynamically constructed dialplan XML here -->
+  </section>
+</document>
+]]
+```
+
+### 可绑定的目标段落 {#binding-targets}
+
+`xml-handler-bindings` 的值会传给内部函数 `switch_xml_parse_section_string`。可识别的值如下：
+
+| 值 | 提供的 XML 段落 |
+|---|---|
+| `dialplan` | 呼叫路由期间获取的拨号计划 XML。 |
+| `directory` | SIP 注册和身份认证期间获取的用户目录 XML。 |
+| `configuration` | 模块配置 XML。 |
+| `phrases` | Phrase 宏 XML。 |
+
+可以在一个 `xml-handler-bindings` 参数中用空格分隔多个绑定，也可以添加多组 `xml-handler-script` / `xml-handler-bindings`。注意，一个 `xml-handler-script` 仅适用于 `<settings>` 中紧随其后的 `xml-handler-bindings`：模块按顺序处理参数，在注册绑定前先设置处理器。
+
+---
+
+## 事件钩子 {#event-hooks}
+
+`<settings>` 内的 `<hook>` 元素可将 Lua 脚本绑定到 FreeSWITCH 事件。每当事件触发，脚本都会在专用线程中运行。
+
+```xml
+<hook event="CUSTOM" subclass="conference::maintenance" script="catch-event.lua"/>
+```
+
+| 属性 | 用途 | 必填 |
+|---|---|---|
+| `event` | FreeSWITCH 事件类型名称，例如 `CHANNEL_ANSWER`、`CUSTOM`。 | 是 |
+| `subclass` | 事件子类，用于 `CUSTOM` 事件，例如 `conference::maintenance`。 | 否 |
+| `script` | 脚本文件名，相对于 `$${script_dir}` 解析。 | 是 |
+
+在脚本内，事件以全局 `event` 对象形式提供。允许多个 `<hook>` 元素，每个都会注册独立绑定。
+
+---
+
+## 启动脚本 {#startup-scripts}
+
+`startup-script` 参数在 `mod_lua` 加载时启动后台线程运行 Lua 脚本。脚本可以按需要运行任意时长，包括无限期运行。多个 `startup-script` 参数会按顺序处理，每个之间让出 10 毫秒，以避免 Lua 初始化竞争。
+
+```xml
+<param name="startup-script" value="event_daemon.lua"/>
+<param name="startup-script" value="presence_manager.lua"/>
+```
+
+启动脚本没有关联的呼叫 Session，适合用于常驻事件监听器、计时器或外部系统集成循环。
+
+---
+
+## 其他语言模块 {#other-language-modules}
+
+`mod_perl`、`mod_python3`、`mod_v8` 与 `mod_java` 通过各自的配置文件及注册的拨号计划应用提供等价集成入口。这些模块默认均不加载；需要在 `modules.conf.xml` 中取消注释，并确保对应的 `autoload_configs` 配置文件存在。
+
+这些模块一般提供两类与 Lua 的 `luarun` 和 `lua` 对应的 API 命令：一类在独立后台线程中启动脚本并立即返回；另一类同步执行脚本并向调用方返回输出。
+
+| 模块 | 拨号计划应用 | 后台 API 命令 | 同步 API 命令 | 配置文件 |
+|---|---|---|---|---|
+| `mod_perl` | `perl` | `perlrun` | `perl` | `perl.conf.xml` |
+| `mod_python3` | `python` | `pyrun` | `python` | `python.conf.xml` |
+| `mod_v8` | `javascript` | `jsrun` | `jsapi` | `v8.conf.xml` |
+| `mod_java` | `java` | （未注册） | （未注册） | `java.conf.xml` |
+
+`mod_java` 只注册了 `java` 拨号计划应用，源码中没有注册从控制台或 ESL 执行 Java 脚本的 API 命令。Java 模块使用不同的调用模型：所有脚本执行都经由 `java.conf.xml` 配置的 `org.freeswitch.Launcher` Java 类调度，不提供相当于 `luarun` 或 `perlrun` 的命令级 API。
+
+`mod_v8` 还提供 `jsmon on|off`，用于启停运行时性能监控，以及 `jsps`，用于查看运行中的脚本进程状态；其他语言模块没有对应命令。
+
+### 各语言引擎的配置差异 {#per-engine-configuration}
+
+`mod_perl`、`mod_python3` 与 `mod_v8` 的 XML 处理器使用与 Lua **相同的参数名**：先配置 `xml-handler-script`，再配置 `xml-handler-bindings`，顺序规则相同。三个引擎的 `startup-script` 行为也一致。差异主要在于各自额外支持哪些参数，以及是否支持 `<hook>`。
+
+`mod_java` 是例外：它完全不使用 `<param>` 元素，有独立的配置结构，见下文。
+
+| 引擎 | 配置文件 | 可识别的 `<param>` 名称 | 支持 `<hook>` |
+|---|---|---|---|
+| Lua | `lua.conf.xml` | `script-directory`, `module-directory`, `xml-handler-script`, `xml-handler-bindings`, `startup-script` | 是 |
+| Perl | `perl.conf.xml` | `xml-handler-script`, `xml-handler-bindings`, `startup-script` | 否 |
+| Python 3 | `python.conf.xml` | `xml-handler-script`, `xml-handler-bindings`, `startup-script` | 否 |
+| V8 | `v8.conf.xml` | `xml-handler-script`, `xml-handler-bindings`, `startup-script`, `script-caching`, `cache-expires-sec` | 是 |
+| Java | `java.conf.xml` | 无（使用 `<javavm>`、`<options>`、`<startup>`、`<shutdown>`，见[第 9.5 节](#mod-java)） | 否 |
+
+注意 Perl 和 Python 3 **只**识别上述三个共用参数。它们没有实现 `script-directory`、`module-directory`，也不解析 `<hook>`；只有 Lua 和 V8 能从配置中绑定事件钩子。
+
+### mod_perl（`perl.conf.xml`）{#mod_perl-perlconfxml}
+
+`mod_perl` 只解析三个参数，名称及语义与 Lua 对应参数相同：
+
+| 参数 | 用途 |
+|---|---|
+| `xml-handler-script` | 为绑定的段落提供 XML 的 Perl 脚本，必须在 `xml-handler-bindings` 之前设置。 |
+| `xml-handler-bindings` | 处理器绑定的 XML 段落（`dialplan`、`directory`、`configuration`、`phrases`）。 |
+| `startup-script` | 模块加载时在后台线程运行的 Perl 脚本；允许多个条目。 |
+
+```xml
+<configuration name="perl.conf" description="PERL Configuration">
+  <settings>
+    <param name="xml-handler-script" value="$${temp_dir}/xml.pl"/>
+    <param name="xml-handler-bindings" value="dialplan"/>
+    <param name="startup-script" value="startup_script_1.pl"/>
+  </settings>
+</configuration>
+```
+
+它既不支持 `<hook>`，也没有脚本目录或模块目录参数。
+
+### mod_python3（`python.conf.xml`）{#mod_python3-pythonconfxml}
+
+`mod_python3` 识别与 `mod_perl` 相同的三个参数。`xml-handler-script` 和 `startup-script` 的值表示 Python **模块名称**（可在解释器的搜索路径中导入），而不是文件路径。
+
+```xml
+<configuration name="python.conf" description="PYTHON Configuration">
+  <settings>
+    <param name="xml-handler-script" value="dp"/>
+    <param name="xml-handler-bindings" value="dialplan"/>
+    <param name="startup-script" value="startup_script_1"/>
+  </settings>
+</configuration>
+```
+
+与 Perl 一样，不支持 `<hook>`。
+
+### mod_v8（`v8.conf.xml`）{#mod_v8-v8confxml}
+
+`mod_v8` 支持三个共用 Lua 参数，还额外增加两个 V8 专用缓存参数、用于加载原生 V8 扩展的 `<modules>` 块，以及 `<hook>` 支持。
+
+| 参数 | 用途 | 默认值 |
+|---|---|---|
+| `xml-handler-script` | 已绑定段落的 JavaScript 处理器。 | 无 |
+| `xml-handler-bindings` | 要绑定的 XML 段落（`dialplan`、`directory`、`configuration`、`phrases`）。 | 无 |
+| `startup-script` | 模块加载时在后台线程运行的 JavaScript；可多次设置。 | 无 |
+| `script-caching` | 启用编译脚本缓存（`enabled` / `disabled`）。 | `disabled` |
+| `cache-expires-sec` | 编译脚本缓存过期时间，单位秒；`0` 表示永不过期。只有使用 V8 主版本 5 或以上编译时才会解析。 | `0` |
+
+`script-caching` 和 `cache-expires-sec` 参数只有在使用 V8 主版本 5 或以上编译 `mod_v8` 时才会包含在构建中；对旧版 V8 构建不会生效。
+
+与 `<settings>` 同级的 `<modules>` 块用于加载 V8 运行时中的原生扩展模块：
+
+```xml
+<configuration name="v8.conf" description="Google V8 JavaScript Plug-Ins">
+  <settings>
+    <param name="script-caching" value="enabled"/>
+    <param name="cache-expires-sec" value="3600"/>
+    <param name="startup-script" value="startup1.js"/>
+    <param name="xml-handler-script" value="directory.js"/>
+    <param name="xml-handler-bindings" value="directory"/>
+    <hook event="CUSTOM" subclass="sofia::register" script="catch-event.js"/>
+    <hook event="CHANNEL_HANGUP" script="hangup-event.js"/>
+  </settings>
+  <modules>
+    <load module="mod_v8_skel"/>
+  </modules>
+</configuration>
+```
+
+`<hook>` 的作用与 Lua 相同：可指定 `event`、可选的 `subclass` 以及 `script`，每次匹配事件时调用对应脚本。在脚本中，事件通过全局对象 `event` 访问。
+
+### mod_java（`java.conf.xml`）{#mod-java}
+
+`mod_java` **不使用** `<param>` 元素。其配置是在 `<configuration>` 下直接设置专门的子元素：
+
+| 元素 | 属性 | 用途 |
+|---|---|---|
+| `<javavm>` | `path` | JVM 共享库（`libjvm.so`）的文件系统路径；必填，否则模块无法加载。 |
+| `<options>` / `<option>` | `value` | 可重复设置的 JVM 参数（例如 `-Djava.class.path=...`）。每个 `<option value="..."/>` 原样传给 `JNI_CreateJavaVM`。 |
+| `<startup>` | `class`, `method`, `arg` | 模块加载时调用的 Java 静态方法。`class` 为 JVM 风格、使用斜线分隔的类名。 |
+| `<shutdown>` | `class`, `method`, `arg` | 模块卸载时调用的 Java 静态方法。 |
+
+```xml
+<configuration name="java.conf" description="Java Plug-Ins">
+  <javavm path="/opt/jdk1.6.0_04/jre/lib/amd64/server/libjvm.so"/>
+  <options>
+    <option value="-Djava.class.path=$${script_dir}/freeswitch.jar:$${script_dir}/example.jar"/>
+    <option value="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:8000"/>
+  </options>
+  <startup class="org/freeswitch/example/ApplicationLauncher" method="startup"/>
+</configuration>
+```
+
+模块始终在传入的 JVM 参数后追加 `-Djava.library.path=<mod_dir>`，以便定位原生 JNI 桥接库。
+
+`org.freeswitch.Launcher` 类在模块的 **C 源码中硬编码**：模块直接通过 `FindClass` 加载它，使其静态初始化器加载 JNI 库，不能通过配置更改。通过 `<startup>` 设置的类（如上例中的 `org.freeswitch.example.ApplicationLauncher`）是你自己的引导类，与内部 `Launcher` 无关。`mod_java` 不支持 `<hook>`。

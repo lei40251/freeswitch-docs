@@ -1,0 +1,146 @@
+---
+sidebar_position: 5
+id: mod_cidlookup
+slug: /module-reference/applications/mod_cidlookup
+title: "mod_cidlookup——主叫姓名查询"
+description: "配置基于 ODBC、缓存和 HTTP 的主叫姓名与归属地区查询。"
+sidebar_label: "mod_cidlookup"
+---
+# mod_cidlookup——主叫姓名查询 {#mod_cidlookup-—-caller-id-name-lookup}
+
+`mod_cidlookup` 是在呼叫期间将电话号码解析为主叫姓名的应用模块。它支持三种查询来源，按优先级使用：本地 ODBC 数据库、`mod_memcache` 缓存结果，以及远程 HTTP 端点（包括旧版 Whitepages.com API）。查询结果直接写入会话的主叫资料，因此后续拨号计划逻辑可以读到更新后的 `caller_id_name`。
+
+如果需要在呼叫路由、语音播报或来电弹屏之前，为入站呼叫补充易于阅读的主叫姓名，可以使用此模块。既可以在拨号计划 `<action>` 中调用，也可以通过 `fs_cli` 临时测试。
+
+<SignalWireCallout
+  title="通过 API 查询主叫号码信息"
+  href="https://signalwire.com/docs/platform/phone-numbers"
+  page="mod-cidlookup"
+  linkText="查看电话号码管理文档">
+
+SignalWire 通过 REST 请求返回号码的运营商和主叫姓名数据，可从任何语言调用。无需配置专门的查询模块或缓存数据库。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+加载名称为 `mod_cidlookup`。默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，需要手动添加：
+
+```xml
+<load module="mod_cidlookup"/>
+```
+
+无需特殊构建标志；当 libcurl 可用时，标准 FreeSWITCH 构建会编译此模块（libcurl 默认可用）。
+
+## 配置：`cidlookup.conf.xml` {#configuration-cidlookupconfxml}
+
+FreeSWITCH 从 `autoload_configs` 目录读取 `cidlookup.conf.xml`。所有参数位于单一 `<settings>` 块中。可通过 `reloadxml` 重新加载配置。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `url` | 用于查询姓名的 HTTP(S) 端点，发起请求前会展开 `${caller_id_number}`。省略或注释该项可禁用 URL 查询。 | 任意 HTTP/HTTPS URL 字符串 | `NULL`（禁用） |
+| `whitepages-apikey` | Whitepages.com 反向号码查询 API 密钥。省略或注释该项可禁用 Whitepages 查询。 | 字符串 | `NULL`（禁用） |
+| `cache` | 是否使用键前缀 `fs:cidlookup:` 在 `mod_memcache` 中缓存 URL/Whitepages 查询结果。 | `true` \| `false` | `false` |
+| `cache-expire` | 缓存条目的存活时间（秒）。 | 整数（秒） | `300` |
+| `curl-timeout` | 等待 HTTP 响应的最大时间。 | 整数（毫秒） | `2000` |
+| `curl-warning-duration` | HTTP 请求超过此时间时记录警告。 | 整数（毫秒） | `1000` |
+| `odbc-dsn` | `db:user:password` 格式的 ODBC 数据源。要使用 `sql` 和 `citystate-sql` 必须设置。 | DSN 字符串 | `NULL` |
+| `sql` | 姓名查询 SQL，必须返回单列字符串，并展开 `${caller_id_number}`。省略则禁用数据库姓名查询。 | SQL 字符串 | `NULL` |
+| `citystate-sql` | 城市/州或归属地区查询 SQL，必须返回单列字符串。其他方式无法解析归属地时，用于填充 `cidlookup_area`。省略则禁用。 | SQL 字符串 | `NULL` |
+
+随附配置中的示例片段：
+
+```xml
+<configuration name="cidlookup.conf" description="cidlookup Configuration">
+  <settings>
+    <!-- comment out url to not setup a url based lookup -->
+    <param name="url" value="http://query.voipcnam.com/query.php?api_key=MYAPIKEY&amp;number=${caller_id_number}"/>
+
+    <!-- comment out whitepages-apikey to not use whitepages.com, you must
+         get an API key from http://developer.whitepages.com/ -->
+    <param name="whitepages-apikey" value="MYAPIKEY"/>
+
+    <!-- set to false to not cache (in memcache) results from the url query -->
+    <param name="cache" value="true"/>
+    <!-- expire is in seconds -->
+    <param name="cache-expire" value="86400"/>
+
+    <param name="odbc-dsn" value="phone:phone:phone"/>
+
+    <!-- comment out sql to not setup a database (directory) lookup -->
+    <param name="sql" value="
+     SELECT name||' ('||type||')' AS name
+      FROM phonebook p JOIN numbers n ON p.id = n.phonebook_id
+      WHERE n.number='${caller_id_number}'
+      LIMIT 1
+      "/>
+
+    <!-- comment out citystate-sql to not setup a database (city/state) lookup -->
+    <param name="citystate-sql" value="
+     SELECT ratecenter||' '||state as name
+      FROM npa_nxx_company_ocn
+      WHERE npa = ${caller_id_number:1:3} AND nxx = ${caller_id_number:4:3}
+      LIMIT 1
+      "/>
+  </settings>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `cidlookup` | 查询指定号码（省略时为会话自身的 `caller_id_number`）对应的主叫姓名，并就地更新主叫资料。 | `[number] [skipurl] [skipcitystate]` |
+
+**参数说明：**
+
+- `number`：要查询的 E.164 号码或数字字符串。省略时使用会话当前的 `caller_id_number`。
+- `skipurl`：可选关键字。指定后跳过 HTTP URL 和 Whitepages 查询，仅查询 ODBC 数据库。
+- `skipcitystate`：可选关键字。指定后跳过 `citystate-sql` 归属地查询，不设置 `cidlookup_area`。如果找不到姓名且指定了该选项，则将号码本身格式化为姓名（如 `614-555-1234`）。
+
+拨号计划示例：
+
+```xml
+<!-- Look up caller ID name for the inbound caller_id_number -->
+<action application="cidlookup"/>
+
+<!-- Look up a specific number, skipping the remote URL -->
+<action application="cidlookup" data="${caller_id_number} skipurl"/>
+
+<!-- Look up a number, skip both URL and city/state enrichment -->
+<action application="cidlookup" data="${caller_id_number} skipurl skipcitystate"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `cidlookup` | 从 `fs_cli` 执行主叫信息查询并返回解析出的姓名。 | `cidlookup status` \| `cidlookup <number> [skipurl] [skipcitystate] [verbose]` |
+
+**参数说明：**
+
+- `status`：输出当前运行配置（URL、缓存设置、超时、DSN 和 SQL）。
+- `number`：要查询的号码。
+- `skipurl`：跳过 HTTP 与 Whitepages 查询。
+- `skipcitystate`：跳过 `citystate-sql` 归属地查询。
+- `verbose`：以 `Name (Area) [source]` 形式在输出中附加归属地和查询来源。
+
+`fs_cli` 示例：
+
+```
+cidlookup status
+cidlookup 16145551234
+cidlookup 16145551234 verbose
+cidlookup 16145551234 skipurl skipcitystate verbose
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `caller_id_number` | 读取 | 传给查询引擎的号码。未指定参数时从会话主叫资料读取。 |
+| `original_caller_id_name` | 写入 | 保存查询覆盖主叫姓名之前的原始值。 |
+| `cidlookup_source` | 写入 | 指示姓名来自哪种查询来源：`phone_database`、`url`、`whitepages`、`npanxx_database`，或 `url,npanxx_database` 等组合字符串。来自 memcache 时附加 ` (cache)`。 |
+| `cidlookup_area` | 写入 | 通过 `citystate-sql` 或 Whitepages API 解析到的城市/州或归属地区字符串。 |
+
+**源码：** `src/mod/applications/mod_cidlookup`、`conf/vanilla/autoload_configs/cidlookup.conf.xml`

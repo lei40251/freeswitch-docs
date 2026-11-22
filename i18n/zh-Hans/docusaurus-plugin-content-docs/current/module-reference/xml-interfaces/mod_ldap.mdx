@@ -1,0 +1,64 @@
+---
+sidebar_position: 1
+id: mod_ldap
+slug: /module-reference/xml-interfaces/mod_ldap
+title: "mod_ldap — LDAP 用户目录查询"
+description: "基于 LDAPv3 简单绑定协议，通过 LDAP 服务器实现 FreeSWITCH 的目录查询接口。"
+sidebar_label: "mod_ldap"
+---
+
+# mod_ldap — LDAP 用户目录查询 {#mod_ldap-—-ldap-directory-lookups}
+
+`mod_ldap` 位于 `src/mod/directories/`，实现了以 LDAP 服务器为后端的 FreeSWITCH 可加载用户目录接口。它允许其他模块（尤其是 `mod_dialplan_directory`）查询 LDAP 目录树中的呼叫路由数据（Extension、Context、呼叫流程动作），而不必读取静态 XML 文件。
+
+如果组织已经通过兼容 LDAP 的目录（OpenLDAP、Active Directory、389 DS）维护用户或分机记录，希望 FreeSWITCH 从这个统一数据源获取路由信息，而不是在平面配置文件中重复维护数据，就可以使用 `mod_ldap`。
+
+## 加载模块 {#loading-the-module}
+
+`fs_cli` 和 `modules.conf.xml` 中使用的模块名是 `mod_ldap`。它**未在默认加载配置中启用**：`conf/vanilla/autoload_configs/modules.conf.xml` 中对应条目已被注释：
+
+```xml
+<!-- <load module="mod_ldap"/> -->
+```
+
+取消该行注释（或添加对应配置），即可在启动时加载 `mod_ldap`。
+
+## 配置：`dialplan_directory.conf.xml` {#configuration-dialplan_directoryconfxml}
+
+`mod_ldap` 自身没有配置解析器；它仅开放底层目录接口（`directory_open`、`directory_query`、`directory_next`、`directory_next_pair`、`directory_close`）。LDAP 连接配置位于 `dialplan_directory.conf.xml`，由 `mod_dialplan_directory` 读取。后者是连接入站呼叫与目录后端的拨号计划模块。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `directory-name` | 选择目录驱动程序 | 字符串；使用本模块时必须为 `ldap` | _无_ |
+| `host` | LDAP 服务器主机名或 IP 地址 | 主机名或 IP 字符串 | _无_ |
+| `dn` | 连接 LDAP 服务器时使用的绑定 DN | 完整的可分辨名称字符串 | _无_ |
+| `pass` | 绑定 DN 对应的密码 | 字符串 | _无_ |
+| `base` | 子树搜索的起始 Base DN | 可分辨名称字符串 | _无_ |
+
+`mod_ldap` 始终连接默认 LDAP 端口 389，并采用 LDAPv3 简单绑定认证。当前源码不提供 TLS/LDAPS 选项。
+
+随附的默认配置示例（`conf/vanilla/autoload_configs/dialplan_directory.conf.xml`）：
+
+```xml
+<configuration name="dialplan_directory.conf" description="Dialplan Directory">
+  <settings>
+    <param name="directory-name" value="ldap"/>
+    <param name="host" value="ldap.freeswitch.org"/>
+    <param name="dn" value="cn=Manager,dc=freeswitch,dc=org"/>
+    <param name="pass" value="test"/>
+    <param name="base" value="dc=freeswitch,dc=org"/>
+  </settings>
+</configuration>
+```
+
+## 依赖 {#dependencies}
+
+编译 `mod_ldap` 需要 **OpenLDAP 客户端库**（`libldap`、`liblber`）。在 Debian/Ubuntu 上，请先安装开发软件包再构建：
+
+```
+apt-get install libldap2-dev
+```
+
+`Makefile.am` 使用 `HAVE_LDAP` autoconf 检查控制编译；若缺少依赖库，会明确报错并中止。在 Windows 上，`mod_ldap` 使用系统原生的 `winldap.h`／`winber.h` 头文件，而不是 OpenLDAP。
+
+**源码：** `src/mod/directories/mod_ldap`

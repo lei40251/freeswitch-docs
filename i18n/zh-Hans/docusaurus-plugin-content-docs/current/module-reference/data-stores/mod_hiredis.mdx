@@ -1,0 +1,133 @@
+---
+sidebar_position: 1
+id: mod_hiredis
+slug: /module-reference/data-stores/mod_hiredis
+title: "mod_hiredis——Redis 客户端与限额后端"
+description: "通过 mod_hiredis 接入 Redis，实现分布式呼叫限额、速率限制和原始命令调用。"
+sidebar_label: "mod_hiredis"
+---
+# mod_hiredis——Redis 客户端与限额后端 {#mod_hiredis-—-redis-client-and-limit-backend}
+
+`mod_hiredis` 使用 [hiredis](https://github.com/redis/hiredis) C 客户端库将 FreeSWITCH 连接到 Redis 服务器。模块位于 `src/mod/applications/mod_hiredis`。它注册名为 `hiredis` 的限额后端，运维人员可通过拨号计划应用 `limit` 在 FreeSWITCH 节点集群中实现分布式呼叫计数与速率限制。
+
+当多个 FreeSWITCH 实例需要共享资源级呼叫计数或受限速率的桥接操作时，可以使用此模块；Redis 提供共享的原子计数器存储。此外，它还提供通用的原始 Redis 命令接口，可在拨号计划和 FreeSWITCH API 中调用。
+
+## 加载模块 {#loading-the-module}
+
+加载名称为 `mod_hiredis`。默认的 `modules.conf.xml` **不包含**此模块，必须手动添加：
+
+```xml
+<load module="mod_hiredis"/>
+```
+
+构建时需要安装 `libhiredis`（Debian/Ubuntu 上为 `libhiredis-dev`）。`Makefile.am` 通过 `HAVE_HIREDIS` 控制编译；未安装该库时会产生明确的构建错误。
+
+## 配置：`hiredis.conf.xml` {#configuration-hiredisconfxml}
+
+配置文件是 `autoload_configs/hiredis.conf.xml`，可定义一个或多个具名**配置实例（profile）**。每个配置实例包含一个或多个**连接（connection）**（连接失败时依次尝试这些 Redis 端点），以及可选的**参数（params）**。
+
+### 配置实例参数 {#profile-params}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `ignore-connect-fail` | 无法建立任何 Redis 连接时，是否允许呼叫继续 | `true` / `false` | `false` |
+| `ignore-error` | Redis 返回任意错误时，是否允许呼叫继续 | `true` / `false` | `false` |
+| `max-pipelined-requests` | 每次管线刷新时批量提交的最大命令数 | 正整数 | `20` |
+| `delete-when-zero` | 限额计数器降到零时，执行 Lua `decr` 后 `del` 脚本，而不是保留值为 `0` 的键 | `true` / `false` | `false` |
+
+### 连接参数 {#connection-params}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `hostname` | Redis 服务器主机名或 IP | 字符串 | `localhost` |
+| `port` | Redis 服务器 TCP 端口 | 整数 | `6379` |
+| `password` | Redis `AUTH` 密码（可选） | 字符串 | *（无）* |
+| `timeout_ms` | 建连及命令超时（毫秒；也接受带连字符的写法 `timeout-ms`） | 整数 | `500` |
+| `max-connections` | 每个连接条目的连接池大小 | 正整数 | `3` |
+
+一个配置实例下可以列出多个 `<connection>` 元素。首选连接失败后，模块会依次尝试后续连接。
+
+### 示例 {#example}
+
+```xml
+<configuration name="hiredis.conf" description="mod_hiredis">
+  <profiles>
+    <profile name="default">
+      <connections>
+        <connection name="primary">
+          <param name="hostname" value="172.18.101.101"/>
+          <param name="password" value="redis"/>
+          <param name="port" value="6379"/>
+          <param name="timeout_ms" value="500"/>
+        </connection>
+        <connection name="secondary">
+          <param name="hostname" value="localhost"/>
+          <param name="password" value="redis"/>
+          <param name="port" value="6380"/>
+          <param name="timeout_ms" value="500"/>
+        </connection>
+      </connections>
+      <params>
+        <param name="ignore-connect-fail" value="true"/>
+      </params>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `hiredis_raw` | 同步执行任意 Redis 命令，并将响应保存到 `hiredis_raw_response` | `<profile_name> <redis command>` |
+
+`hiredis_raw` 应用接收配置实例名及后面的单条 Redis 命令字符串。发送命令前会先展开通道变量。
+
+```xml
+<action application="hiredis_raw" data="default set mykey myvalue"/>
+<action application="hiredis_raw" data="default get mykey"/>
+<action application="log" data="INFO Redis response: ${hiredis_raw_response}"/>
+```
+
+当将 `hiredis` 指定为 realm 时，`limit` 拨号计划应用会使用 `mod_hiredis` 作为后端。模块通过 realm 值匹配配置实例名称。
+
+```xml
+<!-- Limit to 5 concurrent calls on resource "sales" using the "default" profile -->
+<action application="limit" data="hiredis default sales 5"/>
+
+<!-- Rate-limit to 10 calls per 60-second window -->
+<action application="limit" data="hiredis default sales 10 60"/>
+```
+
+超过限额时，通道变量 `hiredis_limit_exceeded` 会被设置为 `true`。
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `hiredis_raw` | 从 FreeSWITCH CLI 或 ESL 执行 Redis 命令 | `hiredis_raw <profile_name> <redis command>` |
+
+```
+freeswitch> hiredis_raw default get mykey
+myvalue
+
+freeswitch> hiredis_raw default set counter 0
+OK
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `hiredis_raw_response` | 写入 | 执行 `hiredis_raw` 应用或限额操作后，保存 Redis 服务器的响应字符串 |
+| `hiredis_limit_exceeded` | 写入 | 当计数器超过配置的最大值而拒绝 `limit` 调用时，设置为 `true` |
+
+## 依赖项 {#dependencies}
+
+`mod_hiredis` 依赖 **libhiredis**（Redis 官方 C 客户端）。该库不包含在 FreeSWITCH 源码树中，也不会默认构建。在编译模块前，请安装 `libhiredis-dev`（Debian/Ubuntu）或 `hiredis-devel`（RHEL/CentOS）。
+
+## 相关文档 {#see-also}
+
+- [第 23 章：工具类应用](../../applications/utility-applications.mdx)
+
+**源码：** `src/mod/applications/mod_hiredis`、`conf/vanilla/autoload_configs/hiredis.conf.xml`

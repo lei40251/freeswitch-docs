@@ -1,0 +1,268 @@
+---
+sidebar_position: 6
+id: other-endpoints
+slug: /users-and-endpoints/other
+title: "第 11 章：其他端点"
+description: "Sofia 和 Verto 以外的端点模块：mod_loopback、mod_skinny（Cisco SCCP）、mod_rtmp 和 mod_alsa。"
+sidebar_label: "11. 其他端点"
+---
+
+# 第 11 章：其他端点 {#chapter-11-other-endpoints}
+
+除了 `mod_sofia` 和 `mod_verto`，FreeSWITCH 还附带多种端点模块。本章介绍最常被提及的四个模块：`mod_loopback` 提供用于拨号计划构建的内部可重入通道；`mod_skinny` 实现适用于 IP 桌面电话的 Cisco SCCP 协议；`mod_rtmp` 将 Flash/RTMP 音频客户端桥接到交换机；`mod_alsa` 将本机 ALSA 声卡暴露为单个端点。默认 `modules.conf.xml` 中只有 `mod_loopback` 已启用，另外三个模块必须显式启用。
+
+<SignalWireCallout
+  title="端点成为平台资源"
+  href="https://signalwire.com/docs/platform/getting-started"
+  page="other-endpoints"
+  linkText="查看平台资源">
+
+在托管式 SignalWire 平台上，呼叫能够到达的对象是通过 API 创建的资源，包括 SIP 端点、浏览器客户端、AI 智能体和电话号码。扩展呼叫接入能力只需调用 API，而不必加载新端点模块。
+
+</SignalWireCallout>
+
+## mod_loopback {#mod_loopback}
+
+`mod_loopback` 注册 `loopback` 端点，它创建一对内部桥接通道（`-a` 腿和 `-b` 腿），使呼叫重新进入拨号计划。该模块默认加载。
+
+一次 `loopback/` 呼叫会创建两个会话：一个出站 A 腿（`loopback/\<destination\>-a`）以及与之配对、以入站呼叫身份进入拨号计划的 B 腿（`loopback/\<destination\>-b`）。这样就可以通过 `bridge`、`originate` 或其他基于桥接的应用，让呼叫重新经过拨号计划，以执行进一步的路由逻辑、IVR 或注入会议。
+
+### 拨号字符串 {#dial-string}
+
+```
+loopback/<destination>[/<context>[/<dialplan>]]
+```
+
+- `<destination>` 是由目标上下文进行路由的号码或字符串。
+- `<context>` 覆盖 B 腿使用的拨号计划上下文（默认：`default`）。
+- `<dialplan>` 覆盖拨号计划模块（默认：`XML`）。
+
+另一种格式可以将 B 腿直接路由到某个应用：
+
+```
+loopback/app=<application>[:<argument>]
+```
+
+### 配置文件 {#loopback-configuration-file}
+
+如果存在 `autoload_configs/loopback.conf.xml`，`mod_loopback` 就会读取它。FreeSWITCH 默认发行配置没有附带此文件，所有参数均采用编译时内置默认值。即使没有该文件，模块也能运行。
+
+```xml
+<configuration name="loopback.conf" description="Loopback Endpoint">
+  <settings>
+    <param name="early-set-loopback-id" value="false"/>
+    <param name="fire-bowout-on-bridge" value="false"/>
+    <param name="ignore-channel-ready" value="false"/>
+    <param name="bowout-hangup-cause" value="NORMAL_UNSPECIFIED"/>
+    <param name="bowout-controlled-hangup" value="false"/>
+    <param name="bowout-transfer-recording" value="false"/>
+    <param name="bowout-disable-on-inner-bridge" value="false"/>
+  </settings>
+</configuration>
+```
+
+### 参数 {#loopback-parameters}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `early-set-loopback-id` | 在 B 腿应答前，就在两条呼叫腿上设置 `loopback_leg` 和 `is_loopback` 通道变量 | `true` / `false` | `false` |
+| `fire-bowout-on-bridge` | 执行媒体路径脱离（bowout）桥接时触发 `loopback::direct` 自定义事件 | `true` / `false` | `false` |
+| `ignore-channel-ready` | 即使通道尚未进入 ready 状态，也允许继续读取媒体 | `true` / `false` | `false` |
+| `bowout-hangup-cause` | bowout 导致两个 loopback 呼叫腿终止时，对两条腿应用的挂机原因 | 任意 FreeSWITCH 原因名称 | `NORMAL_UNSPECIFIED` |
+| `bowout-controlled-hangup` | 在 bowout 桥接后，在两条腿上设置 `CF_INTERCEPTED` 并显式挂断它们 | `true` / `false` | `false` |
+| `bowout-transfer-recording` | bowout 成功时，将进行中的通话录音转移到实际桥接的呼叫腿 | `true` / `false` | `false` |
+| `bowout-disable-on-inner-bridge` | A 腿携带 `CF_INNER_BRIDGE` 标志时，阻止自动 bowout | `true` / `false` | `false` |
+
+**Bowout（脱离回环）**是指：在两条腿都应答后，以两个实际端点之间的直接媒体桥接替换 loopback 桥接，从而移除 loopback 中继。
+
+### 通道变量 {#loopback-channel-variables}
+
+以下通道变量用于控制每次呼叫的 loopback 运行行为。
+
+| 变量 | 作用 |
+|---|---|
+| `loopback_bowout` | 在任意一条腿上设为 `false`，可阻止该呼叫自动 bowout |
+| `loopback_bowout_on_execute` | 在 A 腿上设为 `true`，当 B 腿进入 execute 状态时触发类似 bowout 的替换操作 |
+| `loopback_export` | 逗号分隔的变量名列表；创建通道时，从 A 腿复制到 B 腿 |
+| `loopback_no_pre_answer` | 在主叫通道上设为 `true`，阻止创建 A 腿前自动执行 `pre_answer` |
+| `loopback_initial_codec` | 用于初始 loopback 编解码器的字符串（如 `PCMU/8000/20`），不再继承主叫通道的设置 |
+
+### null 端点 {#the-null-endpoint}
+
+`mod_loopback` 还注册了 `null` 端点。`null` 通道接收呼叫后会立即以可配置的挂机原因终止呼叫。适用于拨号计划需要一个能够桥接、但不提供媒体的目标的场景。若要模拟特定失败，可使用 `null/cause-\<cause-name\>`（例如 `null/cause-USER_BUSY`）。
+
+---
+
+## mod_skinny {#mod_skinny}
+
+`mod_skinny` 实现 Cisco Skinny Client Control Protocol（SCCP），支持运行 SCCP 固件的 Cisco IP 电话。它**默认不加载**。
+
+### 配置文件 {#skinny-configuration-files}
+
+`mod_skinny` 使用两层配置：
+
+1. `autoload_configs/skinny.conf.xml` —— 顶层配置文件，用于包含配置实例定义。
+2. `skinny_profiles/*.xml` —— 每个 SCCP 监听配置实例各对应一个文件。
+
+`skinny.conf.xml` 仅包含 include 指令：
+
+```xml
+<configuration name="skinny.conf" description="Skinny Endpoints">
+  <profiles>
+    <X-PRE-PROCESS cmd="include" data="../skinny_profiles/*.xml"/>
+  </profiles>
+</configuration>
+```
+
+`skinny_profiles/` 下的每个文件定义一个监听配置实例。默认配置实例为 `skinny_profiles/internal.xml`：
+
+```xml
+<profile name="internal">
+  <settings>
+    <param name="domain" value="$${domain}"/>
+    <param name="ip" value="$${local_ip_v4}"/>
+    <param name="port" value="2000"/>
+    <param name="patterns-dialplan" value="XML"/>
+    <param name="patterns-context" value="skinny-patterns"/>
+    <param name="dialplan" value="XML"/>
+    <param name="context" value="default"/>
+    <param name="keep-alive" value="60"/>
+    <param name="date-format" value="D/M/Y"/>
+    <param name="odbc-dsn" value=""/>
+    <param name="debug" value="4"/>
+    <param name="auto-restart" value="true"/>
+    <param name="digit-timeout" value="10000"/>
+  </settings>
+  <soft-key-set-sets>
+    <!-- ... -->
+  </soft-key-set-sets>
+  <device-types>
+    <!-- ... -->
+  </device-types>
+</profile>
+```
+
+### 配置实例参数 {#skinny-profile-parameters}
+
+更改 `ip` 或 `port` 时，会在该配置实例上设置 `PFLAG_SHOULD_RESPAWN` 标志。监听套接字处于打开状态时无法修改 `odbc-dsn`。
+
+| 参数 | 用途 | 可用值 | 默认值（编译时内置） |
+|---|---|---|---|
+| `domain` | 在 SCCP 消息中发送给电话的域名 | 主机名或 IP 字符串 | 无；必填 |
+| `ip` | SCCP TCP 监听器绑定的 IP 地址 | IPv4 地址 | 无；必填 |
+| `port` | SCCP 监听器绑定的 TCP 端口 | 整数 | `2000` |
+| `dialplan` | 已注册电话入站呼叫使用的拨号计划模块 | 模块名称 | `XML` |
+| `context` | 入站呼叫使用的拨号计划上下文 | 上下文名称 | `default` |
+| `patterns-dialplan` | 用于解析拨号模式匹配的拨号计划模块 | 模块名称 | `XML` |
+| `patterns-context` | 用于解析拨号模式匹配的拨号计划上下文 | 上下文名称 | `skinny-patterns` |
+| `keep-alive` | 向电话发送保活消息的间隔秒数 | 整数（秒） | `60`（默认配置：`60`） |
+| `date-format` | 推送到电话显示屏的日期格式字符串 | `D/M/Y`、`M/D/Y`、`Y/M/D` 等 | 无；默认配置：`D/M/Y` |
+| `odbc-dsn` | 用于持久化设备及线路注册信息的 ODBC 数据源名称 | DSN 字符串 | 空；使用 SQLite |
+| `digit-timeout` | 拨号时等待下一个数字的毫秒数 | 整数（毫秒） | `10000` |
+| `debug` | SCCP 调试日志详细程度 | 整数 | `0`（编译时内置）；默认配置设为 `4` |
+| `auto-restart` | 重新加载配置时自动重启配置实例的监听器 | `true` / `false` | `true` |
+| `non-blocking` | 监听套接字使用非阻塞 I/O | `true` / `false` | `false` |
+| `ext-voicemail` | 电话按下语音信箱软键时拨打的分机 | 分机字符串 | `vmain` |
+| `ext-redial` | 电话按下重拨软键时拨打的分机 | 分机字符串 | `redial` |
+| `ext-meetme` | 电话按下会议软键时拨打的分机 | 分机字符串 | `conference` |
+| `ext-pickup` | 电话按下代接软键时拨打的分机 | 分机字符串 | `pickup` |
+| `ext-cfwdall` | 电话按下全部呼叫转移软键时拨打的分机 | 分机字符串 | `cfwdall` |
+
+### 软键集合 {#soft-key-sets}
+
+配置实例中的 `<soft-key-set-sets>` 块定义电话在各个通话状态下显示的按钮。默认配置实例提供 `default` 集合，包含 `KeySetOnHook`、`KeySetConnected`、`KeySetOnHold`、`KeySetRingIn`、`KeySetOffHook`、`KeySetConnectedWithTransfer`、`KeySetDigitsAfterDialingFirstDigit`、`KeySetRingOut`、`KeySetOffHookWithFeatures` 和 `KeySetInUseHint` 等状态。每个条目将状态名称映射为逗号分隔的软键名称列表，例如 `SoftkeyEndcall`、`SoftkeyHold`、`SoftkeyTransfer`。
+
+### 设备类型 {#device-types}
+
+`<device-types>` 块允许根据设备型号覆盖固件版本。每个 `<device-type>` 条目通过 `id` 属性标识一种电话型号，支持 `firmware-version` 参数，指定向匹配设备推送的固件版本字符串。
+
+```xml
+<device-types>
+  <device-type id="Cisco ATA 186">
+    <param name="firmware-version" value="ATA030101SCCP04"/>
+  </device-type>
+</device-types>
+```
+
+---
+
+## mod_rtmp {#mod_rtmp}
+
+`mod_rtmp` 实现 Real-Time Messaging Protocol（RTMP），允许基于 Flash 的浏览器客户端通过 FreeSWITCH 拨打和接听电话。它**默认不加载**。
+
+### 配置文件 {#rtmp-configuration-file}
+
+`autoload_configs/rtmp.conf.xml` 包含一个或多个具名配置实例。默认文件只带有一个 `default` 配置实例：
+
+```xml
+<configuration name="rtmp.conf" description="RTMP Endpoint">
+  <profiles>
+    <profile name="default">
+      <settings>
+        <param name="bind-address" value="0.0.0.0:1935"/>
+        <param name="context" value="public"/>
+        <param name="dialplan" value="XML"/>
+        <param name="auth-calls" value="true"/>
+        <param name="buffer-len" value="50"/>
+        <param name="chunksize" value="512"/>
+      </settings>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+### 参数 {#rtmp-parameters}
+
+下表列出编译时内置默认值。默认 `rtmp.conf.xml` 覆盖了其中三个参数：`auth-calls` 设为 `true`，`chunksize` 为 `512`，`buffer-len` 为 `50`。
+
+| 参数 | 用途 | 可用值 | 编译时默认值 |
+|---|---|---|---|
+| `bind-address` | RTMP 监听器绑定的 IP 地址和端口；运行时不可重载 | `ip:port` 字符串 | `0.0.0.0:1935` |
+| `context` | RTMP 入站呼叫的拨号计划上下文 | 上下文名称 | `public` |
+| `dialplan` | RTMP 入站呼叫的拨号计划模块 | 模块名称 | `XML` |
+| `io` | I/O 传输模块；运行时不可重载 | `tcp` | `tcp` |
+| `auth-calls` | 拒绝未经认证的入站呼叫 | `true` / `false` | `false`（默认配置：`true`） |
+| `chunksize` | 出站 RTMP 数据块的最大字节数 | 整数（128–65536） | `128`（默认配置：`512`） |
+| `buffer-len` | 发送给 Flash 客户端的媒体缓冲时长（毫秒） | 整数（0–`INT32_MAX`） | `500`（默认配置：`50`） |
+
+`bind-address` 和 `io` 在加载配置实例时生效，不能在运行时重新加载；其他参数均支持通过 `reload mod_rtmp` 动态重载。
+
+---
+
+## mod_alsa {#mod_alsa}
+
+`mod_alsa` 将本地 ALSA 声卡暴露为一个 FreeSWITCH 端点，让服务器主机可以像电话终端一样通话。它**默认不加载**，而且仅适用于安装了本地音频设备的系统（如嵌入式设备或开发工作站）。
+
+### 配置文件 {#alsa-configuration-file}
+
+`autoload_configs/alsa.conf.xml` 用于配置唯一的全局设备。如果缺少该文件，模块加载会失败。默认文件仅包含下方示例中的 5 个参数；表中剩余参数未配置时均使用默认值。
+
+```xml
+<configuration name="alsa.conf" description="Soundcard Endpoint">
+  <settings>
+    <param name="dialplan" value="XML"/>
+    <param name="cid-name" value="N800 Alsa"/>
+    <param name="cid-num" value="5555551212"/>
+    <param name="sample-rate" value="8000"/>
+    <param name="codec-ms" value="20"/>
+  </settings>
+</configuration>
+```
+
+### 参数 {#alsa-parameters}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `dialplan` | 声卡入站呼叫使用的拨号计划模块 | 模块名称 | `default` |
+| `cid-name` | 该设备出站呼叫显示的主叫姓名 | 字符串 | 无 |
+| `cid-num` | 该设备出站呼叫显示的主叫号码 | 字符串 | 无 |
+| `sample-rate` | 采集与播放共同使用的音频采样率（Hz） | 整数 | `8000` |
+| `codec-ms` | 编解码器每包时长（毫秒），必须为 10 的倍数且不超过 `SWITCH_MAX_INTERVAL` | 整数 | `20` |
+| `device-name` | 传递给 `snd_pcm_open` 用于采集和播放的 ALSA 设备名 | ALSA 设备字符串 | `default` |
+| `ring-file` | 入站呼叫振铃时通过扬声器播放的音频文件路径 | 文件路径 | 无 |
+| `hold-file` | 向被保持方播放的音频文件路径；每次呼叫可用通道变量 `pa_hold_file` 覆盖 | 文件路径 | 无 |
+| `ring-interval` | 重复播放振铃音文件之间的间隔秒数 | 整数（秒） | `5` |
+| `timer-name` | 用于控制编解码器处理节奏的 FreeSWITCH 定时器模块 | 定时器名称 | `soft` |
+| `debug` | 为模块启用调试日志 | 整数（0 或 1） | `0` |
+
+`mod_alsa` 同一时刻只支持一个活动音频设备。只有标记为 master 的呼叫能够收发音频；其余并发呼叫会收到舒适噪声或保持音频文件。通道变量 `pa_ring_file` 可针对单次出站呼叫覆盖 `ring-file`。

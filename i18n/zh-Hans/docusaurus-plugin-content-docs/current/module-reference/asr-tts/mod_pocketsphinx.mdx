@@ -1,0 +1,110 @@
+---
+sidebar_position: 2
+id: mod_pocketsphinx
+slug: /module-reference/asr-tts/mod_pocketsphinx
+title: "mod_pocketsphinx——PocketSphinx 语音识别"
+description: "通过 PocketSphinx 实现离线 JSGF 语法识别与会话级语音参数配置。"
+sidebar_label: "mod_pocketsphinx"
+---
+# mod_pocketsphinx——PocketSphinx 语音识别 {#mod_pocketsphinx-—-pocketsphinx-speech-recognition}
+
+`mod_pocketsphinx` 将 CMU PocketSphinx 语音识别器作为 ASR 引擎集成到 FreeSWITCH。模块位于 `src/mod/asr_tts/`，向核心提供名为 `pocketsphinx` 的 ASR 接口。识别由语法驱动：调用方提供 JSGF 语法文件，模块在进程内离线解码，无需外部 ASR 服务。
+
+需要低延迟、完全本地部署且词汇范围受到严格约束的基础语音识别时，可采用此模块。它支持 8 kHz（窄带）和 16 kHz（宽带）音频，并以包含置信度得分的 XML 结果块返回识别结果。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_pocketsphinx`。默认的 `modules.conf.xml` 中，该条目已被注释，**默认不加载**：
+
+```xml
+<!-- <load module="mod_pocketsphinx"/> -->
+```
+
+要启用，请取消 `conf/autoload_configs/modules.conf.xml` 中该行的注释（或添加条目）。编译时需要安装 PocketSphinx 与 SphinxBase 库（`libpocketsphinx`、`libsphinxbase`）。
+
+## 配置：`pocketsphinx.conf.xml` {#configuration-pocketsphinxconfxml}
+
+模块从 FreeSWITCH 配置搜索路径读取 `pocketsphinx.conf`。所有参数位于 `<settings>` 块中。当 `auto-reload` 为 `true` 时，收到 `SWITCH_EVENT_RELOADXML` 后会自动重新加载此文件。
+
+模型文件从 `$${grammar_dir}/model/<model-name>` 相对路径解析；词典文件从 `$${grammar_dir}/<dictionary>` 解析。传给 `detect_speech` 的语法文件从 `$${grammar_dir}` 解析，未提供扩展名时自动追加 `.gram`。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `threshold` | 语音活动检测（VAD）能量阈值。平均能量大于或等于该值的音频帧被视为语音。 | 整数（能量单位） | `400` |
+| `silence-hits` | 引擎判定说话者已停止前，连续低于阈值的帧数。 | 整数（帧数） | `35`（随附的 `pocketsphinx.conf.xml` 将其覆盖为 `25`） |
+| `listen-hits` | 引擎开始向解码器输入音频前，连续高于阈值的帧数。 | 整数（帧数） | `1` |
+| `auto-reload` | FreeSWITCH 处理 `reloadxml` 事件时是否重新加载配置。 | `true` / `false` | `true` |
+| `language-weight` | 传给 PocketSphinx 解码器的语言模型权重（`-lw`）。 | 浮点数字符串 | `6.5` |
+| `narrowband-model` | 8 kHz 音频所用的声学模型目录名（位于 `$${grammar_dir}/model/` 下）。 | 目录名称 | `communicator` |
+| `wideband-model` | 16 kHz 音频所用的声学模型目录名（位于 `$${grammar_dir}/model/` 下）。 | 目录名称 | `wsj1` |
+| `dictionary` | 所有识别会话使用的发音词典文件名（位于 `$${grammar_dir}/` 下）。 | 文件名 | `default.dic` |
+| `start-input-timers` | 为 `true` 时，在加载语法后立即启动输入定时器（`no-input-timeout` 和 `speech-timeout`），而不等待来电方启动命令。 | `true` / `false` | `false` |
+| `no-input-timeout` | 引擎报告无输入结果前的静音时长（毫秒；要求输入定时器已启用）。 | 整数（毫秒） | `4000` |
+| `speech-timeout` | 开始说话后，强制引擎处理语句结束前等待的时长（毫秒；要求输入定时器已启用）。 | 整数（毫秒） | `1000` |
+| `confidence_threshold` | 返回匹配结果所需的最低置信度（0～100 的整数）；低于该值返回无匹配。`0` 表示禁用检查。注意下划线：配置文件解析的是 `confidence_threshold`，使用连字符的 `confidence-threshold` 配置条目会被静默忽略。（通过 `detect_speech param` 设置的会话级运行时参数使用连字符拼写 `confidence-threshold`。） | 整数（0～100） | `0` |
+
+随附 `pocketsphinx.conf.xml` 中的示例片段：
+
+```xml
+<configuration name="pocketsphinx.conf" description="PocketSphinx ASR Configuration">
+  <settings>
+    <param name="threshold" value="400"/>
+    <param name="silence-hits" value="25"/>
+    <param name="listen-hits" value="1"/>
+    <param name="auto-reload" value="true"/>
+    <!--<param name="language-weight" value="1"/>-->
+    <!--<param name="narrowband-model" value="communicator"/>-->
+    <!--<param name="wideband-model" value="wsj1"/>-->
+    <!--<param name="dictionary" value="default.dic"/>-->
+  </settings>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+`mod_pocketsphinx` 不注册自己的拨号计划应用。识别通过核心 `detect_speech` 应用调用，引擎名称为 `pocketsphinx`。
+
+| 应用 | 用途 | 主要参数 |
+|---|---|---|
+| `detect_speech` | 打开 PocketSphinx 识别会话、加载语法并开始监听 | `pocketsphinx <grammar-name> <grammar-name> [<param>=<value> ...]` |
+
+语法参数是一个名称或路径，最终解析为 `.gram` JSGF 文件。打开会话之后，可通过 `detect_speech` 的 `param` 子命令设置会话级参数（`no-input-timeout`、`speech-timeout`、`start-input-timers` 和 `confidence-threshold`）。
+
+```xml
+<!-- Open a recognition session with grammar "menu" -->
+<action application="detect_speech" data="pocketsphinx menu menu"/>
+
+<!-- Override the no-input timeout for this session -->
+<action application="detect_speech" data="param no-input-timeout 5000"/>
+
+<!-- Start input timers explicitly -->
+<action application="detect_speech" data="start-input-timers"/>
+
+<!-- Pause recognition -->
+<action application="detect_speech" data="pause"/>
+
+<!-- Resume recognition -->
+<action application="detect_speech" data="resume"/>
+
+<!-- Stop recognition and close the session -->
+<action application="detect_speech" data="stop"/>
+```
+
+识别结果通过 `DETECTED_SPEECH` 事件传给拨号计划。结果负载为 XML 文档，包含 `<result>`、`<interpretation>` 和 `<input>` 元素。无输入结果包含 `<noinput/>`；无匹配结果包含 `<nomatch/>`。
+
+## 运行时参数（每会话） {#runtime-parameters-per-session}
+
+会话打开后，可通过 `detect_speech param <name> <value>` 分别调整以下参数。它们只覆盖当前会话的全局默认值。
+
+| 参数 | 用途 | 允许的值 |
+|---|---|---|
+| `no-input-timeout` | 报告无输入结果之前的静音时长（毫秒） | 整数（毫秒） |
+| `speech-timeout` | 语音开始后强制结束语句处理的时长（毫秒） | 整数（毫秒） |
+| `start-input-timers` | 启用或关闭当前会话的输入定时器 | `true` / `false` |
+| `confidence-threshold` | 返回匹配结果所需的最低置信度（0 表示禁用） | 整数（0～100） |
+
+## 依赖项 {#dependencies}
+
+构建 `mod_pocketsphinx` 需要 **PocketSphinx** 与 **SphinxBase** 库（`libpocketsphinx`、`libsphinxbase`），它们不随 FreeSWITCH 提供，必须单独安装。声学模型数据（`narrowband-model` 和 `wideband-model` 引用的目录）也必须放入 `$${grammar_dir}/model/`，模块才能加载语法。
+
+**源码：** `src/mod/asr_tts/mod_pocketsphinx`、`conf/vanilla/autoload_configs/pocketsphinx.conf.xml`

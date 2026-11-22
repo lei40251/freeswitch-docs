@@ -1,0 +1,452 @@
+---
+sidebar_position: 1
+id: codecs-and-negotiation
+slug: /media-and-codecs/codecs
+title: "第 16 章：编解码器与协商"
+description: "FreeSWITCH 如何构建编解码器优先级列表，并通过 SDP offer/answer 交换协商编解码器及 SRTP 加密套件。"
+sidebar_label: "16. 编解码器与协商"
+---
+
+# 第 16 章：编解码器与协商 {#chapter-16-codecs-and-negotiation}
+
+FreeSWITCH 通过标准的 SDP offer/answer 交换选择编解码器，并在呼叫建立的各个阶段采用有序优先级列表。本章介绍优先级列表的构建方式与配置位置、入站协商策略、SRTP 加密套件顺序，以及默认构建所附带的编解码器模块。
+
+<SignalWireCallout
+  title="在边缘节点完成协商"
+  href="https://signalwire.com/docs/platform/voice/sip/trunking"
+  page="codecs"
+  linkText="查看托管 SIP 中继">
+
+SignalWire 托管平台在其 SIP 边缘节点上使用相同引擎进行编解码器协商和转码。你的端点与中继只需声明各自支持的能力；本章讨论的兼容性矩阵将由平台处理。
+
+</SignalWireCallout>
+
+## 编解码器协商如何工作 {#how-codec-negotiation-works}
+
+FreeSWITCH 遵循 RFC 3264 的 offer/answer 语义。收到入站 INVITE 后，`mod_sofia` 将远端 SDP offer 中的编解码器列表与本地配置的优先级列表比较。双方支持的交集按本地列表排序（或根据 16.3 节所述协商策略按远端列表排序），成为该会话的已协商编解码器集合。
+
+对于出站呼叫，FreeSWITCH 根据出站编解码器优先级列表生成 SDP offer，并接受 answer 中双方共同支持的第一个编解码器。
+
+如果桥接的两条呼叫腿具有共同的编解码器且无需转码，FreeSWITCH 可以在两条腿之间直接传递 RTP，而不对音频解码或重新编码（RTP 是否经过服务器取决于[第 17 章：媒体处理](../media/media-handling.mdx)中介绍的媒体模式）。如果两条腿没有共同编解码器，或启用了录音、会议等需要访问媒体的功能，FreeSWITCH 就会解码并重新编码音频，在两条呼叫腿之间执行转码。
+
+---
+
+## 编解码器优先级字符串 {#codec-preference-strings}
+
+编解码器优先级字符串是一个用逗号分隔的编解码器标识列表。每个标识对应一个编解码器，还可以附带采样率和打包时长（ptime）。配置按以下由高到低的优先级解析：
+
+1. 通道变量 `absolute_codec_string`（如果已设置，则原样使用，不做合并）
+2. 通道变量 `codec_string`
+3. SIP Profile 参数 `inbound-codec-prefs` 或 `outbound-codec-prefs`
+4. 全局变量 `global_codec_prefs` 或 `outbound_codec_prefs`
+
+### 全局变量 {#global-variables}
+
+在 `conf/vanilla/vars.xml` 中定义：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="global_codec_prefs=OPUS,G722,PCMU,PCMA,H264,VP8"/>
+<X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=OPUS,G722,PCMU,PCMA,H264,VP8"/>
+```
+
+`global_codec_prefs` 是默认入站编解码器优先级列表；`outbound_codec_prefs` 是默认出站列表。两者都是预处理变量，即在加载配置时展开，其他配置文件可通过 `$${global_codec_prefs}` 和 `$${outbound_codec_prefs}` 引用。
+
+### SIP Profile 参数 {#sip-profile-parameters}
+
+在 SIP Profile（`conf/vanilla/sip_profiles/*.xml`）中，下面两个参数控制每个 Profile 的编解码器偏好：
+
+| 参数 | 用途 |
+|---|---|
+| `inbound-codec-prefs` | 应用于该 Profile 入站呼叫的编解码器优先级列表 |
+| `outbound-codec-prefs` | 应用于该 Profile 出站呼叫的编解码器优先级列表 |
+
+默认的 internal Profile 将两者都设为 `$${global_codec_prefs}`：
+
+```xml
+<param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+<param name="outbound-codec-prefs" value="$${global_codec_prefs}"/>
+```
+
+对于使用某个 Profile 处理的呼叫，Profile 级别的编解码器优先级会覆盖全局变量。
+
+### 通道变量 {#channel-variables}
+
+可以通过以下两个通道变量在拨号计划或 ESL 应用中逐通呼叫控制编解码器：
+
+| 变量 | 行为 |
+|---|---|
+| `codec_string` | 当前通道优先使用的编解码器列表。桥接时与另一条呼叫腿的列表合并（除非启用了 `disable-transcoding`）。 |
+| `absolute_codec_string` | 原样使用指定的编解码器列表，完全跳过合并步骤；FreeSWITCH 只提供此列表，不接受其他编解码器。 |
+
+在执行 bridge 或 originate 操作之前，于拨号计划中设置这些变量：
+
+```xml
+<action application="set" data="absolute_codec_string=PCMU,PCMA"/>
+```
+
+使用 `absolute_codec_string` 会阻止 FreeSWITCH 根据另一条呼叫腿已协商的能力自动调整。只在需要严格强制编解码器时才使用，例如连接无法转码且必须接收特定编解码器的设备。
+
+---
+
+## 入站编解码器协商策略 {#inbound-codec-negotiation-policy}
+
+SIP Profile 参数 `inbound-codec-negotiation` 控制入站编解码器选择时，以哪一方的偏好顺序为准。
+
+```xml
+<param name="inbound-codec-negotiation" value="generous"/>
+```
+
+| 取值 | 行为 |
+|---|---|
+| `generous` | FreeSWITCH 接受远端 offer 中第一个也出现在本地优先级列表中的编解码器，尊重远端排序。未设置参数时默认如此。 |
+| `greedy` | FreeSWITCH 按自己的本地优先级重新排列交集，无论远端 offer 的顺序如何，都选择本地排名最高的编解码器。 |
+| `scrooge` | 类似 `greedy`，但还额外设置 GREEDY 标志。本地优先级顺序获胜，且只考虑本地优先级列表中存在的编解码器。 |
+
+未显式设置该参数的 Profile 默认采用 `generous` 行为（不设置 greedy 标志）。
+
+---
+
+## Ptime 与编解码器字符串格式 {#ptime-and-the-codec-string-format}
+
+优先级字符串中的一个编解码器标识一般采用以下格式：
+
+```
+codecname[@<samplerate>h[@<ptime>i]]
+```
+
+- `codecname` 是 FreeSWITCH 使用的 IANA 编解码器名称（配置中不区分大小写；规范写法列于[附录 B：编解码器参考表](../reference/appendix-codec-table.mdx)，16.7 节也有摘要）。
+- `@<samplerate>h` 用于指定采样率（Hz）。支持多个采样率的编解码器需要指定，例如 `speex@8000h` 与 `speex@16000h`。只有一种采样率的编解码器可省略。
+- `@<ptime>i` 用于指定打包时长（毫秒）。其值必须为编解码器帧时长的整数倍。省略则使用该编解码器的默认 ptime。
+
+`conf/vanilla/vars.xml` 中的示例：
+
+```
+iLBC@30i         -- iLBC using mode=30 (30 ms ptime)
+PCMU             -- G.711 ulaw at 8 kHz, 20 ms ptime (default)
+G722             -- G.722 at 16 kHz, 20 ms ptime (default)
+speex@8000h@20i  -- Speex narrowband, 20 ms ptime
+speex@16000h@20i -- Speex wideband, 20 ms ptime
+speex@32000h@20i -- Speex ultra-wideband, 20 ms ptime
+GSM@40i          -- GSM at 8 kHz, 40 ms ptime
+G7221@16000h     -- G.722.1 at 16 kHz (Siren 7)
+G7221@32000h     -- G.722.1C at 32 kHz (Siren 14)
+DVI4@8000h@20i   -- IMA ADPCM 8 kHz, 20 ms ptime
+DVI4@16000h@40i  -- IMA ADPCM 16 kHz, 40 ms ptime
+G726-32          -- G.726 32 kbit/s, 20 ms ptime (default)
+```
+
+在满足编解码器帧长度约束和 RTP MTU 限制的前提下，FreeSWITCH 的许多编解码器支持 10～120 毫秒的 ptime。不支持超过 MTU 的打包大小。
+
+---
+
+## 转码 {#transcoding}
+
+桥接呼叫的两条腿没有共同编解码器时，FreeSWITCH 会自动转码。无需显式开启；只要 A-leg 和 B-leg 协商的编解码器不同，且所需编解码器模块已经加载，就会发生转码。
+
+以下两种情况会抑制转码：
+
+1. **Profile 参数 `disable-transcoding`。** 在 SIP Profile 中设为 `true` 时，FreeSWITCH 只向出站腿提供入站腿已协商的编解码器，强制两条腿使用相同编解码器，从而避免转码开销；代价是出站端点不支持入站编解码器时可能呼叫失败。
+
+   ```xml
+   <param name="disable-transcoding" value="true"/>
+   ```
+
+2. **通道变量 `absolute_codec_string`。** 设置后，FreeSWITCH 跳过入站和出站编解码器集合的合并，只向出站腿提供指定列表。若出站端点不支持其中任何编解码器，呼叫失败。
+
+对于会议、录音、[音频文件及音频流播放](../media/audio-files-and-streaming.mdx)、语音检测等必须由 FreeSWITCH 访问媒体流的功能，不论上述配置如何，都需要将媒体解码为 PCM 供处理，因此仍会发生转码。
+
+---
+
+## SRTP 加密套件 {#srtp-crypto-suites}
+
+SRTP 保护的是媒体传输，而不是本章重点的编解码器/SDP 协商。完整的加密套件目录、`rtp_secure_media` 协商模式和全局列表 `rtp_sdes_suites` 请参阅[第 17 章 17.8 节：使用 SRTP 保护媒体](../media/media-handling.mdx#secure-media-with-srtp)。简而言之，启用 `rtp_secure_media` 后，FreeSWITCH 按 `rtp_sdes_suites` 定义的顺序（以竖线分隔，最强优先）提供套件，双方共同支持的第一项成为协商结果。FreeSWITCH 支持 AES-CM（HMAC-SHA1）套件和 AES-GCM 认证加密套件（SRTP-AES-GCM 见 RFC 7714）。
+
+与编解码器协商直接相关的一点是：使用 SRTP 时，不应提供或接受可变比特率编解码器，因为 VBR 负载可能通过分组大小变化泄露信息，危及 SRTP 流安全（此说明来自 `vars.xml`）。安全呼叫应优先选择固定速率编解码器，或使用固定比特率的 Opus（`use-vbr=0`）。
+
+---
+
+## 内置编解码器参考 {#bundled-codec-reference}
+
+随附编解码器模块的完整目录——每个编解码器的 IANA 名称、已确认的采样率、配置文件、模块位置、外部库依赖以及它是否在默认 `modules.conf.xml` 中加载——列在[附录 B：编解码器参考表](../reference/appendix-codec-table.mdx)。需要完整清单时请查阅该表；本节只讨论会影响编解码器在优先级字符串中写法的注意事项。
+
+编写优先级字符串（16.2 节）或 `absolute_codec_string` 时，应使用附录 B 中的 IANA 标识，例如 `OPUS`、`PCMU`、`PCMA`、`G722`、`G729`、`AMR`、`H264` 或 `VP8`。部分标识有与协商或 ptime 相关的细节：
+
+- `OPUS` 不论内部采样率是多少，在网络上都按 48000 Hz 协商，因此在优先级字符串中只写 `OPUS`，不加 `@<samplerate>h`。
+- `speex` 支持三种采样率，所以需要显式指定：`speex@8000h`、`speex@16000h` 或 `speex@32000h`。
+- `iLBC` 支持 20 毫秒（mode 20）和 30 毫秒（mode 30）两种帧长；使用 `iLBC@30i` 可强制 mode 30。
+- `GSM` 以 20 毫秒的整数倍打包，`LPC` 只使用 90 毫秒，因此 `GSM@40i` 这样的 ptime 标识必须符合编解码器帧长限制（16.4 节）。
+- 视频标识 `H264`、`H263`、`H263-1998`、`VP8`、`VP9` 在优先级字符串中只写名称；具体编解码器调参见 16.11 和 16.12 节，而不是写入优先级字符串。
+
+后续小节介绍优先级字符串中引用的各模块音视频配置文件：Opus（`opus.conf.xml`，16.8 节）、AMR（`amr.conf.xml`，16.9 节）、AMR-WB（`amrwb.conf.xml`，16.10 节）、H.264/H.263（`av.conf.xml`，16.11 节）及 VP8/VP9（`vpx.conf.xml`，16.12 节）。
+
+---
+
+## Opus 配置 {#opus-configuration}
+
+`mod_opus` 在 `conf/vanilla/autoload_configs/opus.conf.xml` 中配置。所有参数对每通使用 Opus 的呼叫中，Opus 编码器和解码器全局生效。
+
+读取配置文件之前，模块硬编码以下默认值：`use_vbr=0`、`use_dtx=0`、`plpct=20`、`keep_fec=1`、`use_jb_lookahead=1`、`fec_decode=1`。随附的 `opus.conf.xml` 又将 `use-vbr` 覆盖为 `1`、`keep-fec-enabled` 设为 `1`、`maxaveragebitrate` 设为 `0`、`maxplaybackrate` 设为 `0`、`mono` 设为 `0`。
+
+```xml
+<configuration name="opus.conf">
+  <settings>
+    <param name="use-vbr" value="1"/>
+    <!--<param name="use-dtx" value="1"/>-->
+    <param name="complexity" value="10"/>
+    <!--<param name="packet-loss-percent" value="10"/>-->
+    <!--<param name="asymmetric-sample-rates" value="1"/>-->
+    <!--<param name="bitrate-negotiation" value="1"/>-->
+    <param name="keep-fec-enabled" value="1"/>
+    <!--<param name="use-jb-lookahead" value="true"/>-->
+    <!--<param name="advertise-useinbandfec" value="1"/>-->
+    <!--<param name="adjust-bitrate" value="1"/>-->
+    <param name="maxaveragebitrate" value="0"/>
+    <param name="maxplaybackrate" value="0"/>
+    <!--<param name="sprop-maxcapturerate" value="0"/>-->
+    <param name="mono" value="0"/>
+  </settings>
+</configuration>
+```
+
+| 参数 | 用途 | 允许的值 | 默认值（代码） | 默认值（vanilla 配置） |
+|---|---|---|---|---|
+| `use-vbr` | 启用可变比特率编码 | `0`（CBR）或 `1`（VBR） | `0` | `1` |
+| `use-dtx` | 启用不连续传输（静音时停止发送分组） | `0` 或 `1` | `0` | 已注释 |
+| `complexity` | 编码器计算复杂度 | `0`（最低）～`10`（最高） | `0` | `10` |
+| `packet-loss-percent` | 初始预期丢包率，用于调整编码器冗余 | `0`～`100` | `20` | 已注释 |
+| `asymmetric-sample-rates` | 允许编码器和解码器使用不同采样率 | `0` 或 `1` | `0` | 已注释 |
+| `bitrate-negotiation` | 在 SDP 协商中使用本地与远端 `maxaveragebitrate` 的较小值 | `0` 或 `1` | `0` | 已注释 |
+| `keep-fec-enabled` | 即使编码器降低比特率也保持前向纠错（FEC）功能 | `0` 或 `1` | `1` | `1` |
+| `use-jb-lookahead` | 使用抖动缓冲前瞻机制改善 FEC 恢复 | `true` 或 `false` | `true` | 已注释 |
+| `advertise-useinbandfec` | 在出站 SDP fmtp 中包含 `useinbandfec=1`，声明解码器可使用带内 FEC | `0` 或 `1` | `1` | 已注释 |
+| `adjust-bitrate` | 根据 RTCP 反馈在呼叫过程中自动调整比特率 | `0` 或 `1` | `0` | 已注释 |
+| `maxaveragebitrate` | 在 SDP fmtp 中通告并用于编码器的最大平均比特率。超出 `6000`～`510000` 的值会被静默忽略（视为不限）。 | `6000`～`510000`（bps）；`0` 为不限制 | `0` | `0` |
+| `maxplaybackrate` | 在 SDP fmtp 中通告的最大编解码器内部采样率。限制本地解码器，并向远端编码器发出限制指示。 | `8000`、`12000`、`16000`、`24000` 或 `48000`（Hz）；`0` 为不限制 | `0` | `0` |
+| `sprop-maxcapturerate` | 在 fmtp 中通告的最大采集（输入）采样率；约束远端解码器预期的播放采样率 | `8000`、`12000`、`16000`、`24000` 或 `48000`（Hz） | `0` | 已注释 |
+| `mono` | 即使远端请求立体声也强制单声道编码。要求在 `switch.conf.xml` 中设置 `max-audio-channels=1`。 | `0`（允许立体声）或 `1`（强制单声道） | `0` | `0` |
+
+当两个端点在 fmtp 中都通告 `maxaveragebitrate` 或 `maxplaybackrate` 时，FreeSWITCH 对编码器采用两者中的较小值，并在 SDP answer 中回显该值。
+
+`use-vbr` 参数控制 SDP 的 `cbr` fmtp 属性：`use-vbr=0` 时，FreeSWITCH 在 offer/answer 中通告 `cbr=1`。没有单独的 `cbr` 配置参数；`cbr` 由 `use-vbr` 推导而来。
+
+---
+
+## AMR 配置 {#amr-configuration}
+
+`mod_amr` 在 `conf/vanilla/autoload_configs/amr.conf.xml` 中配置。如果编译时没有 `opencore-amrnb`，模块仅以透传模式运行，下面的编码器/解码器参数不会生效。
+
+AMR 窄带支持 8 种模式（比特率）。默认帧长为 20 毫秒（由 AMR 标准固定）。除非远端 SDP 中指定 `octet-align=1`，或设置了 `force-oa`，否则负载格式默认为带宽高效（BE）模式。
+
+```xml
+<configuration name="amr.conf">
+  <settings>
+    <param name="default-bitrate" value="7"/>
+    <param name="volte" value="0"/>
+    <param name="adjust-bitrate" value="0"/>
+    <param name="force-oa" value="0"/>
+  </settings>
+</configuration>
+```
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `default-bitrate` | 远端 fmtp 未指定 `mode-set` 时使用的初始编码模式（比特率索引） | `0`（4.75 kbit/s）～`7`（12.2 kbit/s） | `7` |
+| `volte` | 输出符合 VoLTE 的 fmtp：在 SDP answer 中追加 `max-red=0;mode-change-capability=2` | `0` 或 `1` | `0` |
+| `adjust-bitrate` | 根据 RTCP 反馈在呼叫中自动调整比特率 | `0` 或 `1` | `0` |
+| `force-oa` | 不论远端信令如何，强制出站 offer 使用字节对齐的负载格式 | `0` 或 `1` | `0` |
+
+AMR 模式索引与比特率对应关系：
+
+| 模式索引 | 比特率 |
+|---|---|
+| `0` | 4.75 kbit/s |
+| `1` | 5.15 kbit/s |
+| `2` | 5.9 kbit/s |
+| `3` | 6.7 kbit/s |
+| `4` | 7.4 kbit/s |
+| `5` | 7.95 kbit/s |
+| `6` | 10.2 kbit/s |
+| `7` | 12.2 kbit/s |
+
+`mode-set`、`octet-align`、`mode-change-period`、`mode-change-neighbor`、`crc`、`robust-sorting`、`interleaving`、`ptime`、`maxptime` 和 `max-red` 是 SDP 中协商的 fmtp 属性（RFC 4867），不是配置文件参数。FreeSWITCH 从传入 SDP 中解析这些值，并在 answer 中体现协商结果。
+
+---
+
+## AMR-WB 配置 {#amr-wb-configuration}
+
+`mod_amrwb` 在 `conf/vanilla/autoload_configs/amrwb.conf.xml` 中配置。如果编译时没有 `opencore-amrwb`/`vo-amrwbenc`，该模块仅支持透传模式。
+
+AMR-WB 支持 9 种模式（比特率）。默认帧长为 20 毫秒（由 AMR-WB 标准固定）。默认安装启用了 VoLTE 专用 fmtp（`volte=1`）。
+
+```xml
+<configuration name="amrwb.conf">
+  <settings>
+    <param name="default-bitrate" value="8"/>
+    <param name="volte" value="1"/>
+    <param name="adjust-bitrate" value="0"/>
+    <param name="force-oa" value="0"/>
+    <param name="mode-set-overwrite" value="0"/>
+  </settings>
+</configuration>
+```
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `default-bitrate` | 远端 fmtp 未指定 `mode-set` 时使用的初始编码模式（比特率索引） | `0`（6.60 kbit/s）～`8`（23.85 kbit/s） | `8` |
+| `volte` | 输出符合 VoLTE 的 fmtp | `0` 或 `1` | `1` |
+| `adjust-bitrate` | 根据 RTCP 反馈在呼叫过程中自动调整比特率 | `0` 或 `1` | `0` |
+| `force-oa` | 强制出站 offer 使用字节对齐的负载格式 | `0` 或 `1` | `0` |
+| `mode-set-overwrite` | 为 `1` 时，忽略远端 `mode-set`，使用 `default-bitrate`，而不是在 SDP answer 中镜像远端 mode-set | `0` 或 `1` | `0` |
+
+AMR-WB 模式索引与比特率对应关系：
+
+| 模式索引 | 比特率 |
+|---|---|
+| `0` | 6.60 kbit/s |
+| `1` | 8.85 kbit/s |
+| `2` | 12.65 kbit/s |
+| `3` | 14.25 kbit/s |
+| `4` | 15.85 kbit/s |
+| `5` | 18.25 kbit/s |
+| `6` | 19.85 kbit/s |
+| `7` | 23.05 kbit/s |
+| `8` | 23.85 kbit/s |
+
+---
+
+## H.264/H.263（mod_av）配置 {#h264h263-mod_av-configuration}
+
+`mod_av` 通过 libavcodec（FFmpeg）提供 H.264、H.263 和 H.263+ 视频编解码器。模块的编解码部分在 `conf/vanilla/autoload_configs/av.conf.xml` 中配置，包含两个配置块：`avcodec.conf`（本节所述编码器/解码器设置及各 Profile 参数）和 `avformat.conf`（由 `mod_av` 的录制/播放部分使用，只包含 `colorspace` 设置）。默认文件在 `avformat.conf` 中配置 `colorspace=1`（BT.709）。
+
+### avcodec.conf 设置 {#avcodecconf-settings}
+
+`<settings>` 区块对整个模块生效。随附的默认 `av.conf.xml` 只设置 `dec-threads` 和 `enc-threads`；其他项目作为注释示例保留。下表默认值指配置加载后的实际值（未设置或越界的值会被限制/重置为这些值）。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `max-bitrate` | 系统允许的最大编码比特率；编码器带宽会截断至该值。支持解析 `5mb` 等带宽字符串。 | 带宽字符串（如 `5mb`、`2000k`） | 按 1920×1080、5 fps 计算（未设置或 `<= 0` 时使用） |
+| `rtp-slice-size` | 视频 RTP 打包时允许的最大负载大小（加密前）；越界值会重置为默认值。 | `500`～`1500` | `1200` |
+| `key-frame-min-freq` | 生成关键帧的最短间隔，单位毫秒；越界值重置为默认值。 | `10`～`3000`（毫秒） | `250` |
+| `dec-threads` | 解码线程数；支持整数、`auto` 或 `cpu` 表达式。 | 整数、`auto` 或 `cpu/<divisor>/<max>` | `1` |
+| `enc-threads` | 编码线程数；支持整数、`auto` 或 `cpu` 表达式。 | 整数、`auto` 或 `cpu/<divisor>/<max>` | `cpu/2/4` |
+
+### 每个 Profile 的 H.264/H.263 参数 {#per-profile-h264h263-parameters}
+
+Profile 在 `<profiles>` 下定义为 `<profile name="...">` 元素。默认文件包含 `H263`、`H263+`、`H264`、`H265`、`conference` 和 `conference-H264` 等 Profile。`conference` 通过 `<codecs>` 区块把会议视频的编解码器名称映射到相应 Profile。每个 Profile 支持以下 `<param>` 配置项，并映射为 libavcodec 的 `AVCodecContext` 字段：
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `dec-threads` | 当前 Profile 的解码线程数 | 整数、`auto` 或 `cpu/<divisor>/<max>` | 继承 settings 的 `dec-threads` |
+| `enc-threads` | 当前 Profile 的编码线程数 | 整数、`auto` 或 `cpu/<divisor>/<max>` | 继承 settings 的 `enc-threads` |
+| `profile` | 编解码器 Profile；H.264 支持名称 `baseline`、`main`、`high` 或数值形式的 libavcodec Profile ID | `baseline` \| `main` \| `high` \| 整数 | `baseline`（FF_PROFILE_H264_BASELINE） |
+| `level` | 编解码器 Level（如 H.264 Level 3.1 写作 `31`，4.1 写作 `41`） | 整数 | `31` |
+| `timebase` | 编码器时间基，格式 `num/den` | `<num>/<den>`（如 `1/90`） | 未设置（使用 libavcodec 默认值） |
+| `flags` | libavcodec 编码器标志；标志之间用竖线分隔（见下方词汇表） | 竖线分隔的标识，例如 `LOOP_FILTER\|PSNR` | 未设置 |
+| `me-cmp` | 运动估计比较函数 | 整数 | libavcodec 默认值 |
+| `me-range` | 运动估计搜索范围 | 整数 | libavcodec 默认值 |
+| `max-b-frames` | 非 B 帧之间允许的最大 B 帧数量 | 整数 | libavcodec 默认值 |
+| `refs` | 参考帧数量 | 整数 | libavcodec 默认值 |
+| `gop-size` | GOP（图像组）大小，以帧数表示的关键帧间隔 | 整数 | libavcodec 默认值 |
+| `keyint-min` | 最小 GOP 大小 | 整数 | libavcodec 默认值 |
+| `i-quant-factor` | I 帧相对 P 帧的量化系数 | 浮点数 | libavcodec 默认值 |
+| `b-quant-factor` | B 帧相对 P 帧的量化系数 | 浮点数 | libavcodec 默认值 |
+| `qcompress` | 量化曲线压缩系数 | 浮点数（`0.0`～`1.0`） | libavcodec 默认值 |
+| `qmin` | 最小量化器值 | 整数 | libavcodec 默认值 |
+| `qmax` | 最大量化器值 | 整数 | libavcodec 默认值 |
+| `max-qdiff` | 帧间最大量化器差值 | 整数 | libavcodec 默认值 |
+| `colorspace` | YUV 色彩空间（`AVColorSpace` 枚举值）；超过支持最大值时回退到 RGB | 整数（例如 `0`=RGB/GBR、`1`=BT.709、`5`=BT.470BG、`6`=SMPTE170M） | 默认 H264 Profile 中为 `0` |
+| `color-range` | 色彩范围（`AVColorRange` 枚举值）；越界时重置为 `0` | `0`（未指定）\| `1`（MPEG/有限范围）\| `2`（JPEG/全范围） | 默认 H264 Profile 中为 `2` |
+
+默认 `H264` Profile 还包含 `flags="LOOP_FILTER|PSNR"`。
+
+### 编码器标志词汇表 {#encoder-flags-vocabulary}
+
+`flags` 参数接受用竖线（`|`）分隔的列表。匹配每个标识时不区分大小写，并将其按位或到 libavcodec 标志集中（仅在链接的 FFmpeg 定义了对应的 `AV_CODEC_FLAG_*` 时适用）：
+
+`UNALIGNED`、`QSCALE`、`4MV`、`CORRUPT`、`QPEL`、`PASS1`、`PASS2`、`LOOP_FILTER`、`GRAY`、`PSNR`、`TRUNCATED`、`INTERLACED_DCT`、`LOW_DELAY`、`HEADER`（全局头）、`BITEXACT`、`AC_PRED`、`INTERLACED_ME`、`CLOSED_GOP`。
+
+### 透传 x264 私有选项 {#x264-private-options-passthrough}
+
+Profile 可以包含一个 `<options>` 区块，其中每个 `<option>` 都会原样传给底层编码器的私有选项字典（H.264 使用 x264）。FreeSWITCH 不验证这些选项，因此可提供 libx264 支持的任意选项名称和值。
+
+```xml
+<profile name="H264">
+  <param name="flags" value="LOOP_FILTER|PSNR"/>
+  <options>
+    <option name="preset" value="veryfast"/>
+    <option name="intra_refresh" value="1"/>
+    <option name="tune" value="animation+zerolatency"/>
+    <option name="sc_threshold" value="40"/>
+    <option name="b_strategy" value="1"/>
+    <option name="crf" value="18"/>
+  </options>
+</profile>
+```
+
+默认的 `H264` Profile 附带上述选项（`crf=18`）；`conference-H264` Profile 使用相同配置集，但通过 `crf=10` 提高会议质量。
+
+---
+
+## VP8/VP9（mod_vpx）配置 {#vp8vp9-mod_vpx-configuration}
+
+VP8 和 VP9 视频编解码器由基于 libvpx 的内置 VPX 实现（`src/switch_vpx.c`）提供，而不是单独加载的模块。它们在 `conf/vanilla/autoload_configs/vpx.conf.xml` 中配置。
+
+### vpx.conf 设置 {#vpxconf-settings}
+
+`<settings>` 区块同时作用于 VP8 和 VP9。默认文件中的所有设置都被注释，因此生效的是下表的默认值。加载配置后，未设置或越界的值会被限制/重置为这些默认值。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `debug` | 启用 VPX 调试日志 | 整数（`0` 为关，非零为开） | `0` |
+| `max-bitrate` | 系统允许的最大编码比特率；编码器带宽会截断至该值。支持解析带宽字符串。 | 带宽字符串（如 `5mb`） | 按 1920×1080、5 fps 计算（未设置或 `<= 0` 时使用） |
+| `rtp-slice-size` | 加密前的最大 RTP 负载大小 | `500`～`1500` | `1200` |
+| `key-frame-min-freq` | 生成关键帧的最短间隔（毫秒） | `10`～`3000`（毫秒） | `250` |
+| `dec-threads` | 默认解码线程数（每个 Profile 的回退值） | 整数、`auto` 或 `cpu/<divisor>/<max>` | `cpu/2/4`（各 Profile 生效默认值） |
+| `enc-threads` | 默认编码线程数（每个 Profile 的回退值） | 整数、`auto` 或 `cpu/<divisor>/<max>` | `1`（各 Profile 生效默认值） |
+
+### 每个 Profile 的 VP8/VP9 参数 {#per-profile-vp8vp9-parameters}
+
+Profile 在 `<profiles>` 下定义为 `<profile name="...">` 元素。默认文件提供 `vp8`、`vp9`、`conference`、`conference-vp8` 等 Profile。大多数参数直接映射到 libvpx 的 `vpx_codec_enc_cfg_t`（`enc_cfg`）或 `vpx_codec_dec_cfg_t`（`dec_cfg`）字段，并接受范围检查；越界值将被拒绝并保留 libvpx 默认值。部分参数只适用于其中一种编解码器，详见说明。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `dec-threads` | 解码线程数 | 整数、`auto` 或 `cpu/<divisor>/<max>`（最小 `1`） | `cpu/2/4` |
+| `enc-threads` | 编码线程数（`g_threads`） | 整数、`auto` 或 `cpu/<divisor>/<max>`（最小 `1`） | `1` |
+| `g-profile` | libvpx 码流 Profile（`g_profile`） | `0`～`3` | libvpx 默认值（默认 `vp9` Profile 设置为 `0`） |
+| `g-error-resilient` | 错误恢复标志（`g_error_resilient`），用竖线分隔 | `DEFAULT` \| `PARTITIONS`（竖线分隔） | libvpx 默认值 |
+| `g-pass` | 编码 Pass（`g_pass`） | `ONE_PASS` \| `FIRST_PASS` \| `LAST_PASS` | libvpx 默认值 |
+| `g-lag-in-frames` | 编码器在产生输出之前可以预读的帧数（`g_lag_in_frames`） | `0`～`25` | libvpx 默认值 |
+| `rc_dropframe_thresh` | 码率控制的丢帧阈值（`rc_dropframe_thresh`）。注意：源码使用带下划线的名称匹配。 | `0`～`100` | libvpx 默认值 |
+| `rc-resize-allowed` | 是否允许空间重采样（`rc_resize_allowed`） | `0` 或 `1` | libvpx 默认值 |
+| `rc-scaled-width` | 内部缩放宽度（`rc_scaled_width`） | `0` 或更大 | libvpx 默认值 |
+| `rc-scaled-height` | 内部缩放高度（`rc_scaled_height`） | `0` 或更大 | libvpx 默认值 |
+| `rc-resize-up-thresh` | 触发放大的阈值（`rc_resize_up_thresh`） | `0`～`100` | libvpx 默认值 |
+| `rc-resize-down-thresh` | 触发缩小的阈值（`rc_resize_down_thresh`） | `0`～`100` | libvpx 默认值 |
+| `rc-end-usage` | 码率控制模式（`rc_end_usage`） | `VBR` \| `CBR` \| `CQ` \| `Q` | libvpx 默认值 |
+| `rc-target-bitrate` | 目标比特率（`rc_target_bitrate`）；支持带宽字符串 | 带宽字符串（如 `1mb`），最小 `1` | libvpx 默认值 |
+| `rc-min-quantizer` | 最小量化器值（`rc_min_quantizer`） | `0`～`63` | libvpx 默认值 |
+| `rc-max-quantizer` | 最大量化器值（`rc_max_quantizer`） | `0`～`63` | libvpx 默认值 |
+| `rc-undershoot-pct` | 码率欠冲百分比（`rc_undershoot_pct`） | `0`～`100`（VP9）/ `0`～`1000`（VP8） | libvpx 默认值 |
+| `rc-overshoot-pct` | 码率过冲百分比（`rc_overshoot_pct`） | `0`～`100`（VP9）/ `0`～`1000`（VP8） | libvpx 默认值 |
+| `rc-buf-sz` | 解码器缓冲大小（毫秒，`rc_buf_sz`） | `1` 或更大 | libvpx 默认值 |
+| `rc-buf-initial-sz` | 解码器初始缓冲大小（毫秒，`rc_buf_initial_sz`） | `1` 或更大 | libvpx 默认值 |
+| `rc-buf-optimal-sz` | 解码器理想缓冲大小（毫秒，`rc_buf_optimal_sz`） | `1` 或更大 | libvpx 默认值 |
+| `rc-2pass-vbr-bias-pct` | 两遍编码 VBR 偏置比例（`rc_2pass_vbr_bias_pct`） | `0`～`100` | libvpx 默认值 |
+| `rc-2pass-vbr-minsection-pct` | 两遍编码 VBR 的最小区段比例（`rc_2pass_vbr_minsection_pct`） | `1` 或更大 | libvpx 默认值 |
+| `rc-2pass-vbr-maxsection-pct` | 两遍编码 VBR 的最大区段比例（`rc_2pass_vbr_maxsection_pct`） | `1` 或更大 | libvpx 默认值 |
+| `kf-mode` | 关键帧放置模式（`kf_mode`） | `AUTO` \| `DISABLED` | libvpx 默认值 |
+| `kf-min-dist` | 最小关键帧间隔（`kf_min_dist`） | `0` 或更大 | libvpx 默认值 |
+| `kf-max-dist` | 最大关键帧间隔（`kf_max_dist`） | `0` 或更大 | libvpx 默认值 |
+| `ss-number-layers` | 空间层数量（`ss_number_layers`） | `0`～`VPX_SS_MAX_LAYERS` | libvpx 默认值 |
+| `ts-number-layers` | 时间层数量（`ts_number_layers`）；VP9 中锁定 | `0`～`VPX_SS_MAX_LAYERS`（VP8）；锁定（VP9） | libvpx 默认值 |
+| `ts-periodicity` | 时间分层周期（`ts_periodicity`）；VP9 中锁定 | `0`～`16`（VP8）；锁定（VP9） | libvpx 默认值 |
+| `temporal-layering-mode` | 时间分层模式（`temporal_layering_mode`）；VP9 中锁定 | `0`～`3`（VP8）；锁定（VP9） | libvpx 默认值 |
+| `lossless` | VP9 无损模式（通过 codec_control 设置）。仅 VP9。 | `0` 或 `1` | `0` |
+| `cpuused` | 编码器速度与质量的权衡（通过 codec_control 设置） | `-16`～`16`（VP8）/ `-8`～`8`（VP9） | libvpx 默认值 |
+| `token-parts` | Token 分区数量（通过 codec_control 设置） | `cpu` 表达式或整数，1～8 个分区 | libvpx 默认值 |
+| `static-thresh` | 静态内容阈值（通过 codec_control 设置） | `0` 或更大 | libvpx 默认值 |
+| `noise-sensitivity` | 时域降噪级别（通过 codec_control 设置）。仅 VP8。 | `0`～`6` | libvpx 默认值 |
+| `max-intra-bitrate-pct` | 帧内最大比特率百分比（通过 codec_control 设置）。仅 VP8。 | `0` 或更大 | libvpx 默认值 |
+| `vp9e-tune-content` | VP9 内容调优（通过 codec_control 设置）。仅 VP9。 | `DEFAULT` \| `SCREEN` | libvpx 默认值 |
+
+标记为“通过 codec_control 设置”的参数，通过 libvpx 控制调用作用于正在运行的编码器，而不是初始的 `enc_cfg`。`conference` Profile 使用 `<codecs>` 区块将编解码器名称（`vp8`、`vp9`）绑定到会议视频所使用的 Profile；默认的 `conference-vp8` Profile 则演示了一套面向会议优化的显式 CBR 配置。

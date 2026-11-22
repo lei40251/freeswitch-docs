@@ -1,0 +1,126 @@
+---
+sidebar_position: 4
+id: mod_mongo
+slug: /module-reference/data-stores/mod_mongo
+title: "mod_mongo——MongoDB 客户端"
+description: "使用 mod_mongo 查询 MongoDB 并作为分布式 limit 计数后端。"
+sidebar_label: "mod_mongo"
+---
+# mod_mongo——MongoDB 客户端 {#mod_mongo-—-mongodb-client}
+
+`mod_mongo` 是一个 FreeSWITCH 应用模块，位于 `src/mod/applications/mod_mongo`，使用池化的 `libmongoc` 客户端连接 MongoDB 服务器。它有两个用途：提供 API 命令，允许拨号计划脚本和 ESL 客户端直接查询 MongoDB 集合；为 FreeSWITCH `limit` 子系统实现 `mongo` 后端，让多个 FreeSWITCH 服务器能够共享呼叫速率限制。
+
+需要在拨号计划中查询存放在 MongoDB 中的主叫数据、路由表或其他记录，或者需要跨多个 FreeSWITCH 实例维护分布式并发计数器时，可以采用此模块。
+
+## 加载模块 {#loading-the-module}
+
+`load` 命令及 `modules.conf.xml` 中的模块名为 `mod_mongo`。
+
+默认发行版中存在该条目，但已被注释：
+
+```xml
+<!--<load module="mod_mongo"/>-->
+```
+
+要启用，请取消 `conf/vanilla/autoload_configs/modules.conf.xml`（或安装中的对应路径）内该行的注释。同时，构建主机上必须安装 `libmongoc` 才能编译模块；Makefile 中的 `HAVE_MONGOC` 检查会在缺少该库时终止编译并给出错误。
+
+## 配置：`mongo.conf.xml` {#configuration-mongoconfxml}
+
+`mod_mongo` 加载时读取 `mongo.conf`（`autoload_configs/mongo.conf.xml`）。所有设置都位于单一的 `<settings>` 块中。还可以单独配置一个仅供限额后端使用的连接池；如果没有设置，限额后端会复用主要的 `connection-string` 连接池。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `connection-string` | 通用查询及限额后端（未覆盖时）使用的 MongoDB URI | 标准 MongoDB URI | *（必需，无默认值）* |
+| `limit-connection-string` | 仅供限额后端使用的独立 MongoDB URI | 标准 MongoDB URI | `connection-string` 的值 |
+| `limit-database` | 存放限额计数器的 MongoDB 数据库名称 | 任意有效数据库名称 | `limit` |
+| `limit-collection` | 存放限额计数器的 MongoDB 集合名称 | 任意有效集合名称 | `mod_mongo` |
+| `limit-cleanup-interval-sec` | 后台清理值为零的限额文档的时间间隔（秒） | 整数 `>= 0`；`0` 关闭清理 | `300` |
+| `map` | `mongo_mapreduce` 使用的 JavaScript map 函数 | JavaScript 函数字符串 | *（空）* |
+| `reduce` | `mongo_mapreduce` 使用的 JavaScript reduce 函数 | JavaScript 函数字符串 | *（空）* |
+| `finalize` | `mongo_mapreduce` 使用的 JavaScript finalize 函数 | JavaScript 函数字符串 | *（空）* |
+
+MongoDB URI 格式为：
+
+```
+mongodb://[username:password@]host1[:port1][,host2[:port2],...][/[database][?options]]
+```
+
+随附配置中的最小实际示例：
+
+```xml
+<configuration name="mongo.conf">
+  <settings>
+    <!--
+         mongodb://[username:password@]host1[:port1][,host2[:port2],...[,hostN[:portN]]][/[database][?options]]
+    -->
+    <param name="connection-string" value="mongodb://127.0.0.1:27017/?connectTimeoutMS=10000"/>
+
+<!--
+    <param name="map" value="function() { emit(this.a, 1); }"/>
+    <param name="reduce" value="function(key, values) { return Array.sum(values); }"/>
+    <param name="finalize" value="function(key, value) { return value;}"/>
+-->
+
+  </settings>
+</configuration>
+```
+
+## API 命令 {#api-commands}
+
+以下命令可从 `fs_cli`、ESL 或拨号计划 `api` 应用调用。
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `mongo_find_one` | 返回与查询匹配的第一个文档 | `mongo_find_one ns; query; fields; options` |
+| `mongo_find_n` | 以 JSON 数组形式返回最多 N 个匹配文档 | `mongo_find_n ns; query; fields; options; n` |
+| `mongo_mapreduce` | 以内联方式执行服务端 Map/Reduce 操作 | `mongo_mapreduce ns; query` |
+
+**参数说明**
+
+- `ns`：`database.collection` 形式的命名空间（例如 `mydb.users`）。
+- `query`：作为 MongoDB 查询过滤条件的 JSON 对象（例如 `{"caller_id":"5551234"}`）。
+- `fields`：用于选择返回字段的 JSON 投影对象（例如 `{"name":1}`）。
+- `options`：以逗号分隔的可选标志字符串。可识别的标记有 `cursorTailable`、`slaveOk`、`oplogReplay`、`noCursorTimeout`、`awaitData`、`exhaust` 和 `partialResults`。不指定标志时传入 `{}` 或空字符串。
+- `n`：最多返回的文档数（整数 `>= 1`；未提供或小于 1 时默认为 `1`）。
+
+参数之间使用 `;`（分号）分隔。
+
+成功时响应以 `-OK` 开头，后面是 JSON 结果；失败时以 `-ERR` 开头，后面跟错误描述。
+
+**`fs_cli` 示例**
+
+```
+freeswitch@> mongo_find_one mydb.callers; {"caller_id": "5551234"}; {"name": 1, "max_calls": 1}; {}
+
+freeswitch@> mongo_find_n mydb.callers; {}; {"caller_id": 1}; {}; 10
+
+freeswitch@> mongo_mapreduce mydb.callers; {"active": true}
+```
+
+## 限额后端 {#limit-backend}
+
+`mod_mongo` 注册一个名为 `mongo` 的 `limit` 接口。与标准 `limit` 拨号计划应用配合，可在 FreeSWITCH 集群中限制单个资源的并发使用量。计数器文档在 MongoDB 中以如下形式存储：
+
+```json
+{ "_id": "realm_resource", "total": 5, "fs-hostname-1": 3, "fs-hostname-2": 2 }
+```
+
+每个 FreeSWITCH 实例以服务器的 switch 名称作为字段键，记录自身计数；`total` 保存整个集群的总数。会话结束时会自动递减计数器，后台清理任务每隔 `limit-cleanup-interval-sec` 秒删除计数为零的文档。
+
+使用 `limit` 应用的拨号计划示例：
+
+```xml
+<action application="limit" data="mongo realm resource 5"/>
+```
+
+第一个标记（`mongo`）指定使用本模块的限额后端。
+
+## 依赖项 {#dependencies}
+
+`mod_mongo` 需要 **libmongoc**（MongoDB C Driver，Debian/Ubuntu 上的软件包为 `libmongoc-dev`）。构建系统通过 `HAVE_MONGOC` autoconf 标志检查此库，若缺失则拒绝编译。libmongoc 不包含在 FreeSWITCH 源码树中，编译本模块之前需单独安装。
+
+## 相关文档 {#see-also}
+
+- [第 23 章：工具类应用](../../applications/utility-applications.mdx)
+
+**源码：** `src/mod/applications/mod_mongo`、`conf/vanilla/autoload_configs/mongo.conf.xml`

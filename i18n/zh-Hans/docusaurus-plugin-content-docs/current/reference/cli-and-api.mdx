@@ -1,0 +1,515 @@
+---
+sidebar_position: 1
+id: cli-and-api
+slug: /reference/cli-and-api
+title: "第 31 章：CLI 与 API 命令参考"
+description: "FreeSWITCH API 命令参考，涵盖 fs_cli 控制台及 Event Socket api/bgapi 方法共享的命令集。"
+sidebar_label: "31. CLI 与 API 命令参考"
+---
+
+# 第 31 章：CLI 与 API 命令参考 {#chapter-31-cli-and-api-command-reference}
+
+FreeSWITCH 通过两种共享同一套命令的接口开放完整运行时 API：交互式 `fs_cli` 控制台和 Event Socket。在 `fs_cli` 提示符中输入的任意命令，都可以通过 Event Socket 的 `api` 或 `bgapi` 方法原样发送。因此，本章参考资料同时适用于这两种接口。
+
+本章介绍面向运维人员的命令集。FreeSWITCH 总共注册了 150 多条 API 命令，这里重点介绍日常系统管理、呼叫控制和配置管理常用的命令。
+
+<SignalWireCallout
+  title="每条 uuid_* 命令都相当于一个 REST 端点"
+  href="https://signalwire.com/docs/apis/rest/calls"
+  page="cli-and-api"
+  linkText="查看 Calling API">
+
+`originate` 对应创建呼叫的 POST 请求；`uuid_transfer`、`uuid_record` 和 `uuid_hold` 则对应 SignalWire REST Calling API 对实时呼叫资源的更新。两者提供同样的实时呼叫控制能力，无需登录服务器的 `fs_cli`，使用任意编程语言都可调用。
+
+</SignalWireCallout>
+
+## 连接 fs\_cli {#connecting-with-fs_cli}
+
+`fs_cli` 是 FreeSWITCH Event Socket 接口的标准交互式客户端。它连接到 `event_socket.conf.xml` 中定义的地址和端口。默认监听地址为 `::`（所有接口），默认端口为 `8021`，默认密码为 `ClueCon`。
+
+常用连接选项：
+
+| 选项 | 用途 |
+|------|---------|
+| `-H <host>` | Event Socket 主机（默认：`localhost`） |
+| `-P <port>` | Event Socket 端口（默认：`8021`） |
+| `-p <password>` | Event Socket 密码 |
+| `-x <command>` | 执行一条命令后退出 |
+| `-q` | 静默模式；不输出日志 |
+
+以下示例连接到非默认主机：
+
+```
+fs_cli -H 192.0.2.10 -P 8021 -p ClueCon
+```
+
+在 `fs_cli` 提示符中执行的命令，会作为 API 调用通过 Event Socket 发送给 FreeSWITCH 进程。外部应用经 Event Socket 使用 `api <command> [args]` 发送相同命令，执行行为完全一致。
+
+---
+
+## 状态与信息查询 {#status-and-inspection}
+
+这些命令返回 FreeSWITCH 进程及活动会话的运行时状态信息。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `status` | 显示系统总体状态：运行时间、会话数和速率统计 | `status` |
+| `version` | 返回 FreeSWITCH 版本字符串 | `version [short]` |
+| `uptime` | 以指定单位报告进程运行时间 | `uptime [us\|ms\|s\|m\|h\|d\|microseconds\|milliseconds\|seconds\|minutes\|hours\|days]` |
+| `show channels` | 列出活动通道 | `show channels [count\|like <match>]` |
+| `show calls` | 列出活动呼叫 | `show calls [count]` |
+| `show detailed_calls` | 列出活动呼叫及扩展字段详情 | `show detailed_calls` |
+| `show bridged_calls` | 列出当前已桥接的呼叫 | `show bridged_calls` |
+| `show detailed_bridged_calls` | 列出已桥接呼叫及扩展字段详情 | `show detailed_bridged_calls` |
+| `show registrations` | 列出当前 SIP 注册信息 | `show registrations` |
+| `show modules` | 列出已加载模块 | `show modules` |
+| `show interfaces` | 列出已注册接口 | `show interfaces` |
+| `show interface_types` | 列出已注册接口类型组 | `show interface_types` |
+| `show tasks` | 列出已调度任务 | `show tasks` |
+| `show codec` | 列出已注册编解码器 | `show codec` |
+| `show endpoint` | 列出已注册端点 | `show endpoint` |
+| `show application` | 列出已注册拨号计划应用 | `show application` |
+| `show api` | 列出已注册 API 命令 | `show api` |
+| `show limits` | 显示限额后端的使用情况 | `show limits` |
+| `hostname` | 返回系统主机名 | `hostname` |
+| `switchname` | 返回已配置的交换机名称 | `switchname` |
+| `host_lookup` | 将主机名解析为 IP 地址 | `host_lookup <hostname>` |
+| `gethost` | 通过 `gethostbyname` 解析主机名 | `gethost <hostname>` |
+| `uuid_exists` | 检查指定通道 UUID 当前是否活动 | `uuid_exists <uuid>` |
+| `uuid_dump` | 输出会话的全部变量与状态信息 | `uuid_dump <uuid> [format]` |
+| `uuid_buglist` | 列出会话上活动的媒体 Bug（媒体钩子） | `uuid_buglist <uuid>` |
+
+`show` 命令支持源码中列出的完整查询对象列表：
+
+```
+codec|endpoint|application|api|dialplan|file|timer|calls [count]|
+channels [count|like <match string>]|calls|detailed_calls|bridged_calls|
+detailed_bridged_calls|aliases|complete|chat|management|modules|
+nat_map|say|interfaces|interface_types|tasks|limits|status
+```
+
+---
+
+## 用户目录与接口查询 {#directory-and-interface-lookups}
+
+这些命令用于查询 XML 用户目录、检查模块或文件是否存在，以及解析网络接口地址。脚本和拨号计划经常利用这些查询结果决定呼叫路由。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `list_users` | 列出用户目录中的用户，可按组、域、用户或上下文筛选 | `list_users [group <group>] [domain <domain>] [user <user>] [context <context>]` |
+| `user_exists` | 检查用户是否匹配目录中的键值（返回 `true`/`false`） | `user_exists <key> <user> <domain>` |
+| `user_data` | 返回目录用户的变量、参数或属性值 | `user_data <user>@<domain> [var\|param\|attr] <name>` |
+| `domain_exists` | 检查目录中是否配置指定域（返回 `true`/`false`） | `domain_exists <domain>` |
+| `domain_data` | 返回目录域的变量、参数或属性值 | `domain_data <domain> [var\|param\|attr] <name>` |
+| `module_exists` | 检查模块是否已加载（返回 `true`/`false`） | `module_exists <module>` |
+| `file_exists` | 检查服务器文件系统中是否存在指定文件（返回 `true`/`false`） | `file_exists <file>` |
+| `interface_ip` | 返回指定网络接口的主要 IP 地址 | `interface_ip [auto\|ipv4\|ipv6] <ifname>` |
+
+**关于 `user_exists`：**
+
+`<key>` 参数选择要与 `<user>` 匹配的目录字段。例如使用 `id`，即按用户 ID 匹配。
+
+**关于 `interface_ip`：**
+
+`ipv4` 和 `ipv6` 强制使用相应的地址族；`auto` 则返回 `<ifname>` 指定接口可用的地址族。
+
+---
+
+## 呼叫控制 {#call-control}
+
+这些命令通过 UUID 标识并操作活动通道。可以通过 `show channels` 或 `show calls` 获取 UUID。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `originate` | 发起一个出站呼叫腿 | `originate <call_url> <exten>\|&<application_name>(<app_args>) [<dialplan>] [<context>] [<cid_name>] [<cid_num>] [<timeout_sec>]` |
+| `uuid_bridge` | 将两个已有通道腿桥接起来 | `uuid_bridge <uuid> <other_uuid>` |
+| `uuid_kill` | 终止指定通道，可选传入挂机原因 | `uuid_kill <uuid> [cause]` |
+| `uuid_transfer` | 将通道转接至拨号计划分机 | `uuid_transfer <uuid> [-bleg\|-both] <dest-exten> [<dialplan>] [<context>]` |
+| `uuid_dual_transfer` | 同时转接一个呼叫及其对端呼叫腿 | `uuid_dual_transfer <uuid> <A-dest-exten>[/<A-dialplan>][/<A-context>] <B-dest-exten>[/<B-dialplan>][/<B-context>]` |
+| `uuid_hold` | 对指定通道保持或解除保持 | `uuid_hold [off\|toggle] <uuid> [<display>]` |
+| `uuid_park` | 将通道驻留（Park） | `uuid_park <uuid>` |
+| `uuid_answer` | 应答尚未接听的通道 | `uuid_answer <uuid>` |
+| `uuid_pre_answer` | 对通道执行预应答（183 Session Progress） | `uuid_pre_answer <uuid>` |
+| `uuid_ring_ready` | 向通道发送振铃指示 | `uuid_ring_ready <uuid> [queued]` |
+| `uuid_setvar` | 设置会话的通道变量 | `uuid_setvar <uuid> <var> [value]` |
+| `uuid_setvar_multi` | 一次设置多个通道变量 | `uuid_setvar_multi <uuid> <var>=<value>;<var>=<value>...` |
+| `uuid_getvar` | 读取通道变量值 | `uuid_getvar <uuid> <var>` |
+| `uuid_dump` | 输出会话的全部变量与状态信息 | `uuid_dump <uuid> [format]` |
+| `uuid_broadcast` | 在通道上执行拨号计划应用 | `uuid_broadcast <uuid> <path> [aleg\|bleg\|holdb\|both]` |
+| `uuid_record` | 启动、停止、屏蔽或取消屏蔽会话音频录制 | `uuid_record <uuid> [start\|stop\|mask\|unmask] <path> [<limit>] [<recording_vars>]` |
+| `uuid_displace` | 向通道注入音频文件或移除注入 | `uuid_displace <uuid> [start\|stop] <path> [<limit>] [mux]` |
+| `uuid_audio` | 静音或调整通道音量 | `uuid_audio <uuid> [start [read\|write] [mute\|level <level>]\|stop]` |
+| `uuid_pause` | 暂停或恢复通道媒体 | `uuid_pause <uuid> <on\|off>` |
+| `uuid_break` | 中断当前阻塞通道的应用 | `uuid_break <uuid> [all]` |
+| `break` | `uuid_break` 的别名 | `break <uuid> [all]` |
+| `uuid_send_dtmf` | 向通道发送 DTMF 数字 | `uuid_send_dtmf <uuid> <dtmf_data>` |
+| `uuid_recv_dtmf` | 向通道注入接收到的 DTMF 数字 | `uuid_recv_dtmf <uuid> <dtmf_data>` |
+| `uuid_flush_dtmf` | 清空通道上缓存的 DTMF | `uuid_flush_dtmf <uuid>` |
+| `uuid_media` | 通过 re-INVITE 让 FreeSWITCH 进入或退出媒体路径 | `uuid_media [off] <uuid>` |
+| `uuid_media_3p` | 通过 3PCC（第三方呼叫控制）的 re-INVITE 让 FreeSWITCH 进入或退出媒体路径 | `uuid_media_3p [off] <uuid>` |
+| `uuid_media_reneg` | 触发指定通道的媒体重新协商 | `uuid_media_reneg <uuid>[ <codec_string>]` |
+| `uuid_deflect` | 发送 SIP REFER 重定向呼叫 | `uuid_deflect <uuid> <uri>` |
+| `uuid_redirect` | 发送 SIP 重定向响应 | `uuid_redirect <uuid> <uri>` |
+| `uuid_display` | 更新已注册设备的电话显示信息 | `uuid_display <uuid> <display>` |
+| `uuid_loglevel` | 设置指定会话的日志级别 | `uuid_loglevel <uuid> <level>` |
+| `uuid_jitterbuffer` | 启用或配置通道的抖动缓冲区 | `uuid_jitterbuffer <uuid> [0\|<min_msec>[:<max_msec>]]` |
+| `uuid_session_heartbeat` | 启用或设置通道心跳间隔 | `uuid_session_heartbeat <uuid> [sched] [0\|<seconds>]` |
+| `uuid_simplify` | 尝试将 FreeSWITCH 从媒体路径中移除 | `uuid_simplify <uuid>` |
+| `uuid_fileman` | 控制通道上的文件播放 | `uuid_fileman <uuid> <cmd>:<val>` |
+| `uuid_send_message` | 向指定通道的端点发送 SIP MESSAGE | `uuid_send_message <uuid> <message>` |
+| `uuid_send_info` | 向指定通道的端点发送 SIP INFO 请求 | `uuid_send_info <uuid> [<mime_type> <mime_subtype>] <message>` |
+| `uuid_limit` | 通过限额后端为通道应用用量限制资源 | `uuid_limit <uuid> <backend> <realm> <resource> [<max>[/interval]] [number [dialplan [context]]]` |
+| `uuid_limit_release` | 释放之前应用于通道的限额资源 | `uuid_limit_release <uuid> <backend> [realm] [resource]` |
+| `tone_detect` | 在通道上启动音调检测，匹配时可触发应用 | `tone_detect <uuid> <key> <tone_spec> [<flags> <timeout> <app> <args> <hits>]` |
+| `hupall` | 挂断所有通道，可选根据变量值筛选 | `hupall <cause> [<var> <value>] [<var2> <value2>]` |
+
+**关于 `originate`：**
+
+`<call_url>` 是 FreeSWITCH 端点拨号字符串，例如 `sofia/internal/1001@192.0.2.1`。第二个位置参数可以是拨号计划分机（`<exten>`），也可以是以 `&` 开头的内联应用，如 `&echo()`。省略 `<dialplan>` 与 `<context>` 时，默认分别为 `XML` 和 `default`。
+
+**关于 `uuid_transfer`：**
+
+`-bleg` 转接呼叫的 B 腿；`-both` 同时转接两条呼叫腿。不提供选项时转接 A 腿。
+
+**关于 `uuid_broadcast`：**
+
+`<path>` 可以是音频文件路径，也可以是 `app::args` 格式的内联应用调用。`aleg`、`bleg`、`holdb` 和 `both` 选项决定哪条呼叫腿接收广播。
+
+**关于 `uuid_record`：**
+
+`mask` 用静音替代录制内容；`unmask` 恢复正常录音。可选的 `<recording_vars>` 参数接受以分号分隔的通道变量列表，并将其附加为元数据。
+
+**关于 `uuid_displace`：**
+
+`start` 开始注入音频；`stop` 结束注入。`mux` 选项使注入音频与现有音频流混合，而不是替换它。
+
+---
+
+## 配置管理 {#configuration-control}
+
+以下命令无需重启 FreeSWITCH 进程即可重新加载配置。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `reloadxml` | 从磁盘重新加载全部 XML 配置 | `reloadxml` |
+| `reload` | 重新加载已加载的模块（先卸载再加载） | `reload [-f] <mod_name>` |
+| `load` | 加载当前尚未加载的模块 | `load <mod_name>` |
+| `unload` | 卸载已加载模块 | `unload [-f] <mod_name>` |
+| `reloadacl` | 从配置重新加载访问控制列表 | `reloadacl` |
+| `reloadcert` | 无需重启即重新加载 SSL/TLS 证书 | `reloadcert` |
+
+在 `reload` 和 `unload` 中使用 `-f`，即使模块报告无法安全卸载，也会强制执行操作。
+
+---
+
+## 系统控制 {#system-control}
+
+`fsctl` 命令向 FreeSWITCH 核心发送控制消息。所有子命令都采用 `fsctl <subcommand> [args]` 格式。`shutdown` 也可以作为独立别名使用。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `fsctl loglevel` | 设置全局控制台日志级别 | `fsctl loglevel <level>` |
+| `fsctl debug_level` | 设置全局调试输出详细程度 | `fsctl debug_level <level>` |
+| `fsctl pause` | 暂停呼叫处理（入站、出站或两者） | `fsctl pause [inbound\|outbound]` |
+| `fsctl resume` | 恢复呼叫处理 | `fsctl resume [inbound\|outbound]` |
+| `fsctl max_sessions` | 设置最大并发会话数限制 | `fsctl max_sessions <num>` |
+| `fsctl sps` | 设置每秒会话数限制 | `fsctl sps <num>` |
+| `fsctl sps_peak_reset` | 重置每秒会话数峰值计数器 | `fsctl sps_peak_reset` |
+| `fsctl shutdown` | 发起受控关闭流程 | `fsctl shutdown [cancel\|elegant\|asap\|now\|restart]` |
+| `fsctl recover` | 从核心恢复数据库恢复会话 | `fsctl recover` |
+| `fsctl hupall` | 通过核心控制挂断所有活动会话 | `fsctl hupall` |
+| `fsctl min_dtmf_duration` | 设置 DTMF 最短持续时间（毫秒） | `fsctl min_dtmf_duration <num>` |
+| `fsctl max_dtmf_duration` | 设置 DTMF 最长持续时间（毫秒） | `fsctl max_dtmf_duration <num>` |
+| `fsctl default_dtmf_duration` | 设置 DTMF 默认持续时间（毫秒） | `fsctl default_dtmf_duration <num>` |
+| `fsctl min_idle_cpu` | 设置拒绝新呼叫前要求的最低 CPU 空闲百分比 | `fsctl min_idle_cpu <num>` |
+| `fsctl sync_clock` | 立即将内部时钟同步至系统时钟 | `fsctl sync_clock` |
+| `fsctl sync_clock_when_idle` | 下次系统空闲时同步内部时钟 | `fsctl sync_clock_when_idle` |
+| `fsctl send_sighup` | 向进程发送 SIGHUP 以触发日志轮转 | `fsctl send_sighup` |
+| `fsctl uuid_version` | 设置 UUID 生成版本 | `fsctl uuid_version [4\|7]` |
+| `fsctl api_expansion` | 启用或禁用拨号计划中的 API 展开 | `fsctl api_expansion [on\|off]` |
+| `fsctl reclaim_mem` | 从核心内存池回收未使用内存 | `fsctl reclaim_mem` |
+| `fsctl mdns_resolve` | 启用或禁用 mDNS 解析 | `fsctl mdns_resolve [enable\|disable]` |
+| `fsctl flush_db_handles` | 从连接池清理空闲的核心数据库连接句柄 | `fsctl flush_db_handles` |
+| `fsctl calibrate_clock` | 重新校准内部单调时钟 | `fsctl calibrate_clock` |
+| `fsctl crash` | 强制进程立即崩溃（用于调试核心转储） | `fsctl crash` |
+| `fsctl verbose_events` | 在全局启用或禁用详细事件生成 | `fsctl verbose_events [on\|off]` |
+| `fsctl threaded_system_exec` | 切换 `system`/`bg_system` Shell 命令是否在专用线程运行 | `fsctl threaded_system_exec [on\|off]` |
+| `fsctl save_history` | 将 CLI 命令历史持久化到磁盘 | `fsctl save_history` |
+| `fsctl pause_check` | 报告呼叫处理是否暂停（返回 `true`/`false`） | `fsctl pause_check [inbound\|outbound]` |
+| `fsctl ready_check` | 报告系统是否已就绪（返回 `true`/`false`） | `fsctl ready_check` |
+| `fsctl shutdown_check` | 报告是否正在关闭系统（返回 `true`/`false`） | `fsctl shutdown_check` |
+| `fsctl debug_pool` | 打印核心内存池调试统计信息 | `fsctl debug_pool` |
+| `fsctl debug_sql` | 切换 SQL 调试日志 | `fsctl debug_sql` |
+| `fsctl sql` | 启动或停止核心 SQL 队列线程 | `fsctl sql [start\|stop]` |
+| `fsctl last_sps` | 报告最近一次每秒会话数 | `fsctl last_sps` |
+| `shutdown` | 立即关闭系统（无修饰选项） | `shutdown` |
+
+FreeSWITCH 日志级别按输出详细程度从低到高依次为：`console`、`alert`、`crit`、`err`、`warning`、`notice`、`info`、`debug`。
+
+`mod_commands` 发布的 `CTL_SYNTAX` 用法字符串列出了最常用的子命令：
+
+```
+fsctl [api_expansion [on|off]|recover|send_sighup|hupall|
+       pause [inbound|outbound]|resume [inbound|outbound]|
+       shutdown [cancel|elegant|asap|now|restart]|
+       uuid_version [4|7]|sps|sps_peak_reset|sync_clock|
+       sync_clock_when_idle|reclaim_mem|max_sessions|
+       min_dtmf_duration [num]|max_dtmf_duration [num]|
+       default_dtmf_duration [num]|min_idle_cpu|
+       loglevel [level]|debug_level [level]|
+       mdns_resolve [enable|disable]]
+```
+
+处理器还支持上面字符串中未列出的子命令，已在前表中说明：`flush_db_handles`、`calibrate_clock`、`crash`、`verbose_events`、`threaded_system_exec`、`save_history`、`pause_check`、`ready_check`、`shutdown_check`、`debug_pool`、`debug_sql`、`sql` 和 `last_sps`。
+
+**关于 `fsctl shutdown`：**
+
+`cancel` 取消待执行的关闭；`elegant` 等待所有活动会话结束；`asap` 只等待到系统没有活动会话（不会额外等待已有会话自然结束）；`now` 立即终止。将 `restart` 附加到 `elegant`、`asap` 或 `now` 后，会在关闭后重启。`reincarnate now` 修饰方式（`fsctl shutdown reincarnate now`）会立即结束进程并重新启动，相当于通过看门狗/重生路径完成重启。
+
+**诊断子命令：**
+
+`pause_check`、`ready_check` 和 `shutdown_check` 返回可供脚本直接使用的 `true`/`false`。`crash` 会有意中止进程，仅用于调试时生成核心转储文件。
+
+---
+
+## 进程与 Shell 命令执行 {#process-and-shell-execution}
+
+这些命令由 FreeSWITCH 进程执行外部程序。如果核心通过命令执行限制启动（例如 `-nonat`/受限模式，或 `switch.conf.xml` 中配置 `<param name="enable-use-system-commands" value="false"/>`），它们将被禁用，因此生产环境中使用前应确认已获允许。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `system` | 在前台执行 Shell 命令，并将输出写入数据流 | `system <command>` |
+| `bg_system` | 在后台执行 Shell 命令；立即返回 `+OK`，不捕获输出 | `bg_system <command>` |
+| `spawn` | 直接执行外部程序（不通过 Shell），不捕获输出 | `spawn <command>` |
+| `bg_spawn` | 在后台直接执行外部程序；立即返回 `+OK` | `bg_spawn <command>` |
+| `spawn_stream` | 直接执行外部程序，并将输出捕获到数据流 | `spawn_stream <command>` |
+| `log` | 以指定级别向 FreeSWITCH 日志写入消息 | `log <level> <message>` |
+| `memory` | 报告核心内存使用统计信息 | `memory` |
+| `pool_stats` | 报告核心内存池使用统计信息 | `pool_stats` |
+| `unsched_api` | 根据任务 ID 取消先前由 `sched_api` 创建的调度任务 | `unsched_api <task_id>` |
+
+**`system` 与 `spawn` 的区别：**
+
+`system` 和 `bg_system` 会将命令交给 Shell（`/bin/sh -c`），因此支持管道与重定向等 Shell 功能。`spawn` 系列直接启动目标程序，不经过 Shell，可避免 Shell 注入及引号转义问题，但不会解释 Shell 元字符。需要将程序标准输出返回调用者时，使用 `spawn_stream`。
+
+**关于 `log`：**
+
+`<level>` 可使用任意 FreeSWITCH 日志级别名称（`console`、`alert`、`crit`、`err`、`warning`、`notice`、`info`、`debug`）；无法识别的级别默认按 `debug` 处理。
+
+---
+
+## NAT 端口映射 {#nat-mapping}
+
+当 NAT 穿越功能已初始化时，`nat_map` 命令用于管理上级路由器上的 UPnP/NAT-PMP 端口映射。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `nat_map` | 检查或修改 NAT 端口映射 | `nat_map [status\|republish\|reinit] \| [add\|del] <port> [tcp\|udp] [static]` |
+
+**关于 `nat_map`：**
+
+`status` 打印当前 NAT 状态。`republish` 向路由器重新通告已有映射。`reinit` 重新检测 NAT 设备并重新发布映射。`add` 和 `del` 为指定 `<port>` 创建或删除单条映射；未指定 `tcp` 或 `udp` 时默认使用 UDP，`static` 表示该映射为持久映射。如果 NAT 穿越尚未初始化，命令会返回错误。
+
+---
+
+## 变量与表达式求值 {#variables-and-evaluation}
+
+这些命令用于读取、写入和求值 FreeSWITCH 全局变量及表达式。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `global_getvar` | 读取全局变量值；不传参数时输出全部全局变量 | `global_getvar [<var>]` |
+| `global_setvar` | 设置全局变量；提供第二个值时执行条件设置 | `global_setvar <var>=<value> [=<value2>]` |
+| `eval` | 在展开变量后求值字符串；不含变量时不执行额外操作 | `eval [uuid:<uuid> ]<expression>` |
+| `expand` | 先展开命令参数中的变量，再执行 API 命令 | `expand [uuid:<uuid> ]<cmd> <args>` |
+| `regex` | 匹配正则表达式，并可选择执行替换 | `regex <data>\|<pattern>[\|<subst string>][n\|b]` |
+| `strftime_tz` | 按指定时区格式化时间值 | `strftime_tz <timezone_name> [<epoch>\|][format string]` |
+| `url_encode` | 对字符串进行 URL 编码 | `url_encode <string>` |
+| `url_decode` | 对字符串进行 URL 解码 | `url_decode <string>` |
+| `md5` | 返回字符串的 MD5 哈希值 | `md5 <data>` |
+| `cond` | 求值条件表达式 | `cond <expr> ? <true val> : <false val>` |
+| `coalesce` | 返回列表中第一个非空值 | `coalesce [^^<delim>]<value1>,<value2>,...` |
+| `replace` | 替换字符串中所有出现的指定子串 | `replace <data>\|<string1>\|<string2>` |
+| `escape` | 转义字符串中的特殊字符 | `escape <data>` |
+| `toupper` | 将字符串转换为大写 | `toupper <string>` |
+| `tolower` | 将字符串转换为小写 | `tolower <string>` |
+| `create_uuid` | 生成并返回新的 UUID | `create_uuid` |
+
+**关于 `global_setvar`：**
+
+提供 `=<value2>` 时，只有当前变量值等于 `<value2>`，才会将其设为 `<value>`（条件设置）。
+
+**关于 `eval`：**
+
+提供 `uuid:<uuid>` 前缀时，展开过程除全局变量外，还会解析该会话的通道变量。
+
+**关于 `regex`：**
+
+`n` 标志返回匹配的捕获组编号；`b` 返回布尔值 `true`/`false`。语法字符串中用 `|` 分隔各部分，在 `fs_cli` 中输入时必须转义为 `\|`。
+
+---
+
+## 定时调度 {#scheduling}
+
+这些命令安排 API 调用或呼叫事件在未来某个时间执行。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `sched_api` | 安排 API 命令在绝对时间或相对时间执行 | `sched_api [+\|@]<time> <group_name> <command_string>[&]` |
+| `sched_del` | 根据任务 ID 或组名删除调度任务 | `sched_del <task_id>\|<group_id>` |
+| `sched_hangup` | 安排活动呼叫在指定时间挂断 | `sched_hangup [+]<time> <uuid> [<cause>]` |
+| `sched_broadcast` | 安排在活动呼叫上执行广播应用 | `sched_broadcast [[+]<time>\|@time] <uuid> <path> [aleg\|bleg\|both]` |
+| `sched_transfer` | 安排在活动呼叫上执行转接 | `sched_transfer [+]<time> <uuid> <extension> [<dialplan>] [<context>]` |
+| `show tasks` | 列出当前全部调度任务 | `show tasks` |
+
+**关于 `sched_api` 的时间参数：**
+
+前导 `+` 表示从现在起经过指定秒数；前导 `@` 表示周期任务：命令每 `<N>` 秒重新调度一次。直接填写数字表示绝对 Unix 时间戳。末尾附加 `&` 则让调度命令在自己的线程中执行。
+
+要取消 `sched_api` 创建的任务，可使用 `unsched_api <task_id>`（详见[进程与 Shell 命令执行](#process-and-shell-execution)）；任务 ID 是调度时返回的值。`sched_del` 则按 ID 或组名删除定时挂机、转接及广播任务。
+
+---
+
+## 后台执行 {#background-execution}
+
+`bgapi` 在后台线程中执行任意 API 命令，并立即返回 Job-UUID。命令结果以 Event Socket 上的 `BACKGROUND_JOB` 事件形式送达。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `bgapi` | 在后台线程中执行 API 命令 | `bgapi <command>[ <arg>]` |
+
+`bgapi` 接受可选的 `uuid:<uuid>` 前缀，用于为后台任务指定 Job-UUID：
+
+```
+bgapi uuid:my-job-id status
+```
+
+`bgapi` 在 `mod_commands` 中注册为 API 命令，因此既可在 `fs_cli` 提示符中使用，也可通过 Event Socket 使用。通过 Event Socket 的 ESL `bgapi` 方法调用时，传输层会直接处理 `Background-Job` 事件头；其余行为完全相同。
+
+---
+
+## CLI 别名与 ACL {#cli-aliases-and-acls}
+
+这些命令用于为较长的命令字符串定义简写别名，以及检查 IP 地址是否符合指定的访问控制列表。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `alias` | 添加、更新或删除 CLI/API 命令别名 | `alias [add\|stickyadd] <alias> <command> \| del [<alias>\|*]` |
+| `acl` | 根据指定 ACL 检查 IP 地址（返回 `true`/`false`） | `acl <ip> <list_name>` |
+
+**关于 `alias`：**
+
+`add` 创建别名，将 `<alias>` 映射为完整的 `<command>` 字符串。`stickyadd` 的作用相同，但别名在重新加载后仍会保留。`del <alias>` 删除一条别名；`del *` 删除全部别名。
+
+**关于 `acl`：**
+
+`<list_name>` 指定的 ACL 定义在 `acl.conf.xml` 中。`<ip>` 匹配列表时命令返回 `true`，否则返回 `false`，因此可用于拨号计划或脚本的访问控制判断。使用 `reloadacl` 重新加载 ACL 定义。
+
+---
+
+## Sofia 命令树 {#sofia-command-tree}
+
+`sofia` 命令由 `mod_sofia` 注册，用于控制 SIP 配置实例及网关状态。所有子命令均采用 `sofia <subcommand> [args]` 格式。
+
+### 状态查询子命令 {#status-subcommands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `sofia status` | 显示所有已加载配置实例及网关的状态 | `sofia status` |
+| `sofia status profile` | 显示指定配置实例的详细状态，包括监听绑定及注册数量 | `sofia status profile <name>` |
+| `sofia status profile ... reg` | 按可选 Contact 字符串过滤注册状态输出 | `sofia status profile <name> reg [<contact>]` |
+| `sofia status profile ... pres` | 显示配置实例的呈现（Presence）数据 | `sofia status profile <name> pres <pres_str>` |
+| `sofia status profile ... user` | 显示配置实例上指定用户的状态 | `sofia status profile <name> user <user@domain>` |
+| `sofia status gateway` | 显示指定网关的状态 | `sofia status gateway <name>` |
+| `sofia xmlstatus` | 与 `sofia status` 相同，但输出 XML 格式 | `sofia xmlstatus [profile <name>\|gateway <name>]` |
+| `sofia jsonstatus` | 与 `sofia status` 相同，但输出 JSON 格式 | `sofia jsonstatus [profile <name>\|gateway <name>]` |
+
+### 配置实例管理子命令 {#profile-management-subcommands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `sofia profile ... rescan` | 从 XML 重新读取配置实例配置，无需完全重启且保留已有呼叫 | `sofia profile <name> rescan [wait]` |
+| `sofia profile ... restart` | 完全停止并重新启动配置实例 | `sofia profile <name> restart [wait]` |
+| `sofia profile ... start` | 启动已停止的配置实例 | `sofia profile <name> start` |
+| `sofia profile ... stop` | 停止正在运行的配置实例 | `sofia profile <name> stop [wait]` |
+| `sofia profile ... flush_inbound_reg` | 清除入站注册，可按 Call-ID 或域内用户指定范围 | `sofia profile <name> flush_inbound_reg [<call_id>\|<user>@<domain>] [reboot]` |
+| `sofia profile ... check_sync` | 强制同步与指定 Call-ID 匹配的注册信息 | `sofia profile <name> check_sync [<call_id>]` |
+| `sofia profile ... register` | 强制指定网关或全部网关执行注册 | `sofia profile <name> register [<gateway_name>\|all]` |
+| `sofia profile ... unregister` | 注销指定网关或全部网关 | `sofia profile <name> unregister [<gateway_name>\|all]` |
+| `sofia profile ... killgw` | 从配置实例中移除网关 | `sofia profile <name> killgw <gateway_name>` |
+| `sofia profile ... startgw` | 从当前 XML 配置添加并启动网关 | `sofia profile <name> startgw <gateway_name>` |
+| `sofia profile ... gwlist` | 列出配置实例中的网关 | `sofia profile <name> gwlist [down]` |
+| `sofia profile ... siptrace` | 启用或禁用配置实例的 SIP 跟踪日志 | `sofia profile <name> siptrace <on\|off>` |
+| `sofia profile ... capture` | 启用或禁用配置实例的 HEP/HOMER 抓包 | `sofia profile <name> capture <on\|off>` |
+| `sofia profile ... watchdog` | 启用或禁用配置实例看门狗 | `sofia profile <name> watchdog <on\|off>` |
+| `sofia profile ... recover` | 从恢复数据库恢复该配置实例的会话 | `sofia profile <name> recover [flush]` |
+
+**关于 `sofia profile ... stop` 和 `sofia profile ... restart`：**
+
+配置实例至少已运行 10 秒才能停止或重新启动。`wait` 选项会阻塞，直到该配置实例处理完当前 SIP 事务。
+
+### 全局子命令 {#global-subcommands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `sofia global siptrace` | 为全部配置实例启用或禁用 SIP 跟踪日志 | `sofia global siptrace <on\|off>` |
+| `sofia global capture` | 全局启用或禁用 HEP/HOMER 抓包 | `sofia global capture <on\|off>` |
+| `sofia global watchdog` | 全局启用或禁用配置实例看门狗 | `sofia global watchdog <on\|off>` |
+| `sofia global standby` | 全局启用或禁用待机模式 | `sofia global standby <on\|off>` |
+| `sofia global debug` | 启用或禁用 Presence 或 SLA 调试 | `sofia global debug [presence\|sla\|none]` |
+| `sofia restart all` | 同时重启所有 SIP 配置实例 | `sofia restart all` |
+
+### 日志子命令 {#logging-subcommands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `sofia loglevel` | 获取或设置指定组件的 sofia-sip 库日志级别 | `sofia loglevel <component> [0-9]` |
+| `sofia tracelevel` | 设置 sofia-sip 跟踪输出所使用的 FreeSWITCH 日志级别 | `sofia tracelevel <console\|alert\|crit\|err\|warning\|notice\|info\|debug>` |
+
+`sofia loglevel` 的 `<component>` 可选值为：`all`、`default`、`tport`、`iptsec`、`nea`、`nta`、`nth_client`、`nth_server`、`nua`、`soa`、`sresolv`、`stun`。
+
+### 实用 API 命令 {#utility-api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `sofia_contact` | 返回已注册用户的 Contact URI | `sofia_contact [profile/]<user>@<domain>` |
+| `sofia_count_reg` | 返回指定用户的注册数量 | `sofia_count_reg [profile/]<user>@<domain>` |
+| `sofia_gateway_data` | 从网关读取变量值 | `sofia_gateway_data <gateway_name> [ivar\|ovar\|var] <name>` |
+| `sofia_username_of` | 查找与注册信息关联的用户名 | `sofia_username_of [profile/]<user>@<domain>` |
+| `sofia_dig` | 执行 SIP DNS 查询（NAPTR/SRV） | `sofia_dig <url>` |
+
+---
+
+## fs\_cli 会话示例 {#example-fs_cli-session}
+
+下面展示典型的运维流程：检查系统状态、查看活动呼叫并执行转接。
+
+```
+freeswitch@pbx> status
+UP 0 years, 0 days, 2 hours, 14 minutes, 33 seconds, 412 milliseconds, 744 microseconds
+FreeSWITCH (Version 1.10.x) is ready
+2 session(s) since startup
+1 session(s) - peak 1, last 5min 1
+0 session(s) per Sec out of max 30, peak 1, last 5min 1
+1000 session(s) max
+min idle cpu 0.00/99.60
+Current Stack Size/Max 240K/8192K
+
+freeswitch@pbx> show channels
+uuid,direction,created,created_epoch,name,state,cid_name,cid_num,...
+5a3f1c2e-...,inbound,2026-06-02 10:31:00,...
+
+freeswitch@pbx> uuid_transfer 5a3f1c2e-... 2000 XML default
++OK
+
+freeswitch@pbx> sofia status profile internal
+=================================
+Name             internal
+...
+RUNNING (2)
+
+freeswitch@pbx> fsctl loglevel debug
+
+freeswitch@pbx> reloadxml
++OK [Success]
+```

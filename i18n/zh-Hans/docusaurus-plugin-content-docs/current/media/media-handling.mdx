@@ -1,0 +1,523 @@
+---
+sidebar_position: 2
+id: media-handling
+slug: /media-and-codecs/handling
+title: "第 17 章：媒体处理"
+description: "使用三种媒体模式控制 RTP 流向，并了解早期媒体、延迟协商、RTP 超时、抖动缓冲和 SRTP。"
+sidebar_label: "17. 媒体处理"
+---
+
+# 第 17 章：媒体处理 {#chapter-17-media-handling}
+
+FreeSWITCH 允许管理员明确控制 RTP 音视频是否经过服务器处理、由服务器透明转发，或直接在端点之间传输而不经过服务器。本章介绍这三种媒体模式、选择模式的 SIP Profile 参数和通道变量，以及早期媒体、延迟编解码器协商、RTP 无活动超时、抖动缓冲、SRTP/SDES 安全媒体配置和其他 RTP 行为参数。
+
+<SignalWireCallout
+  title="由平台代为管理媒体路径"
+  href="https://signalwire.com/docs/platform/voice/sip/trunking"
+  page="media-handling"
+  linkText="查看托管式 SIP">
+
+在 SignalWire 托管平台上，SRTP、NAT 穿越和媒体路径由边缘节点负责，运行的仍是同一底层引擎。旁路、代理和 re-INVITE 之间的权衡不再由你手动配置；端点会与面向公网设计的平台完成协商。
+
+</SignalWireCallout>
+
+## 媒体模式 {#media-modes}
+
+FreeSWITCH 支持三种不同的模式，决定 RTP 如何在两条呼叫腿之间流动。
+
+### FreeSWITCH 位于媒体路径中 {#freeswitch-in-the-media-path}
+
+这是默认模式。FreeSWITCH 分别终结两条呼叫腿上的 RTP，并在内部解码、处理、重新编码媒体。编解码器转码、录音、DTMF 检测、抖动缓冲和保持音乐都需要这种模式。服务器为每通呼叫分配两个 RTP 端口（每条呼叫腿一个），完整参与媒体路径。
+
+### 媒体代理模式 {#proxy-media-mode}
+
+在媒体代理（proxy media）模式中，FreeSWITCH 透明地在端点间转发 RTP 分组，而不解码负载。服务器仍为两条呼叫腿分配 RTP 端口，仍处于 IP/UDP 层的媒体路径中，但不会检查或修改 RTP 负载。SDP 会被改写，使两个端点都向 FreeSWITCH 的端口发送 RTP，分组只经过尽可能少的处理后转发。此模式无法转码。
+
+### 媒体旁路模式 {#bypass-media-mode}
+
+在媒体旁路（bypass media，也称无媒体 no-media）模式中，FreeSWITCH 重写 SDP，使两个端点直接互相发送 RTP。呼叫建立后，RTP 完全不经过 FreeSWITCH 主机。因此无法使用转码、录音、基于 RTP 的 DTMF 检测、保持音乐注入等媒体处理功能。服务器只负责信令。
+
+### 媒体模式对比 {#mode-comparison-table}
+
+| 模式 | RTP 路径 | 启用方式 |
+|------|----------|---------------|
+| 普通模式（默认） | 两条呼叫腿均在 FreeSWITCH 终结；完整媒体处理 | 默认；无需特殊配置 |
+| 媒体代理 | 两条呼叫腿均终结在 FreeSWITCH 的端口；原样转发负载 | 通道变量 `proxy_media=true` 或 Profile 参数 `inbound-proxy-media=true` |
+| 媒体旁路 | 端点之间直接交换 RTP；FreeSWITCH 仅处理信令 | 通道变量 `bypass_media=true` 或 Profile 参数 `inbound-bypass-media=true`（别名：`inbound-no-media`） |
+
+---
+
+## 设置媒体模式 {#setting-media-mode}
+
+### Profile 级别默认值 {#profile-level-defaults}
+
+在 [Sofia SIP Profile](../users-endpoints/sip-profiles-sofia.mdx) 中，下列参数用于设置该 Profile 接收的所有入站呼叫的媒体模式。它们在 Profile XML 文件（例如 `conf/sip_profiles/internal.xml`）的 `<settings>` 区块中配置。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|--------|---------|
+| `inbound-bypass-media` | 强制所有入站呼叫使用媒体旁路模式。别名：`inbound-no-media`。隐式启用 `inbound-late-negotiation`。 | `true`、`false` | `false` |
+| `inbound-proxy-media` | 强制所有入站呼叫使用媒体代理模式 | `true`、`false` | `false` |
+| `inbound-late-negotiation` | 将 A-leg 编解码器选择推迟到拨号计划执行之后 | `true`、`false` | `false`（见 17.4.1 节） |
+| `disable-transcoding` | 强制出站桥接呼叫腿只提供入站腿已选中的编解码器，保持普通媒体路径的同时避免转码 | `true`、`false` | `false` |
+
+`inbound-bypass-media` 会隐式启用 `inbound-late-negotiation`。默认配置中，媒体旁路和媒体代理这两个 Profile 参数都处于关闭状态；默认的 `internal` Profile 则启用了 `inbound-late-negotiation`。
+
+```xml
+<!-- conf/sip_profiles/internal.xml -->
+
+<!-- Bypass media for all inbound calls on this profile -->
+<!--<param name="inbound-bypass-media" value="true"/>-->
+
+<!-- Proxy media for all inbound calls on this profile -->
+<!--<param name="inbound-proxy-media" value="true"/>-->
+
+<!-- Disable transcoding: outbound leg offers only the inbound codec -->
+<!--<param name="disable-transcoding" value="true"/>-->
+```
+
+### 针对单通呼叫的通道变量 {#per-call-channel-variables}
+
+可通过拨号计划中的通道变量针对每通呼叫控制媒体模式。应在桥接之前设置这些变量。
+
+| 变量 | 用途 | 取值 | 默认值 |
+|----------|---------|--------|---------|
+| `bypass_media` | 为呼叫启用或关闭媒体旁路模式 | `true`、`false` | 未设置 |
+| `proxy_media` | 为呼叫启用或关闭媒体代理模式 | `true`、`false` | 未设置 |
+
+当 `bypass_media` 为 `true` 时，FreeSWITCH 设置 `CF_PROXY_MODE` 通道标志，让 SDP 指示端点直接交换 RTP。当 `proxy_media` 为 `true` 时，FreeSWITCH 设置 `CF_PROXY_MEDIA`，使 RTP 仍经过服务器分配的端口，但不检查负载。
+
+如果两个变量同时设置，`proxy_media` 优先于 `bypass_media`。
+
+**拨号计划示例：媒体旁路**
+
+```xml
+<extension name="bypass-example">
+  <condition field="destination_number" expression="^1234$">
+    <action application="set" data="bypass_media=true"/>
+    <action application="bridge" data="sofia/external/1234@carrier.example.com"/>
+  </condition>
+</extension>
+```
+
+**拨号计划示例：媒体代理**
+
+```xml
+<extension name="proxy-example">
+  <condition field="destination_number" expression="^5678$">
+    <action application="set" data="proxy_media=true"/>
+    <action application="bridge" data="sofia/external/5678@carrier.example.com"/>
+  </condition>
+</extension>
+```
+
+### media-option 的行为 {#media-option-behaviors}
+
+Profile 参数 `media-option` 用于调整特定事件发生时的媒体模式行为。重复使用该参数可设置多个选项。`proxy-hold=true` 与 `resume-media-on-hold`、`bypass-media-after-hold` 不兼容；FreeSWITCH 在加载 Profile 时会记录警告并清除冲突选项。
+
+| 值 | 作用 |
+|-------|--------|
+| `resume-media-on-hold` | 旁路或代理模式中的端点发起保持时，FreeSWITCH 将呼叫重新拉回普通媒体路径，以便注入保持音乐。 |
+| `bypass-media-after-att-xfer` | 咨询转接完成后，让呼叫返回媒体旁路模式。 |
+| `bypass-media-after-hold` | 保持结束后，让呼叫返回媒体旁路模式。还必须设置 `resume-media-on-hold`。 |
+| `none` | 清除此前设置的所有媒体选项。 |
+
+```xml
+<!-- conf/sip_profiles/internal.xml -->
+<param name="media-option" value="resume-media-on-hold"/>
+<param name="media-option" value="bypass-media-after-hold"/>
+```
+
+---
+
+## 早期媒体 {#early-media}
+
+早期媒体允许 FreeSWITCH 在呼叫应答之前建立 RTP 流，用于在振铃阶段向主叫方传输回铃音、IVR 提示音或其他声音。
+
+拨号计划应用 `pre_answer` 会发送包含 SDP 的 `183 Session Progress` 响应，从 FreeSWITCH 向主叫方建立单向早期媒体。直到显式执行 `answer` 之前，呼叫仍处于未应答状态。
+
+```xml
+<extension name="early-media-example">
+  <condition field="destination_number" expression="^9001$">
+    <action application="pre_answer"/>
+    <action application="playback" data="ivr/ivr-please_hold_while_connect.wav"/>
+    <action application="bridge" data="sofia/internal/1001@${domain}"/>
+  </condition>
+</extension>
+```
+
+早期媒体与媒体旁路模式之间存在交互：如果已经设置 `bypass_media`，且呼叫具有早期媒体状态（`CF_EARLY_MEDIA` 标志）但尚未应答，FreeSWITCH 会在启用旁路模式之前清除早期媒体状态，以避免信令冲突。
+
+---
+
+## 延迟协商 {#late-negotiation}
+
+### inbound-late-negotiation {#inbound-late-negotiation}
+
+默认情况下，FreeSWITCH 在 INVITE 到达时、拨号计划执行之前，就为入站呼叫腿选择编解码器。启用 `inbound-late-negotiation` 后，会推迟到拨号计划执行完毕再选择 A-leg 的编解码器。这样拨号计划逻辑就能影响编解码器选择，也是部分高级路由场景的必要条件。
+
+```xml
+<!-- conf/sip_profiles/internal.xml -->
+<param name="inbound-late-negotiation" value="true"/>
+```
+
+默认的 `internal` Profile 附带启用此参数（`true`）。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|--------|---------|
+| `inbound-late-negotiation` | 将 A-leg 编解码器选择推迟到拨号计划执行之后 | `true`、`false` | `false` |
+
+### inbound-proxy-media {#inbound-proxy-media}
+
+`inbound-proxy-media` 是在 Profile 级别为所有入站呼叫启用媒体代理模式的简便配置，参见 17.2.1 节的表格。设置后，相当于给每个入站呼叫的通道都设置 `proxy_media=true`。
+
+---
+
+## RTP 超时 {#rtp-timeouts}
+
+如果可配置的一段时间内没有检测到 RTP 活动，FreeSWITCH 可以终止呼叫。
+
+### 当前机制：通道变量 {#current-mechanism-channel-variables}
+
+推荐使用按通道设置的变量。这些值的单位为**毫秒**。
+
+| 变量 | 用途 | 取值 | 备注 |
+|----------|---------|--------|-------|
+| `media_timeout` | 活动呼叫中没有 RTP 的持续毫秒数，超过后挂机 | 整数（毫秒），`0` 禁用 | 若未设置 `media_hold_timeout`，则默认为 `media_timeout` 的 10 倍 |
+| `media_hold_timeout` | 保持状态下没有 RTP 的持续毫秒数，超过后挂机 | 整数（毫秒），`0` 禁用 | 覆盖自动计算的 10 倍默认值 |
+| `media_timeout_audio` | 针对音频覆盖 `media_timeout` | 整数（毫秒） | 对音频引擎优先于 `media_timeout` |
+| `media_hold_timeout_audio` | 针对音频覆盖 `media_hold_timeout` | 整数（毫秒） | 对音频引擎优先于 `media_hold_timeout` |
+| `media_timeout_video` | 针对视频覆盖 `media_timeout` | 整数（毫秒） | 对视频引擎优先于 `media_timeout` |
+| `media_hold_timeout_video` | 针对视频覆盖 `media_hold_timeout` | 整数（毫秒） | 对视频引擎优先于 `media_hold_timeout` |
+
+```xml
+<extension name="timeout-example">
+  <condition field="destination_number" expression="^.*$">
+    <!-- 120 000 ms = 120 seconds -->
+    <action application="set" data="media_timeout=120000"/>
+    <!-- 600 000 ms = 600 seconds -->
+    <action application="set" data="media_hold_timeout=600000"/>
+    <action application="bridge" data="sofia/internal/${destination_number}@${domain}"/>
+  </condition>
+</extension>
+```
+
+### 已弃用的 Profile 参数 {#deprecated-profile-parameters}
+
+Profile 参数 `rtp-timeout-sec` 和 `rtp-hold-timeout-sec` 已弃用。每当加载 Profile 时解析到这些参数，FreeSWITCH 都会向控制台输出 `WARNING`。它们以**秒**为单位。当前代码库中仍然有效，默认的 `internal.xml` 也继续保留以兼容旧配置；但新部署应改用 17.5.1 节中的通道变量。
+
+| 参数 | 用途 | 允许的值 | 默认值（vanilla 配置） |
+|-----------|---------|--------|---------|
+| `rtp-timeout-sec` | 活动呼叫中 RTP 无活动达到指定秒数后挂机。**已弃用。** | 整数（秒），`0` 禁用 | `300` |
+| `rtp-hold-timeout-sec` | 保持状态下 RTP 无活动达到指定秒数后挂机。**已弃用。** | 整数（秒），`0` 禁用 | `1800` |
+
+已弃用的通道变量 `rtp_timeout_sec` 和 `rtp_hold_timeout_sec` 仍然存在，使用时同样会输出弃用警告。请改用 `media_timeout` 和 `media_hold_timeout`。
+
+### execute_on_media_timeout {#execute_on_media_timeout}
+
+媒体超时后，FreeSWITCH 会以 `SWITCH_CAUSE_MEDIA_TIMEOUT` 原因挂机。将 `execute_on_media_timeout` 通道变量设置为拨号计划应用名称，可以在超时发生时执行该应用，以便自定义记录日志或发送通知等处理。
+
+具体行为取决于检测到超时的代码路径：
+
+- **读取媒体帧的路径：** 如果通道读取帧时发现超时，FreeSWITCH 会执行 `execute_on_media_timeout` 指定的应用作为超时处理器。
+- **RTP 线程超时路径**（`switch_rtp.c`）：独立的 RTP 超时检查（`check_timeout`）会执行 `execute_on_media_timeout` 应用，**随后仍然以** `SWITCH_CAUSE_MEDIA_TIMEOUT` **原因挂机**。此路径虽然先执行应用，但挂机操作是无条件的。
+
+因此，最好将 `execute_on_media_timeout` 视为随超时触发的钩子，而不是能够保证代替挂机的处理机制。
+
+```xml
+<action application="set" data="execute_on_media_timeout=hangup"/>
+```
+
+---
+
+## 抖动缓冲 {#jitter-buffer}
+
+软件抖动缓冲通过通道变量 `jitterbuffer_msec` 按通道开启，只能在普通媒体模式（非代理、非旁路）下使用。
+
+| 变量 | 用途 | 格式 | 范围 |
+|----------|---------|--------|-------|
+| `jitterbuffer_msec` | 目标缓冲深度及可选的最大深度 | `N` 或 `N:M`（毫秒）；后缀 `p` 将 `N`/`M` 解释为分组数 | 10～10000 毫秒（见说明） |
+
+如果 `jitterbuffer_msec` 的值带有 `p` 后缀（例如 `4p`），数字按分组数量而非毫秒解释，并乘以编解码器的分组持续时间。可选的 `:M` 部分用于设置最大缓冲深度；省略时，最大值默认是目标值的 50 倍。
+
+支持的范围为 10～10000 毫秒，但 FreeSWITCH 不会把越界数值钳制在该范围内。如果解析后的目标值小于 10 毫秒或大于 10000 毫秒，该值会被丢弃，重置为单分组的默认缓冲（编解码器的一个分组时长），同时把最大值重新计算为该单分组目标值的 100 倍。所以 `5` 或 `20000` 不会变成 `10` 或 `10000`，而会退回到约一个分组时长的缓冲。
+
+```xml
+<!-- 60 ms target, default maximum -->
+<action application="set" data="jitterbuffer_msec=60"/>
+
+<!-- 60 ms target, 300 ms maximum -->
+<action application="set" data="jitterbuffer_msec=60:300"/>
+
+<!-- 4-packet target -->
+<action application="set" data="jitterbuffer_msec=4p"/>
+```
+
+通道变量 `rtp_jitter_buffer_plc` 控制抖动缓冲中的丢包隐藏（PLC）。默认为 `true`；设置为 `false` 可关闭 PLC。
+
+---
+
+## 其他 RTP 参数 {#additional-rtp-parameters}
+
+下面的 Profile 参数用于控制媒体模式和超时以外的 RTP 行为。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|--------|---------|
+| `rtp-autofix-timing` | 尝试修正以不规则分组速率发送 RTP 的端点所产生的时间异常 | `true`、`false` | `true` |
+| `disable-rtp-auto-adjust` | 禁用自动学习 RTP 源 IP/端口的机制（re-INVITE NAT 穿越） | `true`、`false` | `false`（自动调整已启用） |
+| `rtp-rewrite-timestamps` | 重写转发 RTP 分组中的时间戳，而不是直接透传 | `true`、`false` | `false` |
+| `pass-rfc2833` | 透明转发 RFC 2833 DTMF telephone-event 分组，而不在本端终结 | `true`、`false` | `false` |
+
+通道变量 `rtp_media_autofix_timing`（`true`/`false`）可针对单通呼叫覆盖 Profile 的 `rtp-autofix-timing` 设置。
+
+```xml
+<!-- conf/sip_profiles/internal.xml -->
+<!--<param name="rtp-autofix-timing" value="false"/>-->
+<!--<param name="disable-rtp-auto-adjust" value="true"/>-->
+<!--<param name="rtp-rewrite-timestamps" value="true"/>-->
+<!--<param name="pass-rfc2833" value="true"/>-->
+```
+
+---
+
+## 使用 SRTP 保护媒体 {#secure-media-with-srtp}
+
+FreeSWITCH 支持安全 RTP（SRTP），并可通过 SDES（SDP 安全描述，RFC 4568）交换密钥。通道变量 `rtp_secure_media` 和全局变量 `rtp_sdes_suites` 控制 SRTP 协商。
+
+### rtp_secure_media 通道变量 {#rtp_secure_media-channel-variable}
+
+通道变量 `rtp_secure_media` 控制 FreeSWITCH 在 SDP 协商中是否提供、接受或拒绝 SAVP（安全音视频 Profile）。
+
+| 值 | 行为 |
+|-------|----------|
+| `mandatory` 或 `true` | 只提供或接受 SAVP。无法协商 SRTP 的呼叫会被拒绝。 |
+| `optional` | 同时提供和接受 SAVP 与 AVP；如果可用则优先选择 SAVP。 |
+| `forbidden` 或 `false` | 禁止协商 SAVP。只提供 SRTP 的呼叫会失败。 |
+| 未设置（入站） | 默认 `optional`：提供 SAVP 时可接受，但不强制要求。 |
+| 未设置（出站） | 默认 `forbidden`：不主动提供 SRTP。 |
+
+还有两个方向限定变量，可分别只对一条呼叫腿生效：
+
+- `rtp_secure_media_inbound` 仅用于入站 SDP offer。
+- `rtp_secure_media_outbound` 仅用于出站 SDP offer。
+
+设置了方向限定变量时，它在相应方向上优先于 `rtp_secure_media`。FreeSWITCH 先检查方向限定变量；未设置时才回退到 `rtp_secure_media`。
+
+**拨号计划示例：两条呼叫腿都强制使用 SRTP**
+
+```xml
+<extension name="secure-call">
+  <condition field="destination_number" expression="^9900$">
+    <action application="set" data="rtp_secure_media=mandatory"/>
+    <action application="bridge" data="sofia/external/9900@secure.example.com"/>
+  </condition>
+</extension>
+```
+
+**拨号计划示例：入站强制 SRTP，出站可选 SRTP**
+
+```xml
+<action application="set" data="rtp_secure_media_inbound=mandatory"/>
+<action application="set" data="rtp_secure_media_outbound=optional"/>
+```
+
+**注意：** 使用 SRTP 时，不要提供或接受可变比特率编解码器（例如可变速率的 Opus 或 AMR），因为分组大小模式可能泄露媒体负载信息，进而危及 SRTP 流的安全。应搭配固定速率编解码器（例如 `PCMU`、`PCMA`、`G722` 或固定比特率的 Opus）。
+
+### 加密套件选择 {#crypto-suite-selection}
+
+可以在 `rtp_secure_media` 的取值后以冒号分隔的列表追加指定 SRTP 加密套件。FreeSWITCH 只会按照列出的顺序提供或接受指定套件。
+
+```xml
+<!-- Offer two specific suites, strongest first -->
+<action application="set" data="rtp_secure_media=mandatory:AES_CM_256_HMAC_SHA1_80:AES_CM_128_HMAC_SHA1_80"/>
+
+<!-- Optional SRTP, one suite only -->
+<action application="set" data="rtp_secure_media=optional:AEAD_AES_256_GCM_8"/>
+
+<!-- Inbound-specific suite constraint -->
+<action application="set" data="rtp_secure_media_inbound=mandatory:AEAD_AES_256_GCM_8"/>
+```
+
+也可以通过 `rtp_secure_media_suites` 单独设置套件列表，并让 `rtp_secure_media` 使用不带套件后缀的纯模式值：
+
+```xml
+<action application="set" data="rtp_secure_media_suites=AEAD_AES_256_GCM_8:AES_CM_256_HMAC_SHA1_80"/>
+<action application="set" data="rtp_secure_media=mandatory"/>
+```
+
+下表列出支持的加密套件。
+
+| 套件名称 | 说明 |
+|------------|-------------|
+| `AEAD_AES_256_GCM_8` | AES-256 GCM，8 字节认证标签（RFC 5116） |
+| `AEAD_AES_256_GCM` | AES-256 GCM，完整的 16 字节认证标签（RFC 7714） |
+| `AEAD_AES_128_GCM_8` | AES-128 GCM，8 字节认证标签（RFC 5116） |
+| `AEAD_AES_128_GCM` | AES-128 GCM，完整的 16 字节认证标签（RFC 7714） |
+| `AES_CM_256_HMAC_SHA1_80` | AES-256 计数器模式，80 位 HMAC-SHA1 认证标签 |
+| `AES_CM_192_HMAC_SHA1_80` | AES-192 计数器模式，80 位 HMAC-SHA1 认证标签 |
+| `AES_CM_128_HMAC_SHA1_80` | AES-128 计数器模式，80 位 HMAC-SHA1 认证标签（SRTP 默认套件） |
+| `AES_CM_256_HMAC_SHA1_32` | AES-256 计数器模式，32 位 HMAC-SHA1 认证标签 |
+| `AES_CM_192_HMAC_SHA1_32` | AES-192 计数器模式，32 位 HMAC-SHA1 认证标签 |
+| `AES_CM_128_HMAC_SHA1_32` | AES-128 计数器模式，32 位 HMAC-SHA1 认证标签 |
+| `AES_CM_128_NULL_AUTH` | AES-128 计数器模式，不使用认证。不推荐（见 RFC 3711 第 7.5 节）。 |
+
+### 使用 rtp_sdes_suites 设置全局套件列表 {#global-suite-list-with-rtp_sdes_suites}
+
+`conf/vars.xml` 中的预处理变量 `rtp_sdes_suites`，用于设置没有单通呼叫覆盖配置时，全系统默认提供的 SRTP 加密套件有序列表。套件以 `\|` 分隔。
+
+```xml
+<!-- conf/vars.xml -->
+<X-PRE-PROCESS cmd="set" data="rtp_sdes_suites=AEAD_AES_256_GCM_8|AEAD_AES_128_GCM_8|AES_CM_256_HMAC_SHA1_80|AES_CM_192_HMAC_SHA1_80|AES_CM_128_HMAC_SHA1_80|AES_CM_256_HMAC_SHA1_32|AES_CM_192_HMAC_SHA1_32|AES_CM_128_HMAC_SHA1_32|AES_CM_128_NULL_AUTH"/>
+```
+
+默认安装按照由强到弱的顺序列出全部支持的套件。FreeSWITCH 选择两个端点共同支持的最强套件。可以缩小列表，在全局范围限制允许的套件。
+
+### DTLS-SRTP 与 WebRTC {#dtls-srtp-and-webrtc}
+
+WebRTC 端点（浏览器以及通过 WebSocket 或安全 WebSocket 连接、支持 WebRTC 的 SIP 客户端）通过 DTLS-SRTP（RFC 5764）而不是 SDES 交换密钥。当 FreeSWITCH 在远端 SDP 中检测到 AVPF Profile 时，会自动协商 DTLS-SRTP；这也是 WebRTC 的标准做法。本章介绍的 `rtp_secure_media` SDES 机制不适用于 DTLS-SRTP 协商。
+
+WebRTC 配置，包括 WebSocket 绑定（`ws-binding`、`wss-binding`）、DTLS 证书配置和 ICE/STUN 配置，请参阅[第 9 章：使用 Verto 实现 WebRTC](../users-endpoints/webrtc-verto.mdx)和[第 10 章：基于 SIP（WSS）的 WebRTC](../users-endpoints/webrtc-sip-wss.mdx)。
+
+---
+
+## NAT 穿越 {#nat-traversal}
+
+### NAT 带来的问题 {#the-nat-problem}
+
+FreeSWITCH 如果运行在网络地址转换器（NAT）后面的主机上，就会绑定该主机的私有 IP 地址。默认情况下，它会将私有 IP 写入 SIP Contact、Via 头以及 SDP 的 `c=` 和 `m=` 连接信息中。公网远端端点收到这些私有地址后，无法将 RTP 路由回 FreeSWITCH，导致单向音频或完全无声。
+
+解决方案分为两部分：
+
+1. 配置 FreeSWITCH 在 SIP 和 SDP 中通告公网 IP 地址（`ext-sip-ip`、`ext-rtp-ip`）。
+2. 处理同样位于 NAT 后面的远端注册用户和呼叫方（`aggressive-nat-detection`、`apply-nat-acl`、`NDLB-force-rport`、RTP 自动调整）。
+
+两部分都在 [SIP Profile 级别](../users-endpoints/sip-profiles-sofia.mdx)配置。
+
+### 通告公网地址：ext-sip-ip 与 ext-rtp-ip {#advertising-the-public-address-ext-sip-ip-and-ext-rtp-ip}
+
+`ext-sip-ip` 和 `ext-rtp-ip` 是 Sofia SIP Profile 参数，用于指定 FreeSWITCH 向外部通告的地址。它们不会修改本地绑定地址（`sip-ip`、`rtp-ip`），只覆盖发出 SIP 头和 SDP 中携带的地址。
+
+| 参数 | 通告位置 | 用途 |
+|-----------|---------------|---------|
+| `ext-sip-ip` | SIP Contact、Via、Record-Route | SIP 信令的公网 IP |
+| `ext-rtp-ip` | SDP `c=` 和 `m=` 连接信息 | RTP 媒体的公网 IP |
+
+如果设置了 `ext-sip-ip` 而未设置 `ext-rtp-ip`，后者会继承前者解析出的地址；反过来则不成立：`ext-rtp-ip` 不会自动决定 `ext-sip-ip`。
+
+本地绑定参数 `sip-ip` 和 `rtp-ip` 接受 `auto` 或具体 IP，决定 FreeSWITCH 监听哪个本地接口。设置为 `auto` 时使用推测得到的最佳本地 IP（`local_ip_v4`）。也可以使用 `interface:` 前缀（`interface:eth0`、`interface:ipv4/eth0`、`interface:ipv6/eth0`），绑定到指定网络接口。
+
+### ext-ip 的取值形式 {#ext-ip-value-forms}
+
+`ext-sip-ip` 和 `ext-rtp-ip` 都支持以下形式。
+
+| 取值形式 | 解析方式 |
+|------------|------------------|
+| `203.0.113.10` | IPv4 字面量，原样使用 |
+| `auto` | FreeSWITCH 使用推测得到的本地 IP（`local_ip_v4`）；不解析外部地址。仅适合主网卡已经有公网 IP 的主机。 |
+| `auto-nat` | 启动时通过 NAT-PMP 或 UPnP 解析（见 17.9.5 节）。若没有 NAT-PMP 或 UPnP 网关响应，值将保持未设置，Profile 可能无法启动。 |
+| `stun:stun.example.com` | 启动时向指定 STUN 服务器发送 Binding 请求，使用返回的服务器反射地址。可以附加端口：`stun:stun.example.com:3478`。FreeSWITCH 最多重试 5 次，之后放弃。 |
+| `host:fs.example.com` | 启动时对指定主机名执行 DNS A 记录查询，并使用解析得到的地址。适合动态 DNS 场景。 |
+
+所有解析形式（`auto-nat`、`stun:`、`host:`）都仅在 Profile 加载或重启时执行一次。解析结果在 Profile 生命周期内静态保存。外部 IP 变化（例如 DHCP 租约更新后）不会自动检测，需重新加载 Profile 来刷新。
+
+明确拒绝使用 `0.0.0.0`。FreeSWITCH 会记录警告，并改用推测得到的本地 IP。
+
+### vars.xml 全局变量与 external Profile {#varsxml-global-variables-and-the-external-profile}
+
+默认配置在 `conf/vars.xml` 中使用 `stun-set` 预处理命令统一解析外部 IP：
+
+```xml
+<!-- conf/vars.xml -->
+<X-PRE-PROCESS cmd="stun-set" data="external_rtp_ip=stun:stun.freeswitch.org"/>
+<X-PRE-PROCESS cmd="stun-set" data="external_sip_ip=stun:stun.freeswitch.org"/>
+```
+
+`stun-set` 在加载配置时执行 STUN 查询，并将结果保存到指定变量中。随附的 `external` Profile 随后引用这些变量：
+
+```xml
+<!-- conf/sip_profiles/external.xml -->
+<param name="rtp-ip" value="$${local_ip_v4}"/>
+<param name="sip-ip" value="$${local_ip_v4}"/>
+<param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+<param name="ext-sip-ip" value="$${external_sip_ip}"/>
+```
+
+可将 `stun:stun.freeswitch.org` 替换为固定 IP、`host:` 形式或你自己的 STUN 服务器。在公网 IP 稳定的生产部署中，优先使用固定地址而不是 STUN，避免启动依赖外部服务器。
+
+如果 `external_rtp_ip` 或 `external_sip_ip` 未设置（例如 STUN 解析失败），external Profile 会回退到已解析的 `local_ip_v4`，位于 NAT 后面时它将是私有地址。
+
+### auto-nat：NAT-PMP 与 UPnP 发现 {#auto-nat-nat-pmp-and-upnp-discovery}
+
+将 `ext-sip-ip` 或 `ext-rtp-ip` 设为 `auto-nat` 时，FreeSWITCH 通过 NAT-PMP（RFC 6886）和 UPnP IGD 查询本地网关以获取公网 IP。先尝试 NAT-PMP，未收到响应再尝试 UPnP。
+
+发现网关后，FreeSWITCH 会将公网地址保存到全局变量 `nat_public_addr`、`nat_private_addr`、`nat_type`（`pmp` 或 `upnp`）中。后台线程会监听 UPnP SSDP 通告；若网关告知 IP 变化，就刷新地址。
+
+`auto-nat` 只适合 FreeSWITCH 直接位于支持 NAT-PMP 或 UPnP 的家庭或小型办公 NAT 网关后面，而且网关处于同一广播网段的情况。它不适合云主机（没有可查询的相容网关），也不适合依策略关闭 NAT-PMP 和 UPnP 的企业网络。在这些环境中请使用固定 IP、`stun:` 或 `host:`。
+
+使用 `auto-nat` 但没有网关响应时，`ext-sip-ip` 和 `ext-rtp-ip` 无法完成解析，Profile 也不会通告公网地址。
+
+### 远端 NAT 处理 {#far-end-nat-handling}
+
+FreeSWITCH 还必须处理自身位于 NAT 后面的 SIP 端点：其 REGISTER 的 Contact 头可能包含 FreeSWITCH 无法路由到的私有地址，其 RTP 源端口也可能与 SDP 通告的不一致。
+
+**aggressive-nat-detection**
+
+当 `aggressive-nat-detection` 为 `true` 时，FreeSWITCH 检查每个入站 REGISTER 和 INVITE 的 Via 头。满足以下任一条件，即判定请求来自 NAT 后面：
+
+- Via 中存在 `received` 参数（表示发送 IP 与 Via 的 `host` 不同）。
+- Via 的 `host` 与数据包真实来源 IP 不一致。
+- Via 中的端口与数据包真实来源端口不一致。
+
+检测到 NAT 后，FreeSWITCH 会保存真实来源 IP 和端口，并在向该端点路由出站请求时使用它们，覆盖 Contact 地址。
+
+默认值：`false`。默认安装配置的 `external` Profile 中提供了启用此选项的配置（以注释形式保留）。
+
+**apply-nat-acl**
+
+`apply-nat-acl` 指定在 `conf/acl.conf.xml` 中定义的 ACL。凡是 Contact IP 落在指定 ACL 内的端点，无论 Via 头如何，都视为处于 NAT 后面。这适用于已知客户端 IP 范围，但客户端 Via 头不会触发 `aggressive-nat-detection` 的情况。
+
+可重复设置该参数来添加多个 ACL。设为 `none` 则清除此前添加的全部 ACL 项。若某 ACL 的 IP 范围包含 Profile 自身的 `sip-ip`，FreeSWITCH 不会添加它，而是输出错误并跳过该项。
+
+**NDLB-force-rport**
+
+`NDLB-force-rport` 控制入站和出站 SIP 消息的 rport 处理。接受的值及行为如下：
+
+| 值 | server_rport_level | client_rport_level | 效果 |
+|-------|-------------------|--------------------|--------|
+| `true` | 2 | 1 | 入站请求使用源端口（rport）而不是 Via 端口返回响应，并为出站请求添加 `rport`。 |
+| `safe` | 3 | 1 | 出站行为与 `true` 相同；入站请求则基于 User-Agent 启发式规则（Polycom、KIRK）有选择地使用 rport 响应。 |
+| `client-only` | 不变 | 1 | 只向出站请求添加 `rport`；入站响应不强制使用 rport。 |
+| `server-only` | 1 | 0 | 只对入站响应使用 rport；出站请求不添加 `rport`。 |
+| `disabled` | 0 | 0 | 完全禁用 rport。 |
+
+默认值（Profile 启动时）：`server_rport_level=1`、`client_rport_level=1`，相当于 `server-only`。
+
+对于接收位于 NAT 后面的端点注册的 Profile，最常见的配置是 `NDLB-force-rport=true`。这样 FreeSWITCH 会把响应发回请求实际到达时使用的源端口，而不是 Via 头列出的端口；处于 NAT 后面时后者往往不正确。
+
+**NDLB-received-in-nat-reg-contact**
+
+为 `true` 时，如果检测到注册方位于 NAT 后面，FreeSWITCH 会向注册数据库中保存的 Contact URI 追加 `;received=IP:port` 参数，让保存的 Contact 反映实际对外可达的地址。默认值：`false`。
+
+**RTP 自动调整（远端媒体 NAT）**
+
+端点位于 NAT 后面时，到达的 RTP 分组源 IP 和端口常与 SDP `c=`/`m=` 中通告的地址不同。FreeSWITCH 的 RTP 自动调整机制可以检测这种情况：如果同一备用来源连续发送了达到可配置数量的分组，FreeSWITCH 就将远端 RTP 目的地址更新为观察到的地址。
+
+该功能默认启用。Profile 参数 `disable-rtp-auto-adjust`（17.7 节）可全局关闭；通道变量 `disable_rtp_auto_adjust=true` 可针对单通呼叫关闭。AVPF（WebRTC）会话会自动抑制此调整，因为地址协商由 ICE 负责。
+
+### NAT 穿越参数参考 {#nat-traversal-parameter-reference}
+
+下表汇总了所有 NAT 相关的 Profile 参数。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|--------|---------|
+| `ext-sip-ip` | 在 SIP Contact、Via、Record-Route 中通告的公网 IP | 固定 IP、`auto`、`auto-nat`、`stun:server`、`host:name` | 无 |
+| `ext-rtp-ip` | 在 SDP `c=` 和 `m=` 中通告的公网 IP | 固定 IP、`auto`、`auto-nat`、`stun:server`、`host:name` | 无 |
+| `sip-ip` | SIP 协议栈绑定的本地 IP | 固定 IP、`auto`、`interface:name` | `auto` |
+| `rtp-ip` | RTP 套接字绑定的本地 IP | 固定 IP、`auto`、`interface:name` | `auto` |
+| `aggressive-nat-detection` | 通过比较 Via 头和数据包真实来源检测 NAT | `true`、`false` | `false` |
+| `apply-nat-acl` | 将 Contact IP 落在该 ACL 内的端点视为位于 NAT 后面 | ACL 名称（可重复）、`none` | 无 |
+| `NDLB-force-rport` | 控制入站及出站 SIP 的 rport 行为 | `true`、`safe`、`client-only`、`server-only`、`disabled` | `server-only`（级别 1） |
+| `NDLB-received-in-nat-reg-contact` | 检测到 NAT 时在保存的注册 Contact 中追加真实来源地址 | `true`、`false` | `false` |
+| `disable-rtp-auto-adjust` | 禁止根据实际分组来源自动更新远端 RTP 地址 | `true`、`false` | `false` |
+| `local-network-acl` | 定义本地网络的 ACL；其中的端点不参与 NAT 检测 | ACL 名称、`none` | `localnet.auto` |
+
+**WebRTC 说明：** 浏览器 WebRTC 客户端使用 ICE 进行 NAT 穿越，不依赖 `ext-sip-ip`/`ext-rtp-ip` 机制。WebRTC 端点的 ICE、STUN、TURN 配置请参见[第 9 章：使用 Verto 实现 WebRTC](../users-endpoints/webrtc-verto.mdx)和[第 10 章：基于 SIP（WSS）的 WebRTC](../users-endpoints/webrtc-sip-wss.mdx)。

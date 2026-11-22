@@ -1,0 +1,111 @@
+---
+sidebar_position: 4
+id: appendix-codec-table
+slug: /reference/codec-table
+title: "附录 B：编解码器参考表"
+description: "随附编解码器模块的完整参考表：编码格式、采样率、配置文件及默认加载情况。"
+sidebar_label: "附录 B：编解码器参考"
+---
+
+# 附录 B：编解码器参考表 {#appendix-b-codec-reference-table}
+
+> 本附录是 FreeSWITCH 随附编解码器模块的规范性、完整参考资料。第 16 章《编解码器与协商》以此处为完整编解码器列表、采样率及各模块配置文件的权威来源。
+
+FreeSWITCH 内置一组编解码器模块，覆盖 SIP、WebRTC 和媒体桥接场景中最常用的音视频格式。本附录列出每个随附编解码器模块、它提供的编解码器、已确认的采样率、配置文件（如有），以及该模块是否会在默认 `modules.conf.xml` 中自动加载。对于影响模块能否编码和解码、或是否只能执行媒体透传的许可证及外部库依赖，也在此注明。
+
+## 音频编解码器参考 {#audio-codec-reference}
+
+下表涵盖 FreeSWITCH 中所有可用的音频编解码器。标为“内置”的编解码器由 FreeSWITCH 核心在启动时从 `src/switch_pcm.c` 或 `src/switch_speex.c` 注册，无须加载独立模块。`mod_spandsp`（位于 `src/mod/applications/mod_spandsp/`）负责注册 G.722、G.726、DVI4、GSM 和 LPC；它虽然是可加载模块，但归类在 `applications/` 而不是 `codecs/` 目录中。表中其他模块均位于 `src/mod/codecs/`。需要外部库的模块若在编译时缺少相应依赖，则会退化为仅支持透传的模式。
+
+| 编解码器 | IANA 名称 | 模块 | 采样率（Hz） | 配置文件 | 默认加载 | 备注 |
+|---|---|---|---|---|---|---|
+| G.711 μ-law | `PCMU` | 内置（`switch_pcm.c`） | 8000, 48000 | 无 | 是（核心） | 不需要外部库。 |
+| G.711 A-law | `PCMA` | 内置（`switch_pcm.c`） | 8000 | 无 | 是（核心） | 不需要外部库。 |
+| 16 位线性 PCM | `L16` | 内置（`switch_pcm.c`） | 8000, 12000, 16000, 24000, 48000 | 无 | 是（核心） | 采样率较高时可能超过 RTP MTU，使用时应谨慎。 |
+| Speex | `speex` | 内置（`switch_speex.c`、`CORE_SPEEX_MODULE`） | 8000, 16000, 32000 | 无 | 是（核心） | 支持窄带、宽带和超宽带模式。编译时需要 libspeex。 |
+| G.722 | `G722` | `mod_spandsp` | 16000 | 无 | 是 | 依赖 libspandsp。编解码器参数不能单独配置；`spandsp.conf.xml` 仅控制传真与调制解调器设置。 |
+| G.726 16 kbit/s | `G726-16` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，右对齐打包。 |
+| G.726 24 kbit/s | `G726-24` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，右对齐打包。 |
+| G.726 32 kbit/s | `G726-32` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，右对齐打包。 |
+| G.726 40 kbit/s | `G726-40` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，右对齐打包。 |
+| G.726 16 kbit/s（AAL2） | `AAL2-G726-16` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，左对齐打包（AAL2 打包方式）。 |
+| G.726 24 kbit/s（AAL2） | `AAL2-G726-24` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，左对齐打包（AAL2 打包方式）。 |
+| G.726 32 kbit/s（AAL2） | `AAL2-G726-32` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，左对齐打包（AAL2 打包方式）。 |
+| G.726 40 kbit/s（AAL2） | `AAL2-G726-40` | `mod_spandsp` | 8000 | 无 | 是 | G.726 ADPCM，左对齐打包（AAL2 打包方式）。 |
+| IMA ADPCM | `DVI4` | `mod_spandsp` | 8000, 16000 | 无 | 是 | 帧长为 10 ms 的整数倍。 |
+| GSM 06.10 | `GSM` | `mod_spandsp` | 8000 | 无 | 是 | 帧长只能为 20 ms 的整数倍。 |
+| LPC-10 | `LPC` | `mod_spandsp` | 8000 | 无 | 是 | 仅支持 90 ms 的 `ptime`。 |
+| Opus | `OPUS` | `mod_opus` | 8000, 12000, 16000, 24000, 48000 | `opus.conf.xml` | 是 | 宽带／全频带；WebRTC 的首选编解码器。随附 `libopus`，FEC 和 DTX 可配置。 |
+| G.729 | `G729` | `mod_g729` | 8000 | 无 | 是 | 需要外部 `libg729`（未随附）；缺少时仅构建透传模式。受专利限制，商业使用需要许可证。另见 [`mod_com_g729`](../module-reference/codecs/mod_com_g729.mdx)；两个模块只能加载其一。 |
+| G.729（商业版） | `G729` | `mod_com_g729` | 8000 | 无 | 否 | 来自 `freeswitch-mod-com-g729` 软件包的商业模块。支持 G.729 Annex A（`annexb=no`），`ptime` 为 10～120 ms。支持完整编解码；每个编码器和解码器均从本地许可服务器占用一个按通道计的许可证。加载时取代 `mod_g729`。参见 [`mod_com_g729`](../module-reference/codecs/mod_com_g729.mdx) 和[商业模块与许可](../module-reference/commercial-modules.mdx)。 |
+| G.723.1 | `G723` | `mod_g723_1` | 8000 | 无 | 是 | 需要外部 `libg723_1`，缺少时仅构建透传模式；受专利限制。 |
+| AMR 窄带 | `AMR` | `mod_amr` | 8000 | `amr.conf.xml` | 是 | 需要 `opencore-amrnb` 库（`HAVE_AMR`）；缺少时仅构建透传模式。受专利限制，常用于 VoLTE。 |
+| AMR 宽带 | `AMR-WB` | `mod_amrwb` | 16000 | `amrwb.conf.xml` | 否 | 需要 `opencore-amrwb`（解码器）及 `vo-amrwbenc`（编码器）；缺少时仅构建透传模式。受专利限制，常用于 VoLTE。 |
+| iLBC | `iLBC` | `mod_ilbc` | 8000 | 无 | 否 | 已随附，无须外部库；支持 20 ms 和 30 ms 两种帧模式。 |
+| SILK | `SILK` | `mod_silk` | 8000, 12000, 16000, 24000 | 无 | 否 | 需要外部 `libSKP_SILK_SDK`。由 Skype 开发，在多数部署中已被 Opus 取代。 |
+| G.722.1 / G.722.1C（Siren7/Siren14） | `G7221` | `mod_siren` | 16000（G.722.1）, 32000（G.722.1C Annex C） | 无 | 否 | 需要外部 `libg7221-dev`。商业使用需从 Polycom 获取专利许可。 |
+| BroadVoice 16 | `BV16` | `mod_bv` | 8000 | 无 | 否 | 需要外部 `libbroadvoice-dev`。 |
+| BroadVoice 32 | `BV32` | `mod_bv` | 16000 | 无 | 否 | 需要外部 `libbroadvoice-dev`。`BV16` 和 `BV32` 均由同一个 `mod_bv` 模块注册。 |
+| Codec 2 | `CODEC2` | `mod_codec2` | 8000 | 无 | 否 | 需要外部 `libcodec2-dev`。开源低码率语音编解码器；通过配置选择码率（3200、2400、1400 或 1200 bps）。 |
+| B64（Base64 音频传输） | `b64` | `mod_b64` | 8000, 16000, 32000 | 无 | 是 | 已随附。把原始音频编码为 Base64，以便在需要这种格式的环境中传输；它并非感知音频编解码器。 |
+
+---
+
+## 视频编解码器参考 {#video-codec-reference}
+
+视频编解码器支持由 `mod_av`（通过 libavcodec/FFmpeg）、`mod_openh264`（通过 Cisco OpenH264）、`mod_yuv`（原始 I420 透传）以及 FreeSWITCH 核心 VPX 子系统（`CORE_VPX_MODULE`，实现在 `src/switch_vpx.c`）提供。核心 VPX 子系统会自动加载，通过 `vpx.conf.xml` 配置。`mod_av` 提供 H.264、H.263 和 H.263-1998，并使用 `av.conf.xml` 配置。随附的编解码器模块均不提供 H.261。
+
+| 编解码器 | IANA 名称 | 模块 | 配置文件 | 默认加载 | 备注 |
+|---|---|---|---|---|---|
+| H.264 | `H264` | `mod_av` | `av.conf.xml` | 是（`mod_av`） | 需要 FFmpeg 库（`libavcodec`、`libavformat`、`libswscale`、`libavutil`），默认使用 Baseline Profile。 |
+| H.263 | `H263` | `mod_av` | `av.conf.xml` | 是（`mod_av`） | 与 H.264 由同一模块提供。有效帧尺寸受到限制（128x96、176x144、352x288、704x576、1408x1152）。 |
+| H.263+（H.263-1998） | `H263-1998` | `mod_av` | `av.conf.xml` | 是（`mod_av`） | 取消了 H.263 的严格尺寸限制。 |
+| H.264（OpenH264） | `H264` | `mod_openh264` | 无 | 否 | 需要 `libopenh264`（Cisco OpenH264）。这是 H.264 的替代实现，通常在 FFmpeg 不可用或不适合使用时采用。 |
+| VP8 | `VP8` | 核心 VPX（`CORE_VPX_MODULE`） | `vpx.conf.xml` | 是（核心） | 随附 `libvpx`。由 FreeSWITCH 核心注册；编译时启用了 VPX 支持即可使用。 |
+| VP9 | `VP9` | 核心 VPX（`CORE_VPX_MODULE`） | `vpx.conf.xml` | 是（核心） | 随附 `libvpx`，由 FreeSWITCH 核心与 VP8 一起注册。 |
+| YUV I420（原始） | `I420` | `mod_yuv` | 无 | 否 | 未压缩的原始 YUV 4:2:0 视频，用于内部透传与测试；不需要外部库。 |
+
+---
+
+## 默认模块加载 {#default-module-loading}
+
+默认的 `modules.conf.xml` 决定 FreeSWITCH 启动时加载哪些编解码器模块。未列入该文件的模块必须显式添加，FreeSWITCH 才会加载。内置编解码器（PCMU、PCMA、L16、Speex）及核心 VPX 子系统（VP8、VP9）不受 `modules.conf.xml` 影响，只要 FreeSWITCH 启动就会提供相应功能。
+
+在默认配置中**默认加载**：
+
+- `mod_spandsp`（提供 G.722、各类 G.726、AAL2-G.726、DVI4、GSM、LPC）
+- `mod_opus`
+- `mod_g729`
+- `mod_g723_1`
+- `mod_amr`
+- `mod_b64`
+- `mod_av`（提供 H.264、H.263、H.263+）
+
+**默认不加载**（在 `modules.conf.xml` 中被注释或未列出）：
+
+- `mod_ilbc`
+- `mod_siren`
+- `mod_amrwb`
+- `mod_silk`
+- `mod_bv`
+- `mod_codec2`
+- `mod_openh264`
+- `mod_com_g729`
+- `mod_yuv`
+
+只要 FreeSWITCH 在编译时启用了 VPX 支持（源码树中包含随附的 `libvpx`），VP8 与 VP9 就会作为 FreeSWITCH 核心 VPX 子系统的一部分加载，不依赖 `modules.conf.xml`。
+
+---
+
+## 配置文件参数 {#configuration-file-parameters}
+
+下列模块在 `conf/vanilla/autoload_configs/` 中随附配置文件。各参数的完整定义请参阅相应模块章节。下表便于快速查找模块与对应的配置文件。
+
+| 模块 | 配置文件 | 主要可配置行为 |
+|---|---|---|
+| `mod_opus` | `opus.conf.xml` | VBR、DTX、FEC、复杂度、`maxaveragebitrate`、`maxplaybackrate`、`sprop-maxcapturerate`、立体声／单声道、码率协商、通过 RTCP 自适应码率 |
+| `mod_amr` | `amr.conf.xml` | 默认码率模式（0～7）、VoLTE FMTP、通过 RTCP 自适应码率、八位组对齐的帧封装 |
+| `mod_amrwb` | `amrwb.conf.xml` | 默认码率模式（1～8）、VoLTE FMTP、通过 RTCP 自适应码率、`mode-set-overwrite` |
+| `mod_av` | `av.conf.xml` | 按编解码器设置的 Profile（H.263、H.264）、编解码线程数、码率上限、RTP 切片大小、关键帧频率、x264 preset/tune/CRF 选项 |
+| `mod_spandsp` | `spandsp.conf.xml` | T.38 传真参数、调制解调器检测、DSP 设置。该模块注册的 G.722、G.726、DVI4、GSM 和 LPC 编解码器没有独立的逐编解码器配置项。 |
+| 核心 VPX | `vpx.conf.xml` | VP8/VP9 的逐 Profile 设置：线程数、码率控制模式、量化器范围、关键帧模式／间隔、错误恢复能力、CPU 使用率 |

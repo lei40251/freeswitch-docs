@@ -1,0 +1,127 @@
+---
+sidebar_position: 3
+id: appendix-vanilla-config-map
+slug: /reference/vanilla-config-map
+title: "附录 A：默认配置目录映射"
+description: "FreeSWITCH 默认 conf/ 配置目录及全部 autoload_configs 文件与章节的对照表。"
+sidebar_label: "附录 A：默认配置映射"
+---
+
+# 附录 A：默认配置目录映射 {#appendix-a-the-vanilla-configuration-map}
+
+FreeSWITCH 随附的 `conf/vanilla/` 目录树提供一套完整、可工作的基准配置。本附录首先列出配置根目录下的所有文件和目录，然后详细列出 `autoload_configs/` 中的每个文件，让运维人员能够定位任何模块或子系统的配置，并交叉查阅本手册中对应的章节。
+
+## 配置根目录布局 {#configuration-root-layout}
+
+配置根目录包含顶层 XML 文件、模板文件和子目录。启动时，FreeSWITCH 通过 `freeswitch.xml` 中的 `#include` 与 `X-PRE-PROCESS` 指令，将这些内容组合成一份内存中的 XML 文档。子目录直接对应文档的五个顶层部分：`configuration`（来自 `autoload_configs/`）、`dialplan`、`chatplan`、`directory` 和 `languages`（来自 `lang/`）。`ivr_menus/` 和 `skinny_profiles/` 目录提供各自模块引用的附加配置片段。
+
+### 顶层条目 {#top-level-entries}
+
+| 路径 | 用途 |
+|---|---|
+| `freeswitch.xml` | 主配置文档；通过 `X-PRE-PROCESS cmd="include"` 指令组合全部配置部分。详见第 3 章《XML 配置系统》。 |
+| `vars.xml` | 全局预处理器变量（`$${domain}`、`$${local_ip_v4}`、编解码器列表、端口号）。详见第 4 章《全局变量与核心设置》。 |
+| `autoload_configs/` | 每个可加载模块或核心子系统对应一个 `*.conf.xml` 文件，映射到 `configuration` 部分。第 II～VII 部分有分散说明。 |
+| `dialplan/` | XML 拨号计划上下文（`default`、`public`、`features`）及按上下文划分的包含目录。详见第 12 章《XML 拨号计划》和第 13 章《入站呼叫与 public 上下文》。 |
+| `directory/` | 用户与域定义。包含 `default.xml` 和用于保存单个用户文件的 `default/` 目录。详见第 6 章《用户目录》。 |
+| `sip_profiles/` | Sofia SIP Profile 定义（`internal.xml`、`external.xml`、IPv6 变体），以及网关定义的 `external/` 包含目录。详见第 7 章《Sofia SIP Profile》和第 8 章《网关与中继注册》。 |
+| `ivr_menus/` | 由 `mod_dptools` 加载的 XML IVR 菜单定义（`demo_ivr.xml`、`new_demo_ivr.xml`）。详见第 21 章《IVR 菜单》。 |
+| `skinny_profiles/` | 由 `mod_skinny` 加载的 SCCP（Skinny）Profile 定义（`internal.xml`）。详见第 11 章《其他端点》。 |
+| `lang/` | 用于 `languages` 部分的语言与短语宏文件，按语言区域（`de`、`en`、`es`、`fr`、`he`、`pt`、`ru`、`sv`）组织。 |
+| `chatplan/` | 通过 `mod_dialplan_xml` 路由即时消息的 XML Chatplan 上下文（`default.xml`）。 |
+| `mime.types` | HTTP 子系统使用的 MIME 类型映射。 |
+| `voicemail.tpl` | 语音信箱通知邮件的正文模板。详见第 19 章《语音信箱》。 |
+| `notify-voicemail.tpl` | 未接来电（通知型）语音信箱邮件的正文模板。详见第 19 章《语音信箱》。 |
+| `web-vm.tpl` | 语音信箱网页通知的 HTML 邮件模板。详见第 19 章《语音信箱》。 |
+| `fur_elise.ttml` | 《致爱丽丝》的 TTML 音调流乐谱，用作保持音乐示例。 |
+| `tetris.ttml` | 《俄罗斯方块》主题曲的 TTML 音调流乐谱，用作保持音乐示例。 |
+| `extensions.conf` | 兼容 Asterisk 格式的 Extension 文件占位符，仅供参考。 |
+| `config.FS0` | 部分打包脚本使用的备用配置根目录标记。 |
+| `README_IMPORTANT.txt` | 默认配置树中附带的运维说明。详见第 1 章《简介与核心概念》。 |
+
+---
+
+## autoload_configs 参考 {#autoload_configs-reference}
+
+`autoload_configs/` 中的每个文件由文件名前缀所对应的模块或核心子系统读取。FreeSWITCH 根据 `modules.conf.xml` 以及 `pre_load_modules.conf.xml`／`post_load_modules.conf.xml` 的顺序加载这些文件。
+
+| 文件 | 配置对象 | 相关文档 |
+|---|---|---|
+| `acl.conf.xml` | 命名访问控制列表及其 CIDR 节点条目。 | 第 29 章：访问控制列表 |
+| `alsa.conf.xml` | `mod_alsa` 音频设备端点。 | 第 11 章：其他端点 |
+| `amqp.conf.xml` | `mod_amqp` AMQP 事件发布器；消息代理 URL 和 Exchange 设置。 | 第 9 部分： [`mod_amqp`](/module-reference/event-handlers/mod_amqp) |
+| `amr.conf.xml` | `mod_amr` 窄带 AMR 编解码器；模式与载荷设置。 | 第 16 章：编解码器与协商 |
+| `amrwb.conf.xml` | `mod_amrwb` 宽带 AMR 编解码器；模式与载荷设置。 | 第 16 章：编解码器与协商 |
+| `av.conf.xml` | `mod_av` 通过 libavcodec 实现的 H.264、H.263 与 H.263+ 视频编解码器；各编解码器的编码／解码线程数、码率上限、关键帧频率及 x264 选项。 | 第 16 章：编解码器与协商 |
+| `avmd.conf.xml` | `mod_avmd` 高级语音信箱检测；使用 DESA-2 算法的提示音检测参数。 | 第 9 部分： [`mod_avmd`](/module-reference/applications/mod_avmd) |
+| `blacklist.conf.xml` | `mod_blacklist` 主叫号码黑名单配置。 | 第 9 部分： [`mod_blacklist`](/module-reference/applications/mod_blacklist) |
+| `callcenter.conf.xml` | `mod_callcenter` ACD 队列、坐席及层级定义。 | 第 22 章：队列：FIFO 与呼叫中心 |
+| `cdr_csv.conf.xml` | `mod_cdr_csv` CDR 平面文件输出；模板、呼叫腿和日志轮转。 | 第 27 章：呼叫详细记录 |
+| `cdr_pg_csv.conf.xml` | `mod_cdr_pg_csv` 向 PostgreSQL 输出 CDR。 | 第 9 部分： [`mod_cdr_pg_csv`](/module-reference/event-handlers/mod_cdr_pg_csv) |
+| `cdr_sqlite.conf.xml` | `mod_cdr_sqlite` 将 CDR 输出到 SQLite 数据库。 | 第 27 章：呼叫详细记录 |
+| `cidlookup.conf.xml` | `mod_cidlookup` 通过 HTTP 或本地缓存查询主叫号码名称。 | 第 9 部分： [`mod_cidlookup`](/module-reference/applications/mod_cidlookup) |
+| `conference.conf.xml` | `mod_conference` 会议 Profile 及逐 Profile 参数集合。 | 第 20 章：会议 |
+| `conference_layouts.conf.xml` | `mod_conference` 视频会议的布局定义。 | 第 20 章：会议 |
+| `console.conf.xml` | `mod_console` 控制台日志记录器；日志级别与颜色设置。 | 直接在该文件中配置。 |
+| `curl.conf.xml` | `mod_curl` HTTP 客户端应用；全局超时及默认代理设置。 | 第 9 部分： [`mod_curl`](/module-reference/applications/mod_curl) |
+| `db.conf.xml` | `mod_db` 键值数据库接口；DSN 和表设置。 | 第 23 章：工具类应用 |
+| `dialplan_directory.conf.xml` | 基于 LDAP 的 `mod_dialplan_directory` 拨号计划提供器；主机、DN、密码和搜索基准等设置。 | 第 9 部分： [`mod_dialplan_directory`](/module-reference/dialplans/mod_dialplan_directory) |
+| `directory.conf.xml` | `mod_directory` 按姓名拨号 IVR 应用；搜索顺序、按键超时及结果导航按键映射。 | 第 9 部分： [`mod_directory`](/module-reference/applications/mod_directory) |
+| `distributor.conf.xml` | `mod_distributor` 加权网关分发列表。 | 第 9 部分： [`mod_distributor`](/module-reference/applications/mod_distributor) |
+| `easyroute.conf.xml` | `mod_easyroute` 基于数据库的 DID 路由。 | 第 9 部分： [`mod_easyroute`](/module-reference/applications/mod_easyroute) |
+| `enum.conf.xml` | `mod_enum` ENUM DNS 查询；根域及路由规则。 | 直接在该文件中配置。 |
+| `erlang_event.conf.xml` | `mod_erlang_event` Erlang 节点事件处理器；节点名称及 Cookie。 | 第 9 部分： [`mod_erlang_event`](/module-reference/event-handlers/mod_erlang_event) |
+| `event_multicast.conf.xml` | `mod_event_multicast` 组播事件发布器；地址与端口。 | 第 9 部分： [`mod_event_multicast`](/module-reference/event-handlers/mod_event_multicast) |
+| `event_socket.conf.xml` | `mod_event_socket` 入站 ESL 监听器；`listen-ip`、`listen-port`、`password`。 | 第 25 章：事件套接字 |
+| `fax.conf.xml` | 为向后兼容而由 `mod_spandsp` 接受的备用配置文件名；包含 T.30/T.38 传真参数。 | 第 24 章：传真与 T.38 |
+| `fifo.conf.xml` | `mod_fifo` FIFO 队列定义及消费者／呼叫者设置。 | 第 22 章：队列：FIFO 与呼叫中心 |
+| `format_cdr.conf.xml` | `mod_format_cdr` CDR 格式化器；输出格式与 HTTP POST 选项。 | 第 9 部分： [`mod_format_cdr`](/module-reference/event-handlers/mod_format_cdr) |
+| `graylog2.conf.xml` | `mod_graylog2` GELF 日志转发器；主机、端口及日志级别。 | 第 9 部分： [`mod_graylog2`](/module-reference/event-handlers/mod_graylog2) |
+| `hash.conf.xml` | `mod_hash` 共享内存哈希表；Realm 定义。 | 第 23 章：工具类应用 |
+| `hiredis.conf.xml` | 使用 hiredis 的 `mod_hiredis` Redis 客户端；主机、端口与连接池设置。 | 第 9 部分： [`mod_hiredis`](/module-reference/data-stores/mod_hiredis) |
+| `httapi.conf.xml` | `mod_httapi` 由 HTTP 驱动的拨号计划应用；网关 URL 和绑定。 | 直接在该文件中配置。 |
+| `http_cache.conf.xml` | `mod_http_cache` HTTP 媒体缓存及 S3/Azure 对象存储；缓存位置、大小、TTL 与存储 Profile。 | 第 9 部分： [`mod_http_cache`](/module-reference/applications/mod_http_cache) |
+| `ivr.conf.xml` | `mod_dptools` IVR 菜单加载器；指向 `ivr_menus/` 中的定义。 | 第 21 章：IVR 菜单 |
+| `java.conf.xml` | `mod_java` 内嵌 JVM；JVM 参数和类路径。 | 第 28 章：脚本集成 |
+| `lcr.conf.xml` | `mod_lcr` 最低成本路由；数据库 DSN 和查询定义。 | 第 9 部分： [`mod_lcr`](/module-reference/applications/mod_lcr) |
+| `local_stream.conf.xml` | `mod_local_stream` 保持音乐流定义；目录、采样率及随机播放设置。 | 第 18 章：音频文件与流媒体源 |
+| `logfile.conf.xml` | `mod_logfile` 文件日志记录器；日志路径、级别和轮转设置。 | 直接在该文件中配置。 |
+| `lua.conf.xml` | `mod_lua` 内嵌 Lua 解释器；`script-dir` 和启动脚本。 | 第 28 章：脚本集成 |
+| `memcache.conf.xml` | `mod_memcache` Memcached 客户端；服务器列表和默认过期时间。 | 第 9 部分： [`mod_memcache`](/module-reference/data-stores/mod_memcache) |
+| `modules.conf.xml` | 核心模块加载列表；决定 FreeSWITCH 启动时加载哪些模块。 | 第 5 章：模块加载与管理 |
+| `mongo.conf.xml` | `mod_mongo` MongoDB 客户端；URI 及默认集合。 | 第 9 部分： [`mod_mongo`](/module-reference/data-stores/mod_mongo) |
+| `msrp.conf.xml` | `mod_msrp` MSRP（消息会话中继协议）端点设置。 | 直接在该文件中配置。 |
+| `nibblebill.conf.xml` | `mod_nibblebill` 实时计费；数据库 DSN 及逐呼叫腿扣费。 | 第 9 部分： [`mod_nibblebill`](/module-reference/applications/mod_nibblebill) |
+| `opal.conf.xml` | `mod_opal` H.323 及其他 OPAL 支持的协议端点。 | 第 9 部分： [`mod_opal`](/module-reference/endpoints/mod_opal) |
+| `opus.conf.xml` | `mod_opus` Opus 编解码器；码率、复杂度与 FEC 设置。 | 第 16 章：编解码器与协商 |
+| `osp.conf.xml` | `mod_osp` 开放结算协议客户端；服务器 URL 及加密材料。 | 第 9 部分： [`mod_osp`](/module-reference/applications/mod_osp) |
+| `perl.conf.xml` | `mod_perl` 内嵌 Perl 解释器；启动脚本路径。 | 第 28 章：脚本集成 |
+| `pocketsphinx.conf.xml` | `mod_pocketsphinx` 语音识别；声学模型与语法文件路径。 | 第 9 部分： [`mod_pocketsphinx`](/module-reference/asr-tts/mod_pocketsphinx) |
+| `post_load_modules.conf.xml` | 在主模块集合启动完成后加载的模块。 | 第 5 章：模块加载与管理 |
+| `pre_load_modules.conf.xml` | 在主模块集合之前加载的模块，通常是核心接口模块。 | 第 5 章：模块加载与管理 |
+| `presence_map.conf.xml` | `mod_presence_map` SIP Presence 状态码映射表。 | 直接在该文件中配置。 |
+| `python.conf.xml` | `mod_python` 内嵌 Python 解释器；启动脚本路径。 | 第 28 章：脚本集成 |
+| `redis.conf.xml` | `mod_redis` Redis 客户端（旧版）；主机、端口与连接池设置。 | 第 9 部分： [`mod_redis`](/module-reference/data-stores/mod_redis) |
+| `rtmp.conf.xml` | `mod_rtmp` RTMP 媒体端点；绑定地址及端口。 | 第 11 章：其他端点 |
+| `shout.conf.xml` | `mod_shout` MP3 和 Icecast 流媒体；编码器与服务器设置。 | 第 18 章：音频文件与流媒体源 |
+| `signalwire.conf.xml` | `mod_signalwire` 连接 SignalWire 平台；认证令牌。 | 第 30 章：SignalWire 连接 |
+| `skinny.conf.xml` | `mod_skinny` SCCP 端点；绑定地址、端口及 Profile 引用。 | 第 11 章：其他端点 |
+| `smpp.conf.xml` | `mod_smpp` SMPP 短信网关；主机、端口与 System ID。 | 第 9 部分： [`mod_smpp`](/module-reference/event-handlers/mod_smpp) |
+| `sndfile.conf.xml` | `mod_sndfile` 通过 libsndfile 提供的音频文件格式处理器；格式映射。 | 第 18 章：音频文件与流媒体源 |
+| `sofia.conf.xml` | `mod_sofia` SIP 协议栈全局设置及 Profile 引用。 | 第 7 章：Sofia SIP 配置实例 |
+| `spandsp.conf.xml` | `mod_spandsp` 传真（T.38、T.30）及 DSP 应用。 | 第 24 章：传真与 T.38 |
+| `switch.conf.xml` | 核心运行时参数：RTP 端口范围、最大会话数、会话速率和数据库 DSN。 | 第 4 章：全局变量与核心设置 |
+| `syslog.conf.xml` | `mod_syslog` syslog 日志记录器；Facility 和日志级别。 | 直接在该文件中配置。 |
+| `timezones.conf.xml` | 拨号计划中 `strftime` 使用的时区名称到 POSIX 字符串的映射表。 | 直接在该文件中配置。 |
+| `translate.conf.xml` | `mod_translate` 拨号计划号码转换规则；模式及替换表。 | 第 9 部分： [`mod_translate`](/module-reference/applications/mod_translate) |
+| `tts_commandline.conf.xml` | `mod_tts_commandline` 通过外部命令实现 TTS；命令模板。 | 第 9 部分： [`mod_tts_commandline`](/module-reference/asr-tts/mod_tts_commandline) |
+| `v8.conf.xml` | `mod_v8` 内嵌 V8 JavaScript 引擎；启动脚本路径。 | 第 28 章：脚本集成 |
+| `verto.conf.xml` | `mod_verto` WebRTC JSON-RPC 端点；Profile 绑定地址、TLS 与编解码器设置。 | 第 9 章：通过 Verto 使用 WebRTC |
+| `voicemail.conf.xml` | `mod_voicemail` 语音信箱 Profile、存储路径和邮件通知设置。 | 第 19 章：语音信箱 |
+| `voicemail_ivr.conf.xml` | `mod_voicemail_ivr` 为语音信箱自助服务提示音定制 IVR 菜单。 | 第 9 部分： [`mod_voicemail_ivr`](/module-reference/applications/mod_voicemail_ivr) |
+| `vpx.conf.xml` | `mod_vpx` 使用 libvpx 的 VP8 和 VP9 视频编解码器；编码器码率与画质设置。 | 第 16 章：编解码器与协商 |
+| `xml_cdr.conf.xml` | `mod_xml_cdr` 以 XML 格式通过 HTTP POST 输出 CDR；URL 与凭据设置。 | 第 27 章：呼叫详细记录 |
+| `xml_curl.conf.xml` | `mod_xml_curl` 从 HTTP 后端获取动态 XML 配置；绑定与 URL 设置。 | 第 26 章：通过 XML Curl 实现动态配置 |
+| `xml_rpc.conf.xml` | `mod_xml_rpc` HTTP/XML-RPC 管理接口；绑定端口及凭据。 | 第 9 部分： [`mod_xml_rpc`](/module-reference/xml-interfaces/mod_xml_rpc) |
+| `xml_scgi.conf.xml` | `mod_xml_scgi` 通过 SCGI 获取动态 XML 配置；Socket 路径和绑定。 | 第 9 部分： [`mod_xml_scgi`](/module-reference/xml-interfaces/mod_xml_scgi) |
+| `zeroconf.conf.xml` | `mod_zeroconf` mDNS/Bonjour 服务广播设置。 | 直接在该文件中配置。 |

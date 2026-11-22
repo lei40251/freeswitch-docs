@@ -1,0 +1,295 @@
+---
+sidebar_position: 4
+id: time-and-condition-routing
+slug: /dialplan/time-routing
+title: "第 15 章：时间与条件路由"
+description: "使用条件属性按日期和时间路由呼叫，实现营业时间、节假日安排及其他基于日历的呼叫流程。"
+sidebar_label: "15. 时间与条件路由"
+---
+
+# 第 15 章：时间与条件路由 {#chapter-15-time-and-condition-routing}
+
+FreeSWITCH XML 拨号计划除了匹配通道字段，还能根据当前日期和时间评估 `<condition>` 元素。直接在 `<condition>` 标签上设置时间属性，可以限制操作仅在指定时段、星期、周次、月份或绝对日期范围内执行，从而实现营业时间路由、节假日安排及其他基于日历的呼叫流程。
+
+<SignalWireCallout
+  title="在普通代码中处理营业时间"
+  href="https://signalwire.com/docs/swml/reference/calling/switch"
+  page="time-routing"
+  linkText="查看 SWML 的 switch">
+
+托管式 SignalWire 使用 JSON/YAML 呼叫控制标记语言 SWML 中的 [`switch`](https://signalwire.com/docs/swml/reference/calling/switch?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=time-routing) 和 [`cond`](https://signalwire.com/docs/swml/reference/calling/cond?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=time-routing) 进行路由判断。你的服务器还可以为每通呼叫返回不同的文档，因此营业时间逻辑可以保留在现有、可测试的业务代码中。
+
+</SignalWireCallout>
+
+## 时间条件的工作原理 {#how-time-conditions-work}
+
+当 `<condition>` 元素包含一个或多个时间属性（如 `year`、`mon`、`mday`、`wday`）时，它就是时间条件。呼叫进入该分机规则时，拨号计划评估器会根据服务器时钟检查这些属性。同一个 `<condition>` 上的全部时间属性必须同时匹配，属性之间的关系为逻辑与（AND）。
+
+时间条件匹配时执行其子元素 `<action>`；不匹配时则执行 `<anti-action>`（如有）。条件的 `break` 属性控制匹配或不匹配之后，是否继续处理下一条件。完整的 `break` 语义请参见 [XML 拨号计划章节](./xml-dialplan.mdx)。
+
+如果 `<condition>` 既没有时间属性，也没有 `field` 属性，则是始终匹配的无条件条件。
+
+---
+
+## 时间属性参考 {#time-attribute-reference}
+
+下表所有属性均由 `src/switch_xml.c` 中的 `switch_xml_std_datetime_check` 解析。一个 `<condition>` 可以使用任意属性组合；未指定的属性不参与判断。
+
+| 属性 | 含义 | 有效范围 |
+|---|---|---|
+| `year` | 四位日历年份 | `2024`、`2024-2026` |
+| `yday` | 一年中的第几天（1 表示 1 月 1 日） | `1-365`；闰年为 `1-366` |
+| `mon` | 一年中的月份 | `1-12`（1 月为 1） |
+| `mday` | 一个月中的日期 | `1-31` |
+| `week` | 一年中的周次，按 `(yday / 7) + 1` 计算 | `1-53` |
+| `mweek` | 一个月中的周次 | `1-6` |
+| `wday` | 一周中的星期几 | `1-7`（星期日为 1，星期六为 7）；也接受三个字母的名称：`sun`、`mon`、`tue`、`wed`、`thu`、`fri`、`sat` |
+| `hour` | 一天中的小时（24 小时制） | `0-23` |
+| `minute` | 一小时中的分钟 | `0-59` |
+| `minute-of-day` | 一天中的分钟序号，按 `(hour * 60) + (minute + 1)` 计算 | `1-1440` |
+| `time-of-day` | `HH:MM-HH:MM` 或 `HH:MM:SS-HH:MM:SS` 格式的时钟时间范围 | `09:00-17:00` |
+| `date-time` | 用波浪号分隔的绝对日期时间范围 | `2024-07-04 00:00:00~2024-07-05 00:00:00` |
+| `tz-offset` | 要求当前有效 UTC 偏移量（以整小时计）等于指定整数才匹配 | `-5`、`0`、`5` |
+| `dst` | 要求服务器当前处于夏令时（`true`）；由于源码逻辑，`dst="false"` 无效 | `true` |
+
+**`minute-of-day`** 使用公式 `(hour * 60) + (minute + 1)`：1 对应 00:00，541 对应 09:00，1080 对应 17:59，1440 对应 23:59。
+
+**`week`** 使用整数除法 `(tm_yday / 7) + 1` 计算。由于 `tm_yday` 从 0 开始计数（0 表示 1 月 1 日），平年的 12 月 31 日属于第 53 周。有效范围是 `1-53`。
+
+**`time-of-day`** 使用 `HH:MM-HH:MM` 或 `HH:MM:SS-HH:MM:SS` 表示时间范围。秒可省略，默认为 `00`。起止边界均包含在内。支持跨越午夜的范围，例如 `time-of-day="22:00-06:00"` 匹配晚上 10 点至次日早上 6 点。
+
+**`date-time`** 以波浪号（`~`）分隔格式为 `YYYY-MM-DD HH:MM:SS` 的开始和结束时间。当 `start <= current_time < end` 时匹配（结束边界不包含在内）。多个范围以逗号分隔。
+
+---
+
+## 时间属性中的范围和列表 {#ranges-and-lists-in-time-attributes}
+
+大多数数字型时间属性（`year`、`yday`、`mon`、`mday`、`week`、`mweek`、`hour`、`minute`、`minute-of-day`）都接受由 `switch_number_cmp` 解析的值。注意，`switch_number_cmp` 只处理整数，不支持小数。
+
+- **单个值：** `mon="3"` 只匹配 3 月。
+- **范围：** `mon="3-5"` 匹配 3 月至 5 月（含边界）。
+- **反向范围：** `hour="22-6"` 匹配晚上 10 点至次日早上 6 点（跨午夜）。
+- **逗号分隔列表：** `mon="1,7,12"` 匹配 1 月、7 月和 12 月。
+- **混合：** `mday="1-5,15,20-25"` 匹配每月 1～5 日、15 日和 20～25 日。
+
+`wday` 属性由 `switch_dow_cmp` 解析，支持：
+
+- 数字 1～7，其中 1 表示星期日，7 表示星期六。
+- 三字母星期名称（`sun`、`mon`、`tue`、`wed`、`thu`、`fri`、`sat`），不区分大小写。
+- 使用连字符表示的范围：`wday="mon-fri"` 或 `wday="2-6"`。
+- 逗号分隔的列表：`wday="mon,wed,fri"`。
+
+`time-of-day` 由 `switch_tod_cmp` 解析，支持逗号分隔的 `HH:MM-HH:MM` 范围，例如 `time-of-day="09:00-12:00,13:00-17:00"`。
+
+`date-time` 由 `switch_fulldate_cmp` 解析，支持以逗号分隔的 `start~end` 时间范围对。
+
+---
+
+## 时区选择 {#timezone-selection}
+
+默认使用服务器本地时区评估时间条件。以下两个通道变量可针对每通呼叫覆盖此行为：
+
+| 变量 | 作用 |
+|---|---|
+| `timezone` | 时区名称字符串（如 `America/New_York`），由 `switch_time_exp_tz_name` 计算。 |
+| `tod_tz_offset` | 整数形式的 UTC 小时偏移量（如 `-5`）。如果设置为有效整数，则优先于 `timezone`。 |
+
+在抵达时间条件所在的分机规则之前，先在通道上设置上述任一变量。拨号计划评估器在每次开始评估 `<condition>` 时读取这两个变量。
+
+```xml
+<action application="set" data="timezone=America/Chicago"/>
+```
+
+`<condition>` 上的 `tz-offset` 属性有所不同：它要求服务器的有效 UTC 偏移量等于指定值才能匹配，本身并不是时区赋值操作。
+
+---
+
+## 营业时间示例（tod_example） {#business-hours-example-tod_example}
+
+默认配置附带名为 `tod_example` 的分机规则，展示最常见的时间条件模式：先设置一个通道变量表示办公室是否营业，再由后续分机规则读取此变量。
+
+```xml
+<extension name="tod_example" continue="true">
+  <condition wday="2-6" hour="9-18">
+    <action application="set" data="open=true"/>
+  </condition>
+</extension>
+```
+
+- `wday="2-6"` 匹配星期一至星期五（1 = 星期日，2 = 星期一，6 = 星期五，7 = 星期六）。
+- `hour="9-18"` 匹配 9～18 时（上午 9 点至下午 6 点所在的整个小时，注意 `hour` 是当前小时的整数，因此 `18` 匹配下午 6 点这个小时内的所有时刻）。
+- 分机规则上的 `continue="true"` 使拨号计划在该规则匹配后仍继续评估后续分机规则，让拨号计划其余部分可以使用 `open` 变量。
+- 没有定义 `<anti-action>`，因此营业时间以外的 `open` 仍未设置。后续分机规则可通过正则条件检查 `${open}`。
+
+使用 `minute-of-day` 可以消除按整点小时判断时，具体包含哪些分钟的歧义：
+
+```xml
+<extension name="tod_example" continue="true">
+  <!-- minute-of-day 541 = 09:00, minute-of-day 1081 = 18:00 -->
+  <condition wday="2-6" minute-of-day="541-1081">
+    <action application="set" data="open=true"/>
+  </condition>
+</extension>
+```
+
+---
+
+## 节假日安排示例 {#holiday-schedule-example}
+
+默认配置提供 `holiday_example` 分机规则，涵盖美国联邦节假日。每个节日是同一分机规则中独立的 `<condition>`。因为该规则设置了 `continue="true"`，所有条件都会评估，最后一个匹配的条件所设置的结果生效。
+
+```xml
+<extension name="holiday_example" continue="true">
+  <condition mday="1" mon="1">
+    <!-- New Year's Day -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="2" mweek="3" mon="1">
+    <!-- Martin Luther King Day: 3rd Monday in January -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="2" mweek="3" mon="2">
+    <!-- Presidents Day: 3rd Monday in February -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="2" mon="5" mday="25-31">
+    <!-- Memorial Day: last Monday in May -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition mday="4" mon="7">
+    <!-- Independence Day -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="2" mday="1-7" mon="9">
+    <!-- Labor Day: 1st Monday in September -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="2" mweek="2" mon="10">
+    <!-- Columbus Day: 2nd Monday in October -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition mday="11" mon="11">
+    <!-- Veterans Day -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition wday="5-6" mweek="4" mon="11">
+    <!-- Thanksgiving: 4th Thursday, plus Black Friday -->
+    <action application="set" data="open=false"/>
+  </condition>
+  <condition mday="25" mon="12">
+    <!-- Christmas -->
+    <action application="set" data="open=false"/>
+  </condition>
+</extension>
+```
+
+“某个月第 N 个星期几”的模式通过组合 `mweek` 和 `wday` 实现。阵亡将士纪念日（5 月最后一个星期一）则使用 `mday="25-31"` 而非 `mweek`，因为最后一个星期一总在 25～31 日之间。
+
+将 `holiday_example` 放在 `tod_example` 之前，使节假日判断优先执行：如果节假日条件设置了 `open=false`，而当前时间又处于营业时间，后续营业时间规则可能重新设置 `open=true`。应根据希望哪种结果最终生效，调整规则顺序，或在单个规则中先检查节假日。
+
+---
+
+## 嵌套条件 {#nested-conditions}
+
+`<condition>` 元素可以包含子级 `<condition>`。只有父条件匹配时，拨号计划评估器才会处理嵌套条件。这样可以形成多层筛选：外层条件对呼叫进行宽泛筛选，内层条件再执行更细的路由判断，无需重复外层属性。
+
+```xml
+<extension name="weekend_routing">
+  <condition wday="1,7">
+    <!-- Outer: matches Saturday and Sunday only -->
+    <condition hour="8-20">
+      <!-- Inner: matches 8 AM to 8 PM on weekends -->
+      <action application="transfer" data="weekend_queue XML default"/>
+      <anti-action application="transfer" data="after_hours_ivr XML default"/>
+    </condition>
+  </condition>
+</extension>
+```
+
+外层条件不匹配时（呼叫发生在工作日），内层条件完全不会评估。此逻辑由 `mod_dialplan_xml.c` 中的 `parse_exten` 实现：父条件匹配后检测到子 `<condition>` 时，它会递归调用自身。
+
+分机规则上的 `require-nested` 属性决定嵌套条件匹配失败时，是令整个分机规则评估失败，还是允许继续处理。默认值为 `true`（嵌套条件失败意味着整个分机规则失败）。
+
+---
+
+## 时间条件与字段条件结合 {#combining-time-conditions-with-field-conditions}
+
+一个 `<condition>` 同时包含时间属性和 `field` 属性时，两者都要检查。先进行时间判断；如果时间不匹配，就不再计算字段正则表达式，无论字段值是什么，该条件都视为失败。
+
+要分别应用时间和字段逻辑，可在同一分机规则中依次放置多个条件：第一个条件设置变量，第二个条件检查它。
+
+```xml
+<extension name="vip_business_hours" continue="true">
+  <!-- Step 1: mark business hours -->
+  <condition wday="2-6" hour="8-17" break="never">
+    <action application="set" data="business_hours=true"/>
+    <anti-action application="set" data="business_hours=false"/>
+  </condition>
+
+  <!-- Step 2: route VIP callers differently during business hours -->
+  <condition field="${business_hours}" expression="^true$">
+    <condition field="${caller_id_number}" expression="^18005551234$">
+      <action application="transfer" data="vip_queue XML default"/>
+      <anti-action application="transfer" data="main_queue XML default"/>
+    </condition>
+    <anti-action application="transfer" data="after_hours_ivr XML default"/>
+  </condition>
+</extension>
+```
+
+第一个条件上的 `break="never"` 可防止拨号计划在匹配或不匹配时停止处理，确保第二个条件始终执行。
+
+---
+
+## 使用 toll_allow 限制呼叫 {#restricting-calls-with-toll_allow}
+
+用户目录变量 `toll_allow` 决定已认证用户可拨打哪些类别的外呼。它不是时间属性，但经常与时间条件及 `<condition field>` 判断结合使用，以实施针对各用户的呼叫权限限制。
+
+**在用户目录中设置 toll_allow**
+
+```xml
+<user id="1001">
+  <variables>
+    <variable name="toll_allow" value="local,domestic"/>
+  </variables>
+</user>
+```
+
+常见取值由运营者自行定义，惯用名称包括 `local`、`domestic`、`international` 和 `premium`。多个类别使用逗号分隔。
+
+**在拨号计划中检查 toll_allow**
+
+用户认证时，目录中的值会填入 `${toll_allow}` 通道变量。在允许呼叫继续之前，可使用 `field="${toll_allow}"` 的 `<condition>` 通过正则表达式检查该值。
+
+```xml
+<extension name="international_dialing">
+  <condition field="${toll_allow}" expression="international">
+    <action application="bridge" data="sofia/gateway/my_carrier/${destination_number}"/>
+    <anti-action application="playback" data="ivr/ivr-not_allowed.wav"/>
+    <anti-action application="hangup"/>
+  </condition>
+</extension>
+```
+
+正则表达式 `expression="international"` 匹配任何包含子串 `international` 的 `toll_allow` 值。若要求恰好是这一单独值，请加锚点：`expression="^international$"`。要允许多个类别，可使用或运算：`expression="domestic|international"`。
+
+**将 toll_allow 与时间条件组合**
+
+下面的分机规则先评估时间，再通过嵌套条件限制 `toll_allow` 检查，从而无论用户的 `toll_allow` 配置如何，都禁止在营业时间以外拨打国际电话。
+
+```xml
+<extension name="intl_business_hours_only">
+  <condition wday="2-6" hour="8-17">
+    <!-- During business hours, check toll_allow -->
+    <condition field="${toll_allow}" expression="international">
+      <action application="bridge" data="sofia/gateway/my_carrier/${destination_number}"/>
+      <anti-action application="playback" data="ivr/ivr-not_allowed.wav"/>
+      <anti-action application="hangup"/>
+    </condition>
+    <anti-action application="playback" data="ivr/ivr-not_allowed.wav"/>
+    <anti-action application="hangup"/>
+  </condition>
+</extension>
+```
+
+在此配置中，如果呼叫抵达 `intl_business_hours_only` 时不属于星期一至星期五上午 8 点至下午 5 点，外层 `<anti-action>` 会立即执行，并完全跳过 `toll_allow` 检查。

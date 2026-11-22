@@ -1,0 +1,130 @@
+---
+sidebar_position: 11
+id: mod_directory
+slug: /module-reference/applications/mod_directory
+title: "mod_directory——按姓名拨号目录"
+description: "使用 mod_directory 配置按姓名搜索的 IVR 企业电话目录与呼叫转接。"
+sidebar_label: "mod_directory"
+---
+# mod_directory——按姓名拨号目录 {#mod_directory-—-dial-by-name-directory}
+
+`mod_directory` 提供按姓名拨号的 IVR：它读取 FreeSWITCH XML 用户目录，提示来电者通过数字键盘输入与姓名对应的数字，播报匹配条目，并将呼叫转接到所选分机。模块位于 `src/mod/applications/mod_directory`，归类为应用模块。
+
+需要自动化企业电话目录时可以使用此模块：不知道分机号的来电者只需输入部分姓名，即可在没有人工总机协助的情况下接通对应人员。
+
+## 加载模块 {#loading-the-module}
+
+模块名称为 `mod_directory`。默认的 `autoload_configs/modules.conf.xml` 中，该条目已被注释：
+
+```xml
+<!--<load module="mod_directory"/>-->
+```
+
+要启用，请取消该行注释（或添加加载行）并重启 FreeSWITCH，也可以在运行时通过 `fs_cli` 加载：
+
+```
+load mod_directory
+```
+
+无需特殊构建标志；存在对应源码时，该模块会作为标准 FreeSWITCH 构建的一部分编译。
+
+## 配置：`directory.conf.xml` {#configuration-directoryconfxml}
+
+模块读取 `autoload_configs/directory.conf.xml`。文件分为两个部分：全局 `<settings>` 块，以及包含一个或多个具名配置实例的 `<profiles>` 块。拨号计划应用按名称引用配置实例。
+
+### 全局设置 {#global-settings}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `odbc-dsn` | 搜索数据库的 ODBC 数据源 | DSN 字符串（`dsn:user:pass`） | *（无，使用 SQLite）* |
+| `dbname` | SQLite 数据库文件名 | 字符串 | `directory` |
+| `debug` | 日志详细程度 | 整数 | `0` |
+
+### 配置实例参数 {#profile-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `next-key` | 切换到下一条搜索结果的 DTMF 按键 | 单个数字或 `#`、`*` | `6` |
+| `prev-key` | 返回上一条搜索结果的 DTMF 按键 | 单个数字或 `#`、`*` | `4` |
+| `terminator-key` | 结束输入或中止操作的 DTMF 按键 | 单个数字或 `#`、`*` | `#` |
+| `switch-order-key` | 切换按名/按姓搜索的 DTMF 按键 | 单个数字或 `#`、`*` | `*` |
+| `select-name-key` | 选中已播报条目并转接的 DTMF 按键 | 单个数字或 `#`、`*` | `1` |
+| `new-search-key` | 开始新搜索的 DTMF 按键 | 单个数字或 `#`、`*` | `3` |
+| `search-order` | 默认搜索字段 | `last_name`、`first_name`、`first_and_last_name` | `last_name` |
+| `digit-timeout` | 输入两位数字之间的超时时间（毫秒） | 整数 0～30000 | `3000` |
+| `min-search-digits` | 开始搜索前要求输入的最少数字位数 | 整数 ≥ 0 | `3` |
+| `max-menu-attempts` | 退出前允许的最多搜索尝试次数 | 整数 ≥ 0 | `3` |
+| `max-result` | 最多播报的匹配结果数（0 表示不限制） | 整数 ≥ 0 | `5` |
+| `use-number-alias` | 使用 `number-alias` 属性而不是用户 ID 作为转接目标 | `true`、`false` | `false` |
+
+### 配置示例 {#example-configuration}
+
+```xml
+<configuration name="directory.conf" description="Directory">
+  <settings>
+    <!--<param name="odbc-dsn" value="dsn:user:pass"/>-->
+    <!--<param name="dbname" value="directory"/>-->
+  </settings>
+  <profiles>
+    <profile name="default">
+      <param name="max-menu-attempts" value="3"/>
+      <param name="min-search-digits" value="3"/>
+      <param name="terminator-key" value="#"/>
+      <param name="digit-timeout" value="3000"/>
+      <param name="max-result" value="5"/>
+      <param name="next-key" value="6"/>
+      <param name="prev-key" value="4"/>
+      <param name="switch-order-key" value="*"/>
+      <param name="select-name-key" value="1"/>
+      <param name="new-search-key" value="3"/>
+      <param name="search-order" value="last_name"/>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+### 单个用户的目录可见性 {#per-user-directory-visibility}
+
+XML 用户目录中的两个用户级 `<param>` 元素控制用户是否出现在搜索结果中：
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|--------|---------|
+| `directory-visible` | 是否将用户纳入姓名搜索结果 | `true`、`false` | `true` |
+| `directory-exten-visible` | 播报条目时是否播报分机号 | `true`、`false` | `true` |
+
+显示名称取自用户变量 `effective_caller_id_name`。如果还设置了用户变量 `directory_full_name`，则在目录搜索中由它覆盖 `effective_caller_id_name`。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `directory` | 运行按姓名拨号 IVR，并在选中条目后转接 | `<profile_name> <domain_name> [<context_name>]` 或 `<profile_name> <domain_name> <dialplan_name> <context_name>` |
+
+应用从具名域的 XML 目录填充内部搜索表，引导来电者输入键盘数字，并在其选中某条记录时执行呼叫转接。如果尝试 `max-menu-attempts` 次后仍未选中条目，则应用返回，不执行转接。
+
+只提供三个参数时，第三个参数视为 `context_name`，而 `dialplan_name` 默认为 `XML`。提供四个参数时，第三个是 `dialplan_name`，第四个是 `context_name`。
+
+```xml
+<action application="directory" data="default $${domain} XML default"/>
+```
+
+```xml
+<!-- Search within a specific context using an alternate dialplan -->
+<action application="directory" data="default example.com XML sales"/>
+```
+
+## 通道变量 {#channel-variables}
+
+`mod_directory` 执行期间会**读取**以下通道变量。
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `directory_group_selection` | 读取 | 设置后仅搜索具名用户目录组中的用户 |
+| `directory_voicemail_profile` | 读取 | 通过 `mod_voicemail` 查找预先录制的姓名语音时使用的语音信箱配置实例；默认为目录配置实例名 |
+| `directory_search_order` | 读取 | 覆盖本次呼叫使用的 `search-order` 配置参数；接受 `last_name`、`first_name` 或 `first_and_last_name` |
+
+## 相关文档 {#see-also}
+
+- [第 21 章：IVR 菜单](../../applications/ivr-menus.mdx)
+
+**源码：** `src/mod/applications/mod_directory`

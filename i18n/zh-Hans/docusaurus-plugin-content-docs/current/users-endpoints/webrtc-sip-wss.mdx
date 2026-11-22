@@ -1,0 +1,300 @@
+---
+sidebar_position: 5
+id: webrtc-sip-wss
+slug: /users-and-endpoints/webrtc-sip
+title: "第 10 章：基于 SIP 的 WebRTC（WSS）"
+description: "让 Sofia 配置实例接入通过 WebSocket（WS/WSS）传输 SIP 的浏览器端点，包括监听参数、TLS 证书及媒体设置。"
+sidebar_label: "10. 基于 SIP 的 WebRTC（WSS）"
+---
+
+# 第 10 章：基于 SIP 的 WebRTC（WSS） {#chapter-10-webrtc-over-sip-wss}
+
+Sofia 配置实例可以接收通过 WebSocket（WS）和安全 WebSocket（WSS）传输的 SIP 信令，使浏览器端点无需专有信令协议，就能使用标准 SIP 注册和拨打电话。本章介绍监听参数、TLS 证书材料，以及浏览器互通所必需的媒体配置。
+
+<SignalWireCallout
+  title="浏览器中的 SIP，边缘服务也一并提供"
+  href="https://signalwire.com/docs/browser-sdk"
+  page="webrtc-sip-wss"
+  linkText="查看 Browser SDK">
+
+通过 WSS 注册浏览器客户端，意味着需要自行维护证书、套接字和 NAT 穿透。SignalWire Browser SDK 仍支持浏览器级通话能力，但将边缘服务交由 FreeSWITCH 创始团队运营的托管平台承担。
+
+</SignalWireCallout>
+
+## SIP over WebSocket 与 Verto 的比较 {#sip-over-websocket-vs-verto}
+
+FreeSWITCH 支持两种不同的浏览器实时通信机制：由 `mod_sofia` 通过 WebSocket 承载 SIP（RFC 7118），以及由 `mod_verto` 提供专有的 Verto 协议。两者都能服务浏览器客户端，主要区别在于信令。
+
+SIP over WSS 将标准 SIP 消息封装在 WebSocket 连接中。任何支持 WebSocket 传输的 SIP 客户端库（如 JsSIP 或 SIP.js）都可以与 Sofia 配置实例注册并通话，而无需 FreeSWITCH 专用客户端代码。代价是必须在浏览器中处理完整的 SIP 协商复杂性。
+
+Verto（参见[第 9 章：使用 Verto 的 WebRTC](../users-endpoints/webrtc-verto.mdx)）是 FreeSWITCH 项目设计并实现的一种 JSON-RPC 协议。它简化了客户端开发，但需要 FreeSWITCH 加载 `mod_verto` 模块，并使用理解 Verto 协议的 JavaScript 客户端。
+
+如果浏览器端使用标准 SIP 库，请按本章说明在 Sofia 配置实例中配置 `ws-binding` 或 `wss-binding`；若浏览器端使用 `verto.js`，请改看[第 9 章：使用 Verto 的 WebRTC](../users-endpoints/webrtc-verto.mdx)。
+
+---
+
+## 启用 ws-binding 和 wss-binding {#enabling-ws-binding-and-wss-binding}
+
+`ws-binding` 和 `wss-binding` 参数配置在 Sofia 配置实例的 `<settings>` 块中。两个参数的格式均为 `[ip]:port`。省略 IP 部分（如 `:5066`）时，配置实例使用已配置的 IP 在所有接口上监听。
+
+默认 `internal` 配置实例中已经包含这两个参数：
+
+```xml
+<!-- for sip over websocket support -->
+<param name="ws-binding"  value=":5066"/>
+
+<!-- for sip over secure websocket support -->
+<!-- You need wss.pem in $${certs_dir} for wss or one will be created for you -->
+<param name="wss-binding" value=":7443"/>
+```
+
+设置 `ws-binding` 会增加一个未加密的 WebSocket 监听器；设置 `wss-binding` 则增加一个 TLS 加密的 WebSocket 监听器。二者可以在同一个配置实例中同时启用。配置实例仍会监听其标准 SIP UDP/TCP 端口；WebSocket 监听器是在此基础上额外增加的。
+
+如需只绑定指定网卡，而非所有接口：
+
+```xml
+<param name="ws-binding"  value="192.0.2.10:5066"/>
+<param name="wss-binding" value="192.0.2.10:7443"/>
+```
+
+---
+
+## TLS 证书材料 {#tls-certificate-material}
+
+`wss-binding` 需要 TLS 证书。FreeSWITCH 从 `tls-cert-dir` 指定的目录查找证书文件（默认为全局 `certs_dir`，通常是 `/etc/freeswitch/tls`）。
+
+### WSS 证书文件查找顺序 {#certificate-file-lookup-order-for-wss}
+
+FreeSWITCH 首先查找分开的密钥和证书文件：
+
+1. `wss.key`（私钥）
+2. `wss.crt`（证书）
+
+如果其中任一文件不存在，FreeSWITCH 会改用一个合并后的 PEM 文件：
+
+3. `wss.pem`（拼接后的私钥、证书以及可选证书链）
+
+如果 `wss.pem` 也不存在，FreeSWITCH 会生成自签名证书并写入 `wss.pem`。自签名证书会引发浏览器安全警告；除非用户手动信任该证书，否则浏览器将拒绝连接使用不可信证书保护的 WSS 端点。生产环境应提供受信任 CA 签发的证书。
+
+### 推荐的文件布局 {#recommended-file-layout}
+
+```
+/etc/freeswitch/tls/
+    wss.pem          # combined key + cert (or use wss.key + wss.crt)
+```
+
+也可以使用分离的文件：
+
+```
+/etc/freeswitch/tls/
+    wss.key          # RSA or ECDSA private key, PEM format
+    wss.crt          # signed certificate (and optional chain), PEM format
+```
+
+### 与 SIP TLS 证书文件的关系 {#relationship-to-sip-tls-certificate-files}
+
+SIP TLS 传输（`tls` 参数）使用 `agent.pem`（私钥和证书）及 `cafile.pem`（CA 证书包）。这些文件不同于 WSS 证书文件（`wss.pem` 或 `wss.key`/`wss.crt`）。同一配置实例可分别使用独立证书提供 SIP TLS 和 WSS 服务。
+
+---
+
+## TLS 参数 {#tls-parameters}
+
+以下参数控制 TLS 行为，适用于 SIP TLS 传输；其中 `tls-cert-dir` 还决定 WSS 证书文件的加载目录。
+
+```xml
+<!-- TLS for SIP (not required for WSS alone, but tls-cert-dir affects both) -->
+<param name="tls"                  value="false"/>
+<param name="tls-only"             value="false"/>
+<param name="tls-bind-params"      value="transport=tls"/>
+<param name="tls-sip-port"         value="5061"/>
+<param name="tls-cert-dir"         value="/etc/freeswitch/tls"/>
+<param name="tls-passphrase"       value=""/>
+<param name="tls-version"          value="tlsv1,tlsv1.1,tlsv1.2,tlsv1.3"/>
+<param name="tls-ciphers"          value="ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH"/>
+<param name="tls-verify-date"      value="true"/>
+<param name="tls-verify-policy"    value="none"/>
+<param name="tls-verify-depth"     value="2"/>
+<param name="tls-verify-in-subjects" value=""/>
+<param name="tls-timeout"          value="300"/>
+```
+
+上面的示例中，`tls-cert-dir` 使用惯用路径；其编译时默认值是构建时确定的全局 `certs_dir`。`tls-timeout` 的编译时默认值为 `300` 秒，用于出站 TLS 连接尝试，设为 `0` 可禁用超时。`tls-version` 默认包括 `tlsv1` 至 `tlsv1.3` 四个版本；可将其限制为 `tlsv1.2,tlsv1.3`，以停止支持已弃用的协议版本。
+
+---
+
+## 媒体：SRTP、DTLS 与 ICE {#media-srtp-dtls-and-ice}
+
+浏览器 SIP 客户端需要加密媒体以及基于 ICE 的 NAT 穿透。本节解释 DTLS-SRTP 密钥交换的工作方式、FreeSWITCH 如何作为 ICE 对等端参与协商，以及如何配置服务端候选地址。FreeSWITCH 也支持通过 SDES（SDP 内联密钥交换）使用 SRTP，但 WebRTC 浏览器不采用此方式；浏览器始终使用 DTLS-SRTP。
+
+---
+
+### DTLS-SRTP {#dtls-srtp}
+
+WebRTC 要求使用 DTLS-SRTP 加密媒体。无需在配置实例中设置参数启用或禁用它；当浏览器的 SDP offer 包含 `a=fingerprint` 属性时，FreeSWITCH 会自动启用 DTLS-SRTP。
+
+**指纹交换如何工作**
+
+FreeSWITCH 收到包含 `a=fingerprint` 的 SDP offer 时，核心媒体层会：
+
+1. 记录 offer 中的远端指纹（哈希算法及十六进制摘要）。
+2. 从自身 DTLS 证书（`$${certs_dir}` 中的 `dtls-srtp.pem`）生成本地指纹。如果文件不存在，FreeSWITCH 会生成自签名证书并保存到该位置。
+3. 在 SDP answer 中包含 `a=fingerprint` 和 `a=setup`。
+
+FreeSWITCH 默认使用 SHA-256 计算指纹。如果远端 `a=fingerprint` 属性声明了其他哈希类型，FreeSWITCH 会用同一类型生成本地指纹。
+
+**`a=setup` 角色协商**
+
+`a=setup` 属性决定哪一端充当 DTLS 客户端（发起握手），哪一端充当 DTLS 服务端（等待握手）。
+
+- FreeSWITCH 发送 SDP offer 时使用 `a=setup:actpass`，由浏览器决定角色。
+- FreeSWITCH 发送 SDP answer 时，如果浏览器 offer 为 `passive` 或 `actpass`，FreeSWITCH 承担 DTLS 客户端角色（`a=setup:active`）；如果浏览器 offer 为 `active`，FreeSWITCH 则成为 DTLS 服务端（`a=setup:passive`）。
+
+此行为自动执行，没有配置实例参数控制 DTLS 角色。
+
+**DTLS 证书文件**
+
+FreeSWITCH 在 `$${certs_dir}/dtls-srtp.pem` 查找 DTLS 证书。若合并 PEM 文件不存在，则改用同目录下的 `dtls-srtp.key`（私钥）和 `dtls-srtp.crt`（证书）。如果这些文件均不存在，FreeSWITCH 会在启动时生成自签名证书并写入 `dtls-srtp.pem`。
+
+```
+/etc/freeswitch/tls/
+    dtls-srtp.pem     # combined key + cert (auto-generated if absent)
+```
+
+DTLS 证书与 WSS TLS 证书（`wss.pem`）相互独立，分别保护不同层次：`wss.pem` 用于保护 WebSocket 信令通道，`dtls-srtp.pem` 用于保护 SRTP 媒体通道。
+
+**`rtp_secure_media` 通道变量**
+
+对于使用 SDES-SRTP（非 DTLS 密钥交换）的情况，`rtp_secure_media` 通道变量控制 FreeSWITCH 的行为。可以在拨号计划或用户目录中设置：
+
+```xml
+<action application="set" data="rtp_secure_media=mandatory"/>
+```
+
+| 值 | 行为 |
+|-------|----------|
+| `true` 或 `mandatory` | 要求 SRTP；拒绝未提供加密参数的呼叫 |
+| `optional` | 提供 SRTP，但也接受未使用 SRTP 的呼叫 |
+| `false` 或 `forbidden` | 完全禁用 SRTP |
+
+该变量也接受冒号后缀，用来限制所提供的 SRTP 加密套件，例如 `mandatory:AES_CM_128_HMAC_SHA1_80`。套件列表以冒号分隔。`rtp_secure_media_inbound` 和 `rtp_secure_media_outbound` 分别对入站、出站方向生效；如果未设置方向特定变量，普通 `rtp_secure_media` 变量同时作用于两个方向。
+
+对使用 DTLS-SRTP 的 WebRTC 浏览器呼叫，无需设置 `rtp_secure_media`。FreeSWITCH 根据浏览器 SDP 中是否存在 `a=fingerprint` 自动启用 DTLS-SRTP。
+
+---
+
+### ICE {#ice}
+
+默认情况下，FreeSWITCH 作为完整 ICE 代理（full ICE agent）参与 ICE（Interactive Connectivity Establishment，交互式连接建立）。它在建立会话时随机生成 ICE 凭据（`a=ice-ufrag` 和 `a=ice-pwd`）并放入 SDP。ufrag 长度为 16 个字符，密码长度为 24 个字符。
+
+**FreeSWITCH 宣告的候选类型**
+
+FreeSWITCH 在 SDP 中为每个媒体组件最多宣告两种类型的候选地址：
+
+1. 使用 `rtp-ip` 所绑定地址的 `host` 主机候选。
+2. 如果配置了 `ext-rtp-ip` 且它与 `rtp-ip` 不同，则使用 `ext-rtp-ip` 作为地址，并将 `rtp-ip` 作为 `raddr`（反射基础地址）的 `srflx`（服务器反射）候选。
+
+FreeSWITCH 不会在自己的 SDP 中生成 `relay` 中继候选，但在候选选择过程中可以接受浏览器 SDP 中的 `relay` 候选。
+
+**使用 `apply-candidate-acl` 筛选 ICE 候选**
+
+FreeSWITCH 处理浏览器的 SDP offer 时，会依据 `apply-candidate-acl` 配置的 ACL 检查每一行 `a=candidate`。候选 IP 匹配任意一个 ACL 即被接受。未配置 `apply-candidate-acl` 时，FreeSWITCH 默认使用 `wan.auto` 并记录警告日志。
+
+```xml
+<param name="apply-candidate-acl" value="localnet.auto"/>
+<param name="apply-candidate-acl" value="wan_v4.auto"/>
+<param name="apply-candidate-acl" value="rfc1918.auto"/>
+<param name="apply-candidate-acl" value="any_v4.auto"/>
+```
+
+该参数可以重复配置。不匹配任何 ACL 的候选会被静默丢弃。如果所有非 relay 候选都被丢弃，FreeSWITCH 会进一步评估浏览器 SDP 中的 relay 候选。
+
+FreeSWITCH 只处理 UDP ICE 候选，忽略浏览器 SDP 中的 TCP 候选。
+
+**`rtp-ip` 和 `ext-rtp-ip` 参数**
+
+| 参数 | 在 ICE 中的作用 |
+|-----------|-------------|
+| `rtp-ip` | FreeSWITCH 绑定 RTP 套接字的本地地址。它成为 `host` 候选地址，以及任何 `srflx` 候选的 `raddr`。 |
+| `ext-rtp-ip` | FreeSWITCH 宣告的公网地址。若已设置且不同于 `rtp-ip`，会另外生成一个以此为候选地址的 `srflx` 候选；发送给浏览器的 SDP 也使用该值作为 `c=` 连接地址。 |
+
+```xml
+<param name="rtp-ip"     value="$${local_ip_v4}"/>
+<param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+```
+
+`rtp-ip` 参数可以重复配置。包含 `:` 的值会视为 IPv6 地址，并保存在与 IPv4 不同的地址池中。
+
+**ICE 模式：完整代理与 ICE-lite**
+
+FreeSWITCH 默认以完整 ICE 代理模式工作。将通道变量 `ice_lite` 设为 `true`，可切换到 ICE-lite 模式，使其担任 controlled（受控）角色并跳过连通性检查。ICE-lite 不是默认模式；与大多数浏览器的互通通过完整 ICE 模式实现。
+
+---
+
+### STUN 与 TURN {#stun-and-turn}
+
+**FreeSWITCH 与 STUN**
+
+FreeSWITCH 使用 STUN 只有一个目的：当 `ext-rtp-ip` 设置为 `stun:` URI 时，在加载配置实例时解析自身的公网 IP 地址。
+
+```xml
+<param name="ext-rtp-ip" value="stun:stun.example.com"/>
+```
+
+配置 `stun:` 值后，FreeSWITCH 启动时会向指定服务器发送 STUN Binding 请求（最多重试 5 次），并将返回的公网 IP 保存为 `ext-rtp-ip`。之后在通话过程中，FreeSWITCH 不再与 STUN 服务器通信。解析后的地址用于填写 `srflx` 候选和 SDP 连接地址。
+
+URI 中也可以指定端口，例如 `stun:stun.example.com:3478`。
+
+`ext-rtp-ip` 可接受以下形式：
+
+| 形式 | 行为 |
+|------|----------|
+| 字面量 IP，如 `203.0.113.10` | 直接使用，不进行查询 |
+| `stun:host` 或 `stun:host:port` | 加载配置实例时执行 STUN Binding 请求 |
+| `host:hostname` | 加载配置实例时查询 DNS A 记录 |
+| `auto` | FreeSWITCH 根据系统路由表推测地址 |
+| `auto-nat` | 加载配置实例时通过 NAT-PMP 或 UPnP 解析 |
+
+**TURN 中继**
+
+FreeSWITCH 自身不使用 TURN 中继。FreeSWITCH 没有 TURN 客户端配置，也不会请求或生成 relay 候选。
+
+TURN 中继配置在浏览器客户端，而不是 FreeSWITCH。浏览器通过 TURN 服务器发现中继地址，并将其作为 SDP 中的 `relay` 候选宣告。FreeSWITCH 收到后，依据 `apply-candidate-acl` 验证，并在其为最佳可用候选时用作远端媒体目的地址。从 FreeSWITCH 角度看，它只是向某个 IP 和端口发送 RTP，中继过程是透明的。
+
+---
+
+### NAT 穿透：服务端参数 {#nat-traversal-server-side-parameters}
+
+服务端 NAT 的整体设置，包括 `ext-sip-ip`、`ext-rtp-ip` 和 `auto-nat`，已在[媒体处理章节的 NAT 穿透部分](../media/media-handling.mdx#nat-traversal)详细说明。本章配置引用的是同一个 `ext-rtp-ip` 参数。有关它们与 NAT-PMP、UPnP 以及 Sofia 配置实例 SIP 信令地址之间的关联，请参阅该部分，不在此重复。
+
+---
+
+## 浏览器传输要求 {#browser-transport-requirement}
+
+根据混合内容策略，通过 HTTPS 提供服务的浏览器页面不能建立未加密的 WebSocket 连接（`ws://`）。实际含义是：
+
+- 通过 HTTPS 加载的浏览器页面必须使用 `wss-binding`（WSS，默认端口 7443）。
+- 通过普通 HTTP 加载的浏览器页面可以使用 `ws-binding`（WS，默认端口 5066），但生产环境不应使用 HTTP。
+
+为浏览器客户端部署时，始终应配置 `wss-binding` 并提供受 CA 信任的证书。普通 `ws-binding` 仅适合本地开发或测试。
+
+---
+
+## 参数参考 {#parameter-reference}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|----------------|---------|
+| `ws-binding` | 明文 WebSocket（WS）SIP 监听器的 IP 和端口 | `[ip]:port` 字符串，例如 `:5066` | 无（禁用） |
+| `wss-binding` | 安全 WebSocket（WSS）SIP 监听器的 IP 和端口 | `[ip]:port` 字符串，例如 `:7443` | 无（禁用） |
+| `tls` | 启用 SIP over TLS 传输 | `true`、`false` | `false` |
+| `tls-only` | 只绑定 TLS 端口，不监听明文 SIP UDP/TCP 端口 | `true`、`false` | `false` |
+| `tls-bind-params` | 附加到 TLS 监听 URL 的传输参数 | 字符串；必须包含 `transport=tls`（缺少时自动附加） | `transport=tls` |
+| `tls-sip-port` | SIP TLS 监听器端口 | 端口号或 `auto` | `5061` |
+| `tls-cert-dir` | TLS 与 WSS 证书文件所在的目录 | 文件系统绝对路径 | 全局 `certs_dir` |
+| `tls-passphrase` | 供 OpenSSL 解密加密私钥的口令 | 字符串 | 空（无口令） |
+| `tls-version` | 启用的 TLS/SSL 协议版本列表，以逗号分隔 | `tlsv1`、`tlsv1.1`、`tlsv1.2`、`tlsv1.3`、`sslv2`、`sslv3`、`sslv23` | `tlsv1,tlsv1.1,tlsv1.2,tlsv1.3` |
+| `tls-ciphers` | TLS 连接使用的 OpenSSL 密码套件字符串 | OpenSSL 密码套件列表字符串 | `ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH` |
+| `tls-verify-date` | 拒绝有效期已过的证书 | `true`、`false` | `true` |
+| `tls-verify-policy` | 对端 TLS 证书验证策略 | `none`、`in`、`out`、`all`、`subjects_in`、`subjects_out`、`subjects_all`；允许以竖线分隔组合，例如 `subjects_in\|subjects_out` | `none` |
+| `tls-verify-depth` | 验证对端证书时允许的最大证书链深度 | 整数 | `2` |
+| `tls-verify-in-subjects` | 入站 TLS 连接所允许的证书主体（要求 `tls-verify-policy` 包含 `subjects_in` 或 `subjects_all`） | 以竖线分隔的证书主体字符串，例如 `example.com\|*.example.com` | 空 |
+| `tls-timeout` | 出站 TLS 连接尝试的超时时间（秒）；`0` 表示禁用 | 整数 | `300` |

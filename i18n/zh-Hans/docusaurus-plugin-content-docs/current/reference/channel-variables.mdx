@@ -1,0 +1,781 @@
+---
+sidebar_position: 2
+id: channel-variables
+slug: /reference/channel-variables
+title: "第 32 章：通道变量目录"
+description: "逐通道变量参考：设置和读取来源，以及如何在拨号计划中用 ${variable} 引用变量。"
+sidebar_label: "32. 通道变量"
+---
+
+# 第 32 章：通道变量目录 {#chapter-32-channel-variables-catalog}
+
+通道变量是 FreeSWITCH 在一条呼叫腿生命周期内维护的、按通道划分的具名字符串值。在拨号计划表达式和应用参数中，可以使用 `${variable_name}` 引用。变量可能在主叫认证时由用户目录设置，由 `set`、`export` 等拨号计划动作设置，由 `mod_sofia` 等端点模块设置，也可能由核心应用在运行期间设置。通过 `set` 设置的变量仅作用于当前呼叫腿；`export` 则会将变量进一步传播至后续 `bridge` 创建的任一 B 腿。
+
+<SignalWireCallout
+  title="更精简命名空间中的变量"
+  href="https://signalwire.com/docs/swml/reference/calling/set"
+  page="channel-variables"
+  linkText="查看 SWML 中的 set 和变量">
+
+托管的 SignalWire 使用 SWML（一种基于 JSON/YAML 的呼叫控制标记语言）保存每次呼叫的状态：[`set`](https://signalwire.com/docs/swml/reference/calling/set?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=channel-variables) 与 [`unset`](https://signalwire.com/docs/swml/reference/calling/unset?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=channel-variables) 用于管理文档变量，提示及检测结果也以具名值返回。因此，需要处理的变量范围从数千个通道变量缩减为 SWML 文档中显式声明的变量。
+
+</SignalWireCallout>
+
+## 呼叫控制与路由 {#call-control-and-routing}
+
+这些变量控制 FreeSWITCH 在桥接前、桥接期间以及桥接结束后的行为。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-continue_on_fail"></a>`continue_on_fail` | 控制桥接失败后拨号计划是否继续执行。设为 `true` 时，不论失败原因均继续；设为以逗号分隔的 Q.850 原因名称（如 `USER_BUSY,NO_ANSWER`）或数字代码（如 `17,18`）时，仅遇到所列原因才继续。默认：`false`。 |
+| <a id="var-hangup_after_bridge"></a>`hangup_after_bridge` | 为 `true` 时，B 腿一挂机就终止 A 腿；为 `false`（默认）时，桥接返回后继续执行拨号计划。其判断顺序位于 `park_after_bridge` 与 `transfer_after_bridge` 之后。 |
+| <a id="var-park_after_bridge"></a>`park_after_bridge` | 为 `true` 时，桥接返回后驻留呼叫，而不是继续拨号计划。先于 `hangup_after_bridge` 判断。 |
+| <a id="var-park_after_early_bridge"></a>`park_after_early_bridge` | 为 `true` 时，在 B 腿应答前，早期媒体桥接一结束就驻留呼叫。对应 `switch_types.h` 中的 `SWITCH_PARK_AFTER_EARLY_BRIDGE_VARIABLE`。 |
+| <a id="var-transfer_after_bridge"></a>`transfer_after_bridge` | 指定桥接完成后要执行的拨号计划转接目的地（`extension [dialplan [context]]`）。 |
+| <a id="var-transfer_after_early_bridge"></a>`transfer_after_early_bridge` | 指定 B 腿应答前早期媒体桥接终止时要转入的拨号计划目的地。对应 `SWITCH_TRANSFER_AFTER_EARLY_BRIDGE_VARIABLE`。 |
+| <a id="var-call_timeout"></a>`call_timeout` | 使用 `bridge` 应用时等待 B 腿应答的最长秒数。设置在 A 腿上，控制该通道的所有桥接。收到早期媒体后不再生效，除非还设置了 `ignore_early_media=true`。默认：60。 |
+| <a id="var-park_timeout"></a>`park_timeout` | 在驻留通道上设置后，经过指定秒数即断开呼叫。可使用整数或 `seconds:HANGUP_CAUSE_NAME` 格式；不设置则呼叫保持驻留，直到明确转接。示例：`park_timeout=30:MEDIA_TIMEOUT`。 |
+| <a id="var-fail_on_single_reject"></a>`fail_on_single_reject` | 适用于桥接拨号字符串使用 `,`（AND）运算符的情况。为 `true` 时，任一目的地拒绝即终止整个桥接尝试。也可设为特定原因（`USER_BUSY`）以仅在该原因下失败，或使用否定原因（`!NORMAL_CLEARING`）匹配其他所有原因。支持自定义分隔符列表 `^^:CAUSE1:CAUSE2`。默认：`false`。 |
+| <a id="var-failure_causes"></a>`failure_causes` | 以逗号分隔的 Q.850 原因名称列表。桥接以其中某个原因返回时，视通道为失败并调用 `transfer_on_fail`。作用与 `continue_on_fail` 相反。定义于 `switch_channel.c`。 |
+| <a id="var-transfer_on_fail"></a>`transfer_on_fail` | 桥接失败时执行的拨号计划转接目的地，与 `failure_causes` 配合使用。格式：`extension [dialplan [context]]`。定义于 `switch_channel.c`。 |
+| <a id="var-bridge_early_media"></a>`bridge_early_media` | 为 `true` 时，缓存 B 腿早期媒体阶段收到的实时音频，并作为回铃音播放给 A 腿。相较默认值 `false`，会消耗更多资源。适用于 Loopback 通道或多目的地呼出，需要准确转发网络生成提示音的场景。 |
+| <a id="var-ignore_early_media"></a>`ignore_early_media` | 控制早期媒体（携带 SDP 的 SIP 183）是否导致桥接立即视为“接通”。`true` 忽略早期媒体，持续振铃直到 B 腿应答。`ring_ready` 与 `true` 类似，但收到首个 183 时还会向 A 腿发送 SIP 180。默认：`false`。 |
+| <a id="var-ringback"></a>`ringback` | 等待 B 腿应答时（早期媒体阶段）播放给 A 腿的音频。支持音频文件的完整路径或 TGML 音调字符串（如 `%(2000,4000,440,480)`）。除非设置 `ignore_early_media`，否则仅在 B 腿没有提供早期媒体时生效。 |
+| <a id="var-transfer_ringback"></a>`transfer_ringback` | 已应答通道在转接期间播放给 A 腿的音频；格式与 `ringback` 相同。 |
+| <a id="var-transfer_fallback_extension"></a>`transfer_fallback_extension` | 转接失败时要转入的拨号计划分机。必须在执行转接前设置。 |
+| <a id="var-hold_music"></a>`hold_music` | 通道被保持时播放的音频流。支持本地流引用（如 `local_stream://moh`）或音频文件完整路径。 |
+| <a id="var-temp_hold_music"></a>`temp_hold_music` | 仅对一次保持操作覆盖 `hold_music`；保持结束后自动清除。对应 `switch_types.h` 中的 `SWITCH_TEMP_HOLD_MUSIC_VARIABLE`。 |
+| <a id="var-instant_ringback"></a>`instant_ringback` | 为 `true` 时，不等待 B 腿振铃指示，立即生成 `ringback` 指定的回铃音。默认：`false`。 |
+| <a id="var-max_forwards"></a>`max_forwards` | 设置该通道出站 SIP 请求的 Max-Forwards 头字段值。对应 `SWITCH_MAX_FORWARDS_VARIABLE`。 |
+| <a id="var-max_session_transfers"></a>`max_session_transfers` | 通道允许转接的最大次数；超过后将拒绝后续转接。对应 `switch_types.h` 中的 `SWITCH_MAX_SESSION_TRANSFERS_VARIABLE`。 |
+| <a id="var-export_vars"></a>`export_vars` | 逗号分隔的变量名列表，自动导出到桥接创建的任一 B 腿，相当于对每个变量调用 `export`。对应 `SWITCH_EXPORT_VARS_VARIABLE`。 |
+| <a id="var-bridge_export_vars"></a>`bridge_export_vars` | 与 `export_vars` 相似，但变量仅在当前桥接期间导出到 B 腿，不永久保留。对应 `SWITCH_BRIDGE_EXPORT_VARS_VARIABLE`。 |
+| <a id="var-send_silence_when_idle"></a>`send_silence_when_idle` | 整数。设为负值（通常 `-1`）时，如果没有音频可发送，FreeSWITCH 会向通道发送舒适噪声静音包，避免需要持续媒体流的设备发生 RTP 超时。由 `switch_ivr.c`、`switch_rtp.c` 读取。对应 `SWITCH_SEND_SILENCE_WHEN_IDLE_VARIABLE`。 |
+| <a id="var-playback_terminators"></a>`playback_terminators` | 触发立即停止音频文件播放的 DTMF 数字串，例如 `1234567890*#`。设为 `none` 禁用按键中止。适用于 `playback`、`read`、`play_and_get_digits` 等应用。对应 `SWITCH_PLAYBACK_TERMINATORS_VARIABLE`。 |
+| <a id="var-ignore_display_updates"></a>`ignore_display_updates` | 为 `true` 时，静默忽略仅修改显示名称的入站 SIP UPDATE 或 re-INVITE，不转发给桥接对端。对应 `SWITCH_IGNORE_DISPLAY_UPDATES_VARIABLE`。 |
+| <a id="var-enable_heartbeat_events"></a>`enable_heartbeat_events` | 整数秒数。设置后，FreeSWITCH 按指定间隔在通道上触发 `SESSION_HEARTBEAT` 事件，适用于长通话监控。对应 `SWITCH_ENABLE_HEARTBEAT_EVENTS_VARIABLE`。 |
+
+---
+
+### 路由与恢复控制 {#routing-and-recovery-controls}
+
+这些变量控制拨号计划转接/重定向行为及呼叫恢复。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-force_transfer_context"></a>`force_transfer_context` | 当 `transfer` 参数未指定上下文时，强制使用此拨号计划上下文。 |
+| <a id="var-force_transfer_dialplan"></a>`force_transfer_dialplan` | 当 `transfer` 参数未指定拨号计划引擎时，强制使用此引擎。 |
+| <a id="var-inbound_dialplan"></a>`inbound_dialplan` | 覆盖端点入站呼叫所使用的拨号计划引擎。 |
+| <a id="var-group_context"></a>`group_context` | 由 `group` 拨号器创建的通道使用的拨号计划上下文。 |
+| <a id="var-inline_destination"></a>`inline_destination` | 重定向或已挂机呼叫腿执行内联拨号计划时使用的目的地。 |
+| <a id="var-disable_q850_reason"></a>`disable_q850_reason` | 为 `true` 时，在 SIP 挂机信令中禁止携带 Q.850 `Reason` 头。 |
+| <a id="var-ignore_completed_elsewhere"></a>`ignore_completed_elsewhere` | 为 `true` 时，忽略 CANCEL 中的 SIP“已在其他位置接听”指示，不将呼叫标记为其他位置已应答。 |
+| <a id="var-enum_nameserver"></a>`enum_nameserver` | `mod_enum` 执行 ENUM 查询所使用的 DNS 名称服务器。 |
+| <a id="var-recovery_profile_name"></a>`recovery_profile_name` | 覆盖用于呼叫恢复、已存储的 SIP 配置实例名称。 |
+| <a id="var-secondary_recovery_module"></a>`secondary_recovery_module` | 恢复呼叫时查询的备用端点模块名称。 |
+
+## 桥接与转接 {#bridge-and-transfer}
+
+桥接或转接处于活动状态或刚完成时，这些变量由核心设置。大多数在运行时只读，少数也允许运维人员设置以影响行为。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-bridge_channel"></a>`bridge_channel` | 建立桥接时由核心在两条腿上设置；值为对端通道名称（如 `sofia/internal/1001@10.0.0.1`）。只读；在 `switch_ivr_bridge.c` 中设置。对应 `SWITCH_BRIDGE_CHANNEL_VARIABLE`。 |
+| <a id="var-bridge_uuid"></a>`bridge_uuid` | 建立桥接时由核心在两条腿上设置，包含对端通道 UUID。桥接结束时清除。只读。对应 `SWITCH_BRIDGE_UUID_VARIABLE`。 |
+| <a id="var-bridge_to"></a>`bridge_to` | 桥接完成后设置为最近一次被桥接的 B 腿通道名称。只读；对应 `switch_types.h` 中的 `SWITCH_BRIDGE_VARIABLE`（`bridge_to`）。 |
+| <a id="var-last_bridge_to"></a>`last_bridge_to` | 新桥接取代旧桥接时，保存之前被桥接 B 腿的通道名称。适用于查看多次顺序桥接的历史。只读；对应 `SWITCH_LAST_BRIDGE_VARIABLE`。 |
+| <a id="var-signal_bridge_to"></a>`signal_bridge_to` | 仅信令桥接使用的对端通道 UUID（供 `uuid_bridge` 使用）。两条腿互通信令，但媒体独立处理；可在调用 `signal_bridge` 前由运维人员设置。对应 `SWITCH_SIGNAL_BRIDGE_VARIABLE`。 |
+| <a id="var-signal_bond"></a>`signal_bond` | 建立信令桥接后，该通道被设置为信令绑定对端的 UUID。只读；由 `switch_ivr_bridge.c` 设置。对应 `SWITCH_SIGNAL_BOND_VARIABLE`。 |
+| <a id="var-originate_signal_bond"></a>`originate_signal_bond` | 呼出完成后立即在 A 腿设置为新建 B 腿的 UUID。不同于 `signal_bond`，这里记录呼出关系，而非后续建立的信令桥接。只读。对应 `SWITCH_ORIGINATE_SIGNAL_BOND_VARIABLE`。 |
+| <a id="var-originator"></a>`originator` | 发起本呼叫腿的源通道 UUID。呼出引擎在 B 腿设置。只读；对应 `SWITCH_ORIGINATOR_VARIABLE`。 |
+| <a id="var-originator_codec"></a>`originator_codec` | 发起呼出时 A 腿的编解码器字符串。核心（`switch_core_session.c`）在 B 腿设置，以便其提供兼容的编解码器列表。只读；对应 `SWITCH_ORIGINATOR_CODEC_VARIABLE`。 |
+| <a id="var-originator_video_codec"></a>`originator_video_codec` | 呼出时 A 腿的视频编解码器字符串，与 `originator_codec` 一起在 B 腿设置。只读；对应 `SWITCH_ORIGINATOR_VIDEO_CODEC_VARIABLE`。 |
+| <a id="var-exec_after_bridge_app"></a>`exec_after_bridge_app` | 桥接返回后立即在该通道执行的拨号计划应用名称。应用先于拨号计划恢复执行。对应 `SWITCH_EXEC_AFTER_BRIDGE_APP_VARIABLE`。 |
+| <a id="var-exec_after_bridge_arg"></a>`exec_after_bridge_arg` | 传递给 `exec_after_bridge_app` 指定应用的参数字符串。对应 `SWITCH_EXEC_AFTER_BRIDGE_ARG_VARIABLE`。 |
+| <a id="var-att_xfer_result"></a>`att_xfer_result` | `att_xfer`（咨询转接）执行结束后设置为 `success` 或 `failure`。只读；由 `mod_dptools.c` 设置。对应 `SWITCH_ATT_XFER_RESULT_VARIABLE`。 |
+| <a id="var-transfer_history"></a>`transfer_history` | 多值变量。每次转接追加一条 `epoch:uuid:type:destination` 格式的记录，CDR 模块据此还原转接链。只读；由 `switch_ivr.c` 和 `mod_sofia` 设置。对应 `SWITCH_TRANSFER_HISTORY_VARIABLE`。 |
+| <a id="var-transfer_source"></a>`transfer_source` | 标识通道最近一次转接的来源，格式与 `transfer_history` 条目相同。只读；与 `transfer_history` 一起设置。对应 `SWITCH_TRANSFER_SOURCE_VARIABLE`。 |
+| <a id="var-holding_uuid"></a>`holding_uuid` | 与当前通道关联、正处于保持状态的通道 UUID。由 `mod_sofia` 在咨询转接场景设置；呼出引擎在桥接回来时读取并清除。对应 `SWITCH_HOLDING_UUID_VARIABLE`。 |
+| <a id="var-soft_holding_uuid"></a>`soft_holding_uuid` | 三方通话等场景中处于“软保持”的通道 UUID。三方通话结束、保持方重新桥接回来时清除。对应 `SWITCH_SOFT_HOLDING_UUID_VARIABLE`。 |
+| <a id="var-endpoint_disposition"></a>`endpoint_disposition` | 描述 `mod_sofia` 和核心状态机设置的 SIP 协商结果。常见值有 `RECEIVED`、`EARLY MEDIA`、`ANSWER`、`PROXY MEDIA`、`DELAYED NEGOTIATION`、`CODEC NEGOTIATION ERROR`、`NO CODECS`、`REDIRECT_ERROR`、`ATTENDED_TRANSFER`。只读。对应 `SWITCH_ENDPOINT_DISPOSITION_VARIABLE`。 |
+| <a id="var-channel_name"></a>`channel_name` | 完整通道名称字符串（如 `sofia/internal/1001@example.com`），由核心创建通道时设置。只读；对应 `SWITCH_CHANNEL_NAME_VARIABLE`。 |
+| <a id="var-audio_spool_path"></a>`audio_spool_path` | 音频文件写入最终位置之前的暂存目录。设置后，核心先将音频写到此路径，再移动到最终位置。对应 `SWITCH_AUDIO_SPOOL_PATH_VARIABLE`。 |
+
+---
+
+### 桥接行为与执行前操作 {#bridge-behavior-and-pre-execution}
+
+这些变量用于调整 `bridge`、`uuid_bridge`、咨询转接/盲转以及 `intercept` 应用的行为。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-bridge_answer_timeout"></a>`bridge_answer_timeout` | 桥接期间等待 A 腿应答的秒数，超时则退出。单位为整数秒。 |
+| <a id="var-bridge_terminate_key"></a>`bridge_terminate_key` | 收到后终止桥接的 DTMF 按键；单字符字符串。 |
+| <a id="var-bridge_filter_dtmf"></a>`bridge_filter_dtmf` | 为 `true` 时，在桥接两端过滤 DTMF，不向对端透传。 |
+| <a id="var-bridge_generate_comfort_noise"></a>`bridge_generate_comfort_noise` | 桥接时向远端呼叫腿生成舒适噪声。`true` 使用 1400 级别，也可指定整数级别（小于 `-1` 的值表示禁用）。 |
+| <a id="var-continue_on_answer_timeout"></a>`continue_on_answer_timeout` | 为 `true` 时，即使达到应答超时，桥接仍继续而不判为失败。 |
+| <a id="var-answer_delay"></a>`answer_delay` | 通道应答后立即休眠的毫秒数。整数毫秒；代理/文本模式下忽略。 |
+| <a id="var-answer_flags"></a>`answer_flags` | 未传参数调用 `answer` 应用时使用的默认标志。通过子串匹配 `is_conference`、`decode_video` 和 `debug_video` 设置对应通道标志。 |
+| <a id="var-bridge_pre_execute_app"></a>`bridge_pre_execute_app` | 在桥接循环开始前于 A 腿执行的拨号计划应用。 |
+| <a id="var-bridge_pre_execute_data"></a>`bridge_pre_execute_data` | 传递给 `bridge_pre_execute_app` 的参数数据。 |
+| <a id="var-bridge_pre_execute_aleg_app"></a>`bridge_pre_execute_aleg_app` | 多线程桥接开始前在主叫（A）腿执行的应用。 |
+| <a id="var-bridge_pre_execute_aleg_data"></a>`bridge_pre_execute_aleg_data` | 传递给 `bridge_pre_execute_aleg_app` 的参数数据。 |
+| <a id="var-bridge_pre_execute_bleg_app"></a>`bridge_pre_execute_bleg_app` | 多线程桥接开始前在被叫（B）腿执行的应用。 |
+| <a id="var-bridge_pre_execute_bleg_data"></a>`bridge_pre_execute_bleg_data` | 传递给 `bridge_pre_execute_bleg_app` 的参数数据。 |
+| <a id="var-campon"></a>`campon` | 为 `true` 时，在 `bridge` 中启用驻留等待重试（camp-on）行为。 |
+| <a id="var-attended_transfer_no_copy"></a>`attended_transfer_no_copy` | 咨询转接时不在呼叫腿之间复制的变量名列表，以逗号分隔。 |
+| <a id="var-blind_transfer_uuid"></a>`blind_transfer_uuid` | 执行盲转时应挂机或转接的呼叫腿 UUID。 |
+| <a id="var-confirm_blind_transfer"></a>`confirm_blind_transfer` | 为 `true` 时，盲转需要执行确认处理。 |
+| <a id="var-deny_refer_requests"></a>`deny_refer_requests` | 在已桥接呼叫腿上为 `true` 时，拒绝入站 SIP REFER（转接）请求。 |
+| <a id="var-hold_hangup_xfer_exten"></a>`hold_hangup_xfer_exten` | 保持中的呼叫腿桥接结束后，将另一腿转接至该分机，而非直接挂机。 |
+| <a id="var-xfer_uuids"></a>`xfer_uuids` | 提供 `att_xfer` 操作所需的两条腿 UUID。 |
+| <a id="var-intercept_pre_bond"></a>`intercept_pre_bond` | 为 `true` 时，允许 `intercept` 抢接尚未完成绑定的呼叫腿。 |
+| <a id="var-intercept_unanswered_only"></a>`intercept_unanswered_only` | 为 `true` 时，`intercept` 仅允许抢接未应答呼叫腿。 |
+| <a id="var-intercept_unbridged_only"></a>`intercept_unbridged_only` | 为 `true` 时，`intercept` 仅允许抢接未桥接呼叫腿。 |
+| <a id="var-uuid_bridge_continue_on_cancel"></a>`uuid_bridge_continue_on_cancel` | 为 `true` 时，在某腿取消 `uuid_bridge` 时驻留剩余呼叫腿，而不是挂断。 |
+| <a id="var-uuid_bridge_park_on_cancel"></a>`uuid_bridge_park_on_cancel` | 为 `true` 时，取消 `uuid_bridge` 后驻留仍存在的呼叫腿。 |
+
+## 呼出（Origination）{#origination}
+
+这些变量可以在 `originate` 命令或 `bridge` 拨号字符串的全局 `{}` 块或单腿 `[]` 块中设置，用来控制出站呼叫腿的建立方式。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-originate_timeout"></a>`originate_timeout` | 呼出失败前等待所有呼叫腿的总墙钟秒数。使用 `\|`（OR）运算符时，除非设置 `originate_continue_on_timeout`，否则限制作用于整个序列。默认：60。 |
+| <a id="var-originate_continue_on_timeout"></a>`originate_continue_on_timeout` | 使用 `\|`（OR）运算符且为 `true` 时，当前目标达到 `originate_timeout` 后，继续尝试下一目的地，而不是直接失败。默认：`false`。 |
+| <a id="var-originate_retries"></a>`originate_retries` | 整个呼出拨号字符串在失败后的重试次数。有效范围：1～100。仅在同时设置 `originate_retry_sleep_ms`，或数值不超过 100 时生效。 |
+| <a id="var-originate_retry_sleep_ms"></a>`originate_retry_sleep_ms` | 两次呼出重试之间等待的毫秒数；有效范围 500～60000。 |
+| <a id="var-leg_timeout"></a>`leg_timeout` | 单条呼叫腿等待应答的超时秒数，设置在 `[]` 呼叫腿变量块中，可覆盖该腿的 `call_timeout`。不能放在全局 `{}` 块中；全局应使用 `originate_timeout`。 |
+| <a id="var-leg_progress_timeout"></a>`leg_progress_timeout` | 单腿收到任何早期媒体或振铃指示的超时秒数；超时未收到即放弃该呼叫腿。设置在 `[]` 单腿块中。 |
+| <a id="var-leg_delay_start"></a>`leg_delay_start` | 发起该呼叫腿之前延迟的秒数；设置在 `[]` 单腿块中，`leg_timeout` 计时在延迟结束后才开始。 |
+| <a id="var-group_confirm_key"></a>`group_confirm_key` | 被叫接收呼叫时必须按下的 DTMF 数字。用于并行或顺序振铃场景的应答确认；收到按键前不会桥接呼叫。 |
+| <a id="var-group_confirm_file"></a>`group_confirm_file` | 等待确认按键时播放给 B 腿的音频文件；循环播放直到按键或超时。 |
+| <a id="var-group_confirm_error_file"></a>`group_confirm_error_file` | 收到错误 DTMF 确认键时向 B 腿播放的音频文件。 |
+| <a id="var-group_confirm_timeout"></a>`group_confirm_timeout` | 等待确认键的秒数；设置后优先于 `group_confirm_cancel_timeout`。 |
+| <a id="var-group_confirm_cancel_timeout"></a>`group_confirm_cancel_timeout` | 为 `true` 时取消确认超时，让 B 腿无限等待按键；如果也设置了 `group_confirm_timeout` 则不生效。 |
+| <a id="var-group_confirm_read_timeout"></a>`group_confirm_read_timeout` | 按键后在接受输入前需要等待的静音毫秒数。 |
+| `fail_on_single_reject` | 参见上面的“呼叫控制与路由”一节。 |
+| <a id="var-originated_legs"></a>`originated_legs` | 呼出完成后在 A 腿设置，内容是每个曾尝试 B 腿的 `uuid:disposition:cause` 列表，用竖线分隔。由 `switch_ivr_originate.c` 中的呼出引擎填充。呼出后为只读。 |
+| <a id="var-originate_disposition"></a>`originate_disposition` | 在主叫通道上记录呼出结果，可能值包括 `success`、`failure`、`call accepted` 和 Q.850 原因名称。只读；由呼出引擎设置。 |
+| <a id="var-originating_leg_uuid"></a>`originating_leg_uuid` | 在 B 腿记录发起该呼出的 A 腿 UUID。只读；由呼出引擎设置。 |
+| <a id="var-sip_invite_to_uri"></a>`sip_invite_to_uri` | 桥接前设置时覆盖出站 SIP INVITE 中的 To URI，由 `sofia_glue.c` 中的 `mod_sofia` 读取。 |
+| <a id="var-sip_invite_from_uri"></a>`sip_invite_from_uri` | 桥接前设置时覆盖出站 SIP INVITE 中的 From URI，由 `sofia_glue.c` 中的 `mod_sofia` 读取。 |
+| <a id="var-sip_invite_req_uri"></a>`sip_invite_req_uri` | 桥接前设置时覆盖出站 SIP INVITE 中的 Request-URI，由 `sofia_glue.c` 中的 `mod_sofia` 读取。 |
+| <a id="var-sip_invite_domain"></a>`sip_invite_domain` | 覆盖 INVITE 的域名部分。若未设置则自动取网关的 `from_domain`；由 `mod_sofia.c` 中的 `mod_sofia` 读取。 |
+
+---
+
+### 呼出腿控制 {#originated-leg-controls}
+
+这些变量设置在 A 腿（或拨号字符串）上，用于控制由 `bridge`/`originate` 创建的出站呼叫腿。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-origination_uuid"></a>`origination_uuid` | 强制呼出会话使用指定 UUID，而不自动生成。 |
+| <a id="var-origination_channel_name"></a>`origination_channel_name` | 设置呼出对端通道的显示名称。 |
+| <a id="var-origination_callee_id_name"></a>`origination_callee_id_name` | 设置呼出对端通道的 `callee_id_name`。 |
+| <a id="var-origination_callee_id_number"></a>`origination_callee_id_number` | 设置呼出对端通道的 `callee_id_number`。 |
+| <a id="var-origination_audio_mode"></a>`origination_audio_mode` | 覆盖呼出腿 SDP 中的出站音频方向：`sendrecv`、`sendonly`、`recvonly` 或 `inactive`（使用一次后即清除）。 |
+| <a id="var-origination_nested_vars"></a>`origination_nested_vars` | 为 `true` 时，禁用变量存在性检查，允许呼出期间嵌套/递归展开 `${var}`。 |
+| <a id="var-call_uuid"></a>`call_uuid` | 逻辑呼叫组 UUID。作为事件中的通道 `Channel-Call-UUID`，并从主叫传播到呼出对端，使多条腿共享同一个呼叫 UUID。 |
+| <a id="var-inherit_codec"></a>`inherit_codec` | 在呼出腿上为 `true` 时，出站/B 腿继承源呼叫腿的编解码器。 |
+| <a id="var-leg_required"></a>`leg_required` | 在呼出腿上为 `true` 时，将该腿标记为拨号必需呼叫腿。 |
+| <a id="var-preserve_originated_vars"></a>`preserve_originated_vars` | 为 `false` 时，不将呼出腿的变量保留到主叫腿。 |
+| <a id="var-push_channel_name"></a>`push_channel_name` | 为 `true` 时，从主叫腿推导并下发 B 腿通道名称（`X-FS-Channel-Name`）。 |
+
+## 主叫身份 {#caller-identity}
+
+FreeSWITCH 维护多个作用范围和优先级不同的主叫身份（Caller ID）变量。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-caller_id_name"></a>`caller_id_name` | 入站呼叫提供的显示名称，由端点模块从 SIP From 头或等效字段设置。拨号计划中基本视为只读；要修改展示名称，应使用 `effective_caller_id_name`。 |
+| <a id="var-caller_id_number"></a>`caller_id_number` | 入站呼叫提供的主叫号码，由端点模块从 SIP From 头或等效字段设置。拨号计划中基本视为只读；要修改展示号码，应使用 `effective_caller_id_number`。 |
+| <a id="var-effective_caller_id_name"></a>`effective_caller_id_name` | 覆盖下游对端看到的主叫名称，自动导出到 B 腿。必须在调用 `bridge` 前设置，不能放在呼出字符串中。设为 `_undef_` 可移除覆盖值。 |
+| <a id="var-effective_caller_id_number"></a>`effective_caller_id_number` | 覆盖下游对端看到的主叫号码，自动导出到 B 腿。必须在调用 `bridge` 前设置，不能放在呼出字符串中。 |
+| <a id="var-outbound_caller_id_name"></a>`outbound_caller_id_name` | 由用户目录驱动的出站呼叫默认主叫名称，通常在目录条目中设置，供会议与网关配置引用。 |
+| <a id="var-outbound_caller_id_number"></a>`outbound_caller_id_number` | 由用户目录驱动的出站呼叫默认主叫号码，通常在目录条目中设置。 |
+| <a id="var-origination_caller_id_name"></a>`origination_caller_id_name` | 发起新呼叫（A 腿）时使用的主叫名称，在 `originate` 命令或 `bridge` 拨号字符串的 `{}` 呼出变量块中指定。呼出时优先级高于 `effective_caller_id_name`。 |
+| <a id="var-origination_caller_id_number"></a>`origination_caller_id_number` | 发起新呼叫（A 腿）时使用的主叫号码，在 `{}` 呼出变量块中指定。 |
+
+---
+
+### 有效与初始被叫身份 {#effective-callee-identity}
+
+这些变量会覆盖出站信令中显示的主叫/被叫身份。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-effective_callee_id_name"></a>`effective_callee_id_name` | 覆盖出站信令中显示的被叫名称。 |
+| <a id="var-effective_callee_id_number"></a>`effective_callee_id_number` | 覆盖出站信令中显示的被叫号码。 |
+| <a id="var-initial_callee_id_name"></a>`initial_callee_id_name` | 设置出站信令最初的（更新前）被叫名称。 |
+| <a id="var-initial_callee_id_number"></a>`initial_callee_id_number` | 设置出站信令最初的（更新前）被叫号码。 |
+| <a id="var-effective_ani"></a>`effective_ani` | 覆盖呼叫有效主叫配置中使用的 ANI（自动号码识别）。 |
+| <a id="var-effective_aniii"></a>`effective_aniii` | 覆盖呼叫有效主叫配置中的 ANI II 数字。 |
+
+## SIP {#sip}
+
+这些变量暴露 SIP 消息字段，并控制 SIP 头注入。它们专用于由 `mod_sofia` 处理的通道。
+
+### 入站字段（`mod_sofia` 在呼叫到达时设置）{#sip-inbound}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_from_user"></a>`sip_from_user` | 入站请求 SIP From URI 的用户部分。 |
+| <a id="var-sip_from_host"></a>`sip_from_host` | 入站请求 SIP From URI 的主机部分。 |
+| <a id="var-sip_from_uri"></a>`sip_from_uri` | 入站请求完整的 From URI（user@host）。 |
+| <a id="var-sip_from_display"></a>`sip_from_display` | SIP From 头中的显示名称（带引号字符串，如存在），由 `sofia.c` 设置。 |
+| <a id="var-sip_to_user"></a>`sip_to_user` | 入站请求 SIP To URI 的用户部分。 |
+| <a id="var-sip_to_host"></a>`sip_to_host` | 入站请求 SIP To URI 的主机部分。 |
+| <a id="var-sip_to_uri"></a>`sip_to_uri` | 入站请求完整的 To URI（user@host）。 |
+| <a id="var-sip_req_uri"></a>`sip_req_uri` | 入站 SIP INVITE 的完整 Request-URI，由 `sofia_glue.c` 设置。 |
+| <a id="var-sip_contact_user"></a>`sip_contact_user` | 入站请求 SIP Contact URI 的用户部分。 |
+| <a id="var-sip_contact_host"></a>`sip_contact_host` | 入站请求 SIP Contact URI 的主机部分。 |
+| <a id="var-sip_call_id"></a>`sip_call_id` | 对话的 SIP Call-ID 头字段值，呼叫到达时设置，re-INVITE 时更新。 |
+| <a id="var-sip_user_agent"></a>`sip_user_agent` | 远端 SIP 对端提供的 User-Agent 或 Server 头字段字符串。 |
+| <a id="var-sip_network_ip"></a>`sip_network_ip` | 接收 SIP 消息的网络接口 IP 地址，由 `mod_sofia` 设置。 |
+| <a id="var-sip_received_ip"></a>`sip_received_ip` | 收到 SIP 请求时的源 IP 地址；存在 NAT 时可能不同于 `sip_network_ip`。 |
+| <a id="var-sip_via_host"></a>`sip_via_host` | 入站 SIP 请求最上层 Via 头的主机部分。 |
+| <a id="var-sip_via_port"></a>`sip_via_port` | 入站 SIP 请求最上层 Via 头中的端口。 |
+| <a id="var-sip_via_rport"></a>`sip_via_rport` | 入站请求最上层 Via 头的 rport 参数（如果存在）。 |
+| <a id="var-sip_via_protocol"></a>`sip_via_protocol` | 最上层 Via 头中的传输协议（如 `UDP`、`TCP`、`TLS`）。 |
+| <a id="var-sip_cid_type"></a>`sip_cid_type` | 根据入站身份头推断主叫号码展示类型。`mod_sofia` 在 `sofia.c` 中设置：存在 Remote-Party-ID 头时为 `rpid`，存在 P-Asserted-Identity 或 P-Preferred-Identity 时为 `pid`。 |
+
+### 认证字段 {#sip-auth}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_auth_username"></a>`sip_auth_username` | SIP 摘要认证中提供的用户名凭据。由 `mod_sofia` 填充，可在目录认证事件中获取。 |
+| <a id="var-sip_auth_password"></a>`sip_auth_password` | SIP 摘要认证使用的密码；在目录查找阶段可用于认证注册与呼叫。 |
+| <a id="var-sip_auth_realm"></a>`sip_auth_realm` | SIP 认证质询中的摘要认证 realm，由 `mod_sofia` 填充。 |
+
+### 重定向处理 {#sip-redirect}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-outbound_redirect_fatal"></a>`outbound_redirect_fatal` | 为 `true` 时，SIP 3xx 重定向响应使桥接立即失败，而不继续跟随重定向。由 `sofia.c` 中的 `mod_sofia` 读取。 |
+| <a id="var-sip_redirect_profile"></a>`sip_redirect_profile` | 跟随 3xx 重定向时使用的 Sofia 配置实例名称，默认为当前配置实例。 |
+| <a id="var-sip_redirect_context"></a>`sip_redirect_context` | 路由重定向呼叫时使用的拨号计划上下文，默认 `redirected`。 |
+| <a id="var-sip_redirect_dialplan"></a>`sip_redirect_dialplan` | 路由重定向呼叫时使用的拨号计划模块，默认 `XML`。 |
+| <a id="var-sip_redirect_fork"></a>`sip_redirect_fork` | 为 `true` 时，收到包含多个 Contact 的 3xx 重定向后，FreeSWITCH 会同时呼叫所有 Contact，而不是依次呼叫。 |
+| <a id="var-sip_redirected_to"></a>`sip_redirected_to` | 由 `mod_sofia` 设置，保存跟随 3xx 重定向时选中的完整 Contact URI。只读；重定向处理后设置。 |
+| <a id="var-sip_contact_params"></a>`sip_contact_params` | `mod_sofia` 为入站或重定向呼叫构建出站 Contact URI 时附加的额外参数（位于 `;` 后），由 `sofia_glue.c` 读取。 |
+
+### 自定义头字段 {#sip-custom-headers}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_h_X-Header-Name"></a>`sip_h_X-Header-Name` | 注入或读取任意 SIP 头的变量命名前缀模式。名称以 `sip_h_` 开头的通道变量，会使 `mod_sofia` 在出站 SIP 消息中添加相应头（移除 `sip_h_` 前缀）；入站自定义头也会保存为该前缀下的变量。例如设置 `sip_h_X-Account-Code=1234`，会在出站 INVITE 中添加 `X-Account-Code: 1234`。 |
+
+### SIP 变量约定 {#sip-variable-conventions}
+
+`mod_sofia` 使用 `sip_h_` 前缀将所有入站 SIP 头暴露为通道变量。对标准头而言，例如 `sip_h_Subject`、`sip_h_P-Asserted-Identity` 等。对于出站呼叫，设置以 `sip_h_` 开头的通道变量，会使 `mod_sofia` 在出站 INVITE 或其他 SIP 消息中注入对应头（去掉前缀即为头名称）。自定义扩展头遵循同样约定：`sip_h_X-My-Header=value` 会在 INVITE 中生成 `X-My-Header: value`。
+
+除了原始的 `sip_h_` 映射，`mod_sofia` 还会在呼叫到达时将一些常用头解析为专用变量：
+
+- `sip_from_user`, `sip_from_host`, `sip_from_uri`, `sip_from_display`
+- `sip_to_user`, `sip_to_host`, `sip_to_uri`, `sip_req_uri`
+- `sip_contact_user`, `sip_contact_host`
+- `sip_call_id`, `sip_user_agent`
+- `sip_via_host`, `sip_via_port`, `sip_via_rport`, `sip_via_protocol`
+- `sip_network_ip`, `sip_received_ip`
+
+这些解析后的变量只是方便使用的别名；如有需要，仍可通过 `sip_h_` 前缀读取原始头。
+
+### Presence（呈现状态）{#sip-presence}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-presence_id"></a>`presence_id` | 用于 Presence 订阅的通道标识 SIP URI。设置后，`mod_sofia` 使用该值为订阅者生成 NOTIFY 事件，例如 `1000@example.com`。 |
+| <a id="var-presence_data"></a>`presence_data` | 附加到 Presence 状态通知的任意字符串，原样传递到 NOTIFY 事件体。 |
+
+---
+
+### 出站头字段控制 {#sip-outbound-header-control}
+
+在发起呼叫的呼叫腿上设置这些变量，可控制 `mod_sofia` 生成的出站 INVITE 头字段及路由。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_force_full_from"></a>`sip_force_full_from` | 强制出站 INVITE 的 From 头使用指定完整值。 |
+| <a id="var-sip_force_full_to"></a>`sip_force_full_to` | 强制出站 INVITE 的 To 头使用指定完整值。 |
+| <a id="var-sip_invite_from_params"></a>`sip_invite_from_params` | 追加到出站 INVITE 的 From 头的额外参数。 |
+| <a id="var-sip_invite_to_params"></a>`sip_invite_to_params` | 追加到出站 INVITE 的 To 头的额外参数。 |
+| <a id="var-sip_invite_params"></a>`sip_invite_params` | 追加到出站 INVITE 的 Request-URI 的额外参数。 |
+| <a id="var-sip_invite_contact_params"></a>`sip_invite_contact_params` | 追加到出站 INVITE 的 Contact 头的额外参数。 |
+| <a id="var-sip_invite_pid_params"></a>`sip_invite_pid_params` | 追加到出站 INVITE 的 P-Asserted/P-Preferred-Identity 头的额外参数。 |
+| <a id="var-sip_invite_tel_params"></a>`sip_invite_tel_params` | 追加到出站 INVITE 的 tel-URI 参数。 |
+| <a id="var-sip_invite_cseq"></a>`sip_invite_cseq` | 强制出站 INVITE 使用特定数字 CSeq 值。 |
+| <a id="var-sip_invite_route_uri"></a>`sip_invite_route_uri` | 设置出站 INVITE 的 Route 头 URI。 |
+| <a id="var-sip_route_uri"></a>`sip_route_uri` | 覆盖发送 INVITE（及后续请求）时使用的出站代理/Route URI，跳过常规路由。 |
+| <a id="var-sip_contact_uri"></a>`sip_contact_uri` | 覆盖入站呼叫腿用作重定向/目标的 Contact URI。 |
+| <a id="var-sip_content_encoding"></a>`sip_content_encoding` | 设置出站 INVITE 的 SDP 消息体的 Content-Encoding 头。 |
+| <a id="var-sip_h_date"></a>`sip_h_date` | 为出站 INVITE 显式提供 `Date` 头。 |
+| <a id="var-sip_h_identity"></a>`sip_h_identity` | 为出站 INVITE 显式提供 STIR/SHAKEN `Identity`（PASSporT）头。 |
+| <a id="var-sip_allow"></a>`sip_allow` | 构建基于 UPDATE 的被叫身份/显示更新中的 `Allow` 头所用值；其中含 `UPDATE` 即视为允许 UPDATE。 |
+| <a id="var-sip_transport"></a>`sip_transport` | URI 中未指定传输时，强制出站请求使用的 SIP 传输方式（`udp`/`tcp`/`tls`/…）。 |
+| <a id="var-sip_require_timer"></a>`sip_require_timer` | 为 `false` 时，禁止在出站 INVITE 中声明/要求 SIP 会话定时器。 |
+| <a id="var-sip_cid_in_1xx"></a>`sip_cid_in_1xx` | 为 `false` 时，即使配置实例允许，也不在 1xx 临时响应中发送被叫身份。 |
+| <a id="var-sip_cid_suppress_privacy_none"></a>`sip_cid_suppress_privacy_none` | 为 `true` 时，禁止 FreeSWITCH 默认添加的显式 `Privacy: none` 指示。 |
+| <a id="var-sip_reason"></a>`sip_reason` | 覆盖出站 BYE/CANCEL 的 SIP `Reason` 头（完整 Reason 头字符串），除非 `disable_q850_reason` 将其禁止。 |
+
+### 行为控制 {#sip-behavior-controls}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_auto_simplify"></a>`sip_auto_simplify` | 为 `true` 时，桥接时 FreeSWITCH 尝试通过 REFER/转接把自身移出呼叫路径（呼叫简化）。 |
+| <a id="var-sip_copy_custom_headers"></a>`sip_copy_custom_headers` | 为 `false` 时，停止在桥接/转接呼叫腿之间复制 `sip_h_*` 自定义头（默认允许复制）。 |
+| <a id="var-sip_copy_multipart"></a>`sip_copy_multipart` | 为 `false` 时，禁止转接到新呼叫腿时复制 `sip_multipart` 消息体（默认允许复制）。 |
+| <a id="var-sip_disable_recording"></a>`sip_disable_recording` | 为 `true` 时，拒绝入站 SIPREC/录制请求并返回 488，而不启动录制。 |
+| <a id="var-sip_enable_soa"></a>`sip_enable_soa` | 使用 `true`/`false` 启用或禁用该通道的 Sofia SOA（Offer/Answer）处理。 |
+| <a id="var-sip_force_nat_mode"></a>`sip_force_nat_mode` | 为 `true` 时，强制通道进入 NAT 模式（设置 NAT 标志及 `sip_nat_detected`）。 |
+| <a id="var-sip_sticky_contact"></a>`sip_sticky_contact` | 为 `true` 时，强制使用“粘性”NAT Contact 行为（Record-Route 与 NAT 会话超时）。 |
+| <a id="var-sip_ignore_reinvites"></a>`sip_ignore_reinvites` | 为 `true` 时，直接以 200 OK 应答 re-INVITE，不重新协商媒体。 |
+| <a id="var-sip_ignore_remote_cause"></a>`sip_ignore_remote_cause` | 为 `true` 时，使用 FreeSWITCH 自己的挂机原因，而不是桥接呼叫腿的 SIP 原因。 |
+| <a id="var-sip_wait_for_aleg_ack"></a>`sip_wait_for_aleg_ack` | 为 `true` 时，推迟向 B 腿发送 ACK，直到收到 A 腿的 ACK（类似 3PCC 的协调）。 |
+| <a id="var-sip_watch_headers"></a>`sip_watch_headers` | 要监控的 SIP 头名称列表，以逗号分隔，最多 10 个；匹配的入站头将通过事件暴露。 |
+| <a id="var-sip_gateway_name"></a>`sip_gateway_name` | 指定挂机时与该通道关联的已配置网关，以更新其失败统计。 |
+| <a id="var-sip_use_gateway"></a>`sip_use_gateway` | 指定出站呼叫应对认证质询时所用凭据所属的网关。 |
+| <a id="var-sip_challenge_realm"></a>`sip_challenge_realm` | 设置以 401/407 质询呼叫时使用的 realm；没有则回退到 `sip_to_host`。 |
+| <a id="var-sip_exclude_contact"></a>`sip_exclude_contact` | `sofia_contact` 函数解析注册 Contact 时要排除的 Contact 值。 |
+| <a id="var-sip_match_user_agent"></a>`sip_match_user_agent` | `sofia_contact` 解析注册 Contact 时用于匹配的 User-Agent 子串。 |
+| <a id="var-sip_refer_reply"></a>`sip_refer_reply` | 在挂断已转接呼叫腿前，向 REFER 返回的 sipfrag 响应字符串。 |
+| <a id="var-sip_invite_failure_status"></a>`sip_invite_failure_status` | 盲转失败时 NOTIFY 的 sipfrag 中使用的自定义 SIP 状态码。 |
+| <a id="var-sip_blind_transfer_event"></a>`sip_blind_transfer_event` | 完成盲转的 sipfrag NOTIFY 中使用的 SIP `Event` 头字段值。 |
+| <a id="var-sip_call_tls_orq_connect_timeout"></a>`sip_call_tls_orq_connect_timeout` | 出站 INVITE 的 TLS 请求连接超时数值（取决于链接的 sofia-sip 库是否支持）。 |
+| <a id="var-sip_603plus_passthrough"></a>`sip_603plus_passthrough` | 为 `true` 时，在出站拒绝响应中恢复 603 以上状态码的 `Reason`（来自 `sip_603plus_reason`），即使 `disable_q850_reason` 本来会禁止它。 |
+| <a id="var-sip_603plus_reason"></a>`sip_603plus_reason` | 在 603 响应中，配合 `sip_603plus_passthrough` 使用的 Reason 头字符串。 |
+
+### STIR/SHAKEN {#sip-stir-shaken}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_stir_shaken_attest"></a>`sip_stir_shaken_attest` | 认证等级（`A`/`B`/`C`），用于触发出站 INVITE 生成 STIR/SHAKEN Identity（PASSporT）头。 |
+| <a id="var-sip_stir_shaken_vs_hangup_on_fail"></a>`sip_stir_shaken_vs_hangup_on_fail` | 为 `true` 时，入站验证服务在 Identity 缺失或无效时挂断呼叫，而不只是设置 verstat。 |
+| <a id="var-sip_stir_shaken_vs_max_age"></a>`sip_stir_shaken_vs_max_age` | 入站验证允许的 PASSporT 最大有效时间（秒），默认 60。 |
+| <a id="var-sip_stir_shaken_vs_require_date"></a>`sip_stir_shaken_vs_require_date` | 为 `true` 时，入站验证要求 SIP `Date` 有效且处于时效窗口内。 |
+
+### 自动应答与 MSRP {#sip-auto-answer-msrp}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-sip_auto_answer"></a>`sip_auto_answer` | 在出站呼叫腿上为 `true` 时，收到 180/183 会发送 `Event: talk` 自动应答 NOTIFY（Polycom 风格）。 |
+| <a id="var-sip_auto_answer_suppress_notify"></a>`sip_auto_answer_suppress_notify` | 为 `true` 时，禁止 `sip_auto_answer` 本应发送的自动应答 NOTIFY。 |
+| <a id="var-sip_msrp_file_name"></a>`sip_msrp_file_name` | MSRP 文件传输使用的文件名，用于命名发送/接收的文件。 |
+| <a id="var-sip_msrp_local_file_selector"></a>`sip_msrp_local_file_selector` | MSRP 文件传输 Offer 中声明的本地文件选择器。 |
+| <a id="var-sip_msrp_offer_active"></a>`sip_msrp_offer_active` | 控制生成的 SDP 中 MSRP setup 方向（主动 Offer）。 |
+
+## 媒体端点与 SDP {#media-endpoints-and-sdp}
+
+这些变量暴露协商后的媒体地址及 SDP 消息体，由核心媒体引擎（`switch_core_media.c`）设置，在活动呼叫期间为只读。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-local_media_ip"></a>`local_media_ip` | FreeSWITCH 监听远端入站音频 RTP 的 IP 地址。SDP 协商后设置。对应 `SWITCH_LOCAL_MEDIA_IP_VARIABLE`。 |
+| <a id="var-local_media_port"></a>`local_media_port` | FreeSWITCH 监听入站音频 RTP 的 UDP 端口。SDP 协商后设置。对应 `SWITCH_LOCAL_MEDIA_PORT_VARIABLE`。 |
+| <a id="var-advertised_media_ip"></a>`advertised_media_ip` | 本地 SDP 中通告的音频 RTP IP 地址。使用 NAT 或配置 `ext-rtp-ip` 覆盖值时，可能与 `local_media_ip` 不同。对应 `SWITCH_ADVERTISED_MEDIA_IP_VARIABLE`。 |
+| <a id="var-remote_media_ip"></a>`remote_media_ip` | 从收到的 SDP 提取的远端音频 RTP 端点 IP 地址。只读。对应 `SWITCH_REMOTE_MEDIA_IP_VARIABLE`。 |
+| <a id="var-remote_media_port"></a>`remote_media_port` | 远端音频 RTP 端点的 UDP 端口。只读。对应 `SWITCH_REMOTE_MEDIA_PORT_VARIABLE`。 |
+| <a id="var-local_video_ip"></a>`local_video_ip` | FreeSWITCH 监听入站视频 RTP 的 IP 地址。对应 `SWITCH_LOCAL_VIDEO_IP_VARIABLE`。 |
+| <a id="var-local_video_port"></a>`local_video_port` | FreeSWITCH 监听入站视频 RTP 的 UDP 端口。对应 `SWITCH_LOCAL_VIDEO_PORT_VARIABLE`。 |
+| <a id="var-remote_video_ip"></a>`remote_video_ip` | 远端视频 RTP 端点的 IP 地址。只读。对应 `SWITCH_REMOTE_VIDEO_IP_VARIABLE`。 |
+| <a id="var-remote_video_port"></a>`remote_video_port` | 远端视频 RTP 端点的 UDP 端口。只读。对应 `SWITCH_REMOTE_VIDEO_PORT_VARIABLE`。 |
+| <a id="var-local_text_ip"></a>`local_text_ip` | FreeSWITCH 监听入站实时文本（T.140/RED）RTP 的 IP 地址；涉及实时文本的呼叫会设置。对应 `SWITCH_LOCAL_TEXT_IP_VARIABLE`。 |
+| <a id="var-local_text_port"></a>`local_text_port` | FreeSWITCH 监听入站文本 RTP 的 UDP 端口。对应 `SWITCH_LOCAL_TEXT_PORT_VARIABLE`。 |
+| <a id="var-switch_r_sdp"></a>`switch_r_sdp` | 从远端收到的原始 SDP 消息体（根据呼叫方向可能为 Offer 或 Answer）。由媒体引擎设置。只读。对应 `SWITCH_R_SDP_VARIABLE`。 |
+| <a id="var-switch_l_sdp"></a>`switch_l_sdp` | FreeSWITCH 生成并发送给远端的原始本地 SDP 消息体，由媒体引擎设置。只读。对应 `SWITCH_L_SDP_VARIABLE`。 |
+| <a id="var-switch_m_sdp"></a>`switch_m_sdp` | B 腿的 SDP 消息体，保存在 A 腿上，供媒体协商参考；也称“媒体 SDP”或“B SDP”。对应 `switch_types.h` 中的 `SWITCH_B_SDP_VARIABLE`（`switch_m_sdp`）。 |
+| <a id="var-passthru_ptime_mismatch"></a>`passthru_ptime_mismatch` | 为 `true` 时，即使两侧 SDP 的 ptime（封包间隔）不一致也允许桥接继续，而不是失败或重新协商。对应 `SWITCH_PASSTHRU_PTIME_MISMATCH_VARIABLE`。 |
+
+---
+
+### SDP 与协商控制 {#sdp-and-negotiation-controls}
+
+这些变量影响生成的 SDP、编解码器筛选、早期媒体及重定向信令。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-alert_info"></a>`alert_info` | 设置出站信令的 SIP `Alert-Info` 头字段值。 |
+| <a id="var-early_use_180"></a>`early_use_180` | 为 `true` 时，早期媒体/振铃使用 SIP 180，而不是 183。 |
+| <a id="var-outbound_redirect_info"></a>`outbound_redirect_info` | 为出站呼叫提供 SIP `Diversion`/重定向信息（存在时会禁止默认值）。 |
+| <a id="var-ep_codec_prefer_sdp"></a>`ep_codec_prefer_sdp` | 为 `true` 时，优先使用收到的 SDP 中的编解码器顺序，而非本地偏好。 |
+| <a id="var-filter_codec_string"></a>`filter_codec_string` | 用于筛选协商或代理透传编解码器列表的字符串。 |
+| <a id="var-sdp_m_per_ptime"></a>`sdp_m_per_ptime` | 控制生成 SDP 中 `m=`/ptime 分组方式的倍乘因子。 |
+| <a id="var-verbose_sdp"></a>`verbose_sdp` | 为 `true` 时，生成更详细的 SDP 输出。 |
+| <a id="var-ndlb_sendrecv_in_session"></a>`ndlb_sendrecv_in_session` | 非默认延迟行为（NDLB）标志：强制在 SDP 会话级使用 `a=sendrecv`。 |
+| <a id="var-exclude_outgoing_extra_header"></a>`exclude_outgoing_extra_header` | 需要从出站 SIP 请求中排除的 `sip_h_`/额外头名称的正则表达式。 |
+| <a id="var-fs_send_unsupported_info"></a>`fs_send_unsupported_info` | 为 `true` 时，即使内容不受支持也发送 SIP INFO。 |
+| <a id="var-fs_send_unsupported_message"></a>`fs_send_unsupported_message` | 为 `true` 时，即使内容不受支持也发送 SIP MESSAGE。 |
+| <a id="var-ignore_sdp_ice"></a>`ignore_sdp_ice` | 为 `true` 时，忽略收到 SDP 中的 ICE Candidate。 |
+| <a id="var-add_ice_candidates"></a>`add_ice_candidates` | 为 `true` 时，在会话生成的 SDP 中添加 ICE Candidate。 |
+| <a id="var-disable_udptl_auto_adjust"></a>`disable_udptl_auto_adjust` | 为 `true` 时，禁用 UDPTL（T.38）远端地址自动调整。 |
+
+## 媒体与 RTP {#media-and-rtp}
+
+这些变量用于控制编解码器选择、RTP 安全及媒体路径行为。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-codec_string"></a>`codec_string` | 协商中提供或接受的编解码器名称列表，以逗号分隔。FreeSWITCH 会与端点能力取交集。例如 `PCMU,PCMA,G722`。未设置时使用配置实例默认值。 |
+| <a id="var-absolute_codec_string"></a>`absolute_codec_string` | 按指定原样使用的编解码器列表（逗号分隔），FreeSWITCH 不再求交集或调整。设置后覆盖 `codec_string`；适用于无视远端 Offer 而强制指定编解码器。 |
+| <a id="var-media_mix_inbound_outbound_codecs"></a>`media_mix_inbound_outbound_codecs` | 布尔值，控制出站 B 腿提供哪些编解码器。默认情况下，FreeSWITCH 在 B 腿提供与入站 A 腿完全相同的编解码器。设为 `true` 时，将 A 腿编解码器与配置的出站列表**混合**后提供（`FS-8321` 之前的行为）。混合会使编解码器列表过大，超过 UDP MTU，导致建呼失败，因此默认采用不混合方式。由 `switch_core_media.c` 读取。 |
+| <a id="var-bypass_media"></a>`bypass_media` | 为 `true` 时，RTP 媒体直接在两个端点间点对点传输。FreeSWITCH 仍处理信令，但不处理媒体包。两个端点必须能互相访问。 |
+| <a id="var-bypass_media_after_bridge"></a>`bypass_media_after_bridge` | 为 `true` 时，建立桥接后 FreeSWITCH 切换为媒体旁路模式。对应 `switch_types.h` 中的 `SWITCH_BYPASS_MEDIA_AFTER_BRIDGE_VARIABLE`。 |
+| <a id="var-proxy_media"></a>`proxy_media` | 为 `true` 时，RTP 数据包经 FreeSWITCH 转发，但不做解析或处理。比完全媒体处理轻量，但负担仍高于 `bypass_media`。要求 SIP 配置实例启用延迟协商。 |
+| <a id="var-rtp_secure_media"></a>`rtp_secure_media` | 控制 SRTP 协商。支持 `mandatory`（只允许 SAVP）、`optional`（优先 SAVP，接受 AVP）、`forbidden`（禁止 SAVP）、`default`（若入站提供 SAVP 则接受）。后面可使用冒号分隔的加密套件列表，如 `mandatory:AES_CM_256_HMAC_SHA1_80`。仍兼容已弃用的 `true`（等价于 `mandatory`）与 `false`（等价于 `forbidden`）。 |
+| <a id="var-rtp_secure_media_inbound"></a>`rtp_secure_media_inbound` | 仅将 `rtp_secure_media` 的语义应用于入站 RTP 方向。 |
+| <a id="var-rtp_secure_media_outbound"></a>`rtp_secure_media_outbound` | 仅将 `rtp_secure_media` 的语义应用于出站 RTP 方向。 |
+| <a id="var-jitterbuffer_msec"></a>`jitterbuffer_msec` | 启用 RTP 抖动缓冲区。格式为 `length:max_length:max_drift`，每项可用毫秒数值或封包数（数字后加 `p`）。例如 `60:200:20` 或 `2p:25p:4p`。可使用 `export nolocal:jitterbuffer_msec=60` 仅设置 B 腿。 |
+| <a id="var-media_bug_answer_req"></a>`media_bug_answer_req` | 为 `true` 时，仅在通道应答后才激活录音或其他媒体处理应用使用的媒体 Bug。 |
+
+### RTP 与媒体统计 {#rtp-and-media-statistics}
+
+FreeSWITCH 在呼叫进行期间和结束后，向一组 `rtp_*` 通道变量填充各媒体流的统计数据。这些只读变量用于诊断，不能通过设置它们来改变行为。例如：
+
+- `rtp_audio_in_raw_bytes`、`rtp_audio_in_media_bytes`、`rtp_audio_in_packet_count`、`rtp_audio_in_media_packet_count`：入站音频流计数器。
+- `rtp_audio_out_raw_bytes`、`rtp_audio_out_media_bytes`、`rtp_audio_out_packet_count`：出站音频流计数器。
+- `rtp_audio_in_skip_packet_count`、`rtp_audio_in_jitter_packet_count`、`rtp_audio_in_dtmf_packet_count`：入站媒体流的质量指标。
+- `rtp_use_codec_string`：实际选用且正在供 RTP 使用的编解码器字符串，而非此前 Offer 中提供的编解码器。
+
+这些变量由 `switch_rtp.c` 和 `switch_core_media.c` 写入，可用于 CDR 模板，也可通过 `api_hangup_hook` 或 `api_reporting_hook` 生成呼叫结束后的报告。
+
+---
+
+### RTP 与 RTCP 调优 {#rtp-and-rtcp-tuning}
+
+在媒体建立前设置这些变量，可调整 RTP/RTCP 传输、SSRC、Payload Type 及兼容性修复行为。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-rtcp_audio_interval_msec"></a>`rtcp_audio_interval_msec` | 音频流 RTCP Sender Report 间隔（毫秒）；设置后启用 RTCP。 |
+| <a id="var-rtcp_video_interval_msec"></a>`rtcp_video_interval_msec` | 视频流 RTCP Sender Report 间隔（毫秒）；设置后启用 RTCP。 |
+| <a id="var-rtcp_text_interval_msec"></a>`rtcp_text_interval_msec` | 实时文本（T.140）流的 RTCP 间隔（毫秒）。 |
+| <a id="var-rtcp_mux"></a>`rtcp_mux` | 为 `false` 时，禁用在 RTP 端口上复用 RTCP（否则会提供 rtcp-mux）。 |
+| <a id="var-rtp_assume_rtcp"></a>`rtp_assume_rtcp` | 为 `true` 时，即使信令未声明，也假定/自动检测音视频 RTCP。 |
+| <a id="var-rtp_remote_audio_rtcp_port"></a>`rtp_remote_audio_rtcp_port` | 覆盖音频流的远端 RTCP 端口。 |
+| <a id="var-rtp_remote_video_rtcp_port"></a>`rtp_remote_video_rtcp_port` | 覆盖视频流的远端 RTCP 端口。 |
+| <a id="var-rtp_remote_text_rtcp_port"></a>`rtp_remote_text_rtcp_port` | 覆盖文本流的远端 RTCP 端口。 |
+| <a id="var-rtp_auto_adjust_threshold"></a>`rtp_auto_adjust_threshold` | RTP 自动地址调整将发送地址切换到新源之前，要求连续收到来自该源的数据包数量（1～65535）。 |
+| <a id="var-rtp_autoflush"></a>`rtp_autoflush` | 为 `true` 时，启用 RTP 自动清空标志，清除已缓冲的入站音频。 |
+| <a id="var-rtp_autoflush_during_bridge"></a>`rtp_autoflush_during_bridge` | 覆盖桥接期间是否启用 RTP 自动清空。 |
+| <a id="var-rtp_rewrite_timestamps"></a>`rtp_rewrite_timestamps` | 为 `true` 时，重新生成连续的出站 RTP 时间戳。 |
+| <a id="var-rtp_timer_name"></a>`rtp_timer_name` | 选择 RTP 会话使用的软定时器，覆盖配置实例默认值。 |
+| <a id="var-rtp_use_ssrc"></a>`rtp_use_ssrc` | 强制使用特定音频 RTP SSRC（十进制）。 |
+| <a id="var-rtp_use_video_ssrc"></a>`rtp_use_video_ssrc` | 强制使用特定视频 RTP SSRC（十进制）。 |
+| <a id="var-rtp_use_text_ssrc"></a>`rtp_use_text_ssrc` | 强制使用特定文本 RTP SSRC（十进制）。 |
+| <a id="var-rtp_nack_buffer_size"></a>`rtp_nack_buffer_size` | 启用 NACK 后，视频 NACK 重传缓冲区的包数（1～499；默认 100）。 |
+| <a id="var-rtp_2833_send_payload"></a>`rtp_2833_send_payload` | 强制出站 RFC 2833（telephone-event）DTMF 的 Payload Type（在 Sofia 路径中必须大于 64）。 |
+| <a id="var-rtp_2833_recv_payload"></a>`rtp_2833_recv_payload` | 强制入站 RFC 2833 DTMF 的 Payload Type（在 Sofia 路径中必须大于 64）。 |
+| <a id="var-rtp_info_when_no_2833"></a>`rtp_info_when_no_2833` | 不为 `false`（默认 `true`）时，如果 SDP 不含 telephone-event，DTMF 改用 SIP INFO。 |
+| <a id="var-rtp_liberal_dtmf"></a>`rtp_liberal_dtmf` | 为 `true` 时，更宽松地接受 DTMF（liberal-DTMF 标志）。 |
+| <a id="var-rtp_manual_rtp_bugs"></a>`rtp_manual_rtp_bugs` | 手动设置音频 RTP 缺陷兼容处理位掩码（Bug 名称列表）。 |
+| <a id="var-rtp_manual_video_rtp_bugs"></a>`rtp_manual_video_rtp_bugs` | 手动设置视频 RTP 缺陷兼容处理列表。 |
+| <a id="var-rtp_manual_text_rtp_bugs"></a>`rtp_manual_text_rtp_bugs` | 手动设置文本 RTP 缺陷兼容处理列表。 |
+
+### 抖动缓冲区与桥接时序 {#jitter-buffer-and-bridge-timing}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-rtp_jitter_buffer_during_bridge"></a>`rtp_jitter_buffer_during_bridge` | 为 `true` 时，桥接期间保持抖动缓冲区启用（默认暂停）。 |
+| <a id="var-rtp_notimer_during_bridge"></a>`rtp_notimer_during_bridge` | 覆盖桥接期间是否禁用 RTP 软定时器。 |
+| <a id="var-jb_av_sync_msec"></a>`jb_av_sync_msec` | 抖动缓冲区的目标音视频同步偏移量（毫秒）。 |
+| <a id="var-jb_use_timestamps"></a>`jb_use_timestamps` | 为 `true` 时，抖动缓冲区按 RTP 时间戳而非序列号排序。 |
+| <a id="var-jb_video_low_bitrate"></a>`jb_video_low_bitrate` | 控制视频抖动缓冲区行为的低码率阈值（kbps）。 |
+
+### 编解码器、fmtp 与带宽强制设置 {#codec-fmtp-and-bandwidth-forcing}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-rtp_codec_negotiation"></a>`rtp_codec_negotiation` | 编解码器协商策略：`generous`、`greedy` 或 `scrooge`（忽略无效值）。 |
+| <a id="var-rtp_force_audio_fmtp"></a>`rtp_force_audio_fmtp` | 覆盖本地 SDP 音频编解码器输出的 fmtp 属性。 |
+| <a id="var-rtp_force_video_fmtp"></a>`rtp_force_video_fmtp` | 覆盖本地 SDP 视频编解码器输出的 fmtp 属性。 |
+| <a id="var-rtp_mirror_fmtp"></a>`rtp_mirror_fmtp` | 为 `true` 且未强制 fmtp 时，将配置的视频 fmtp 镜像到出站 SDP。 |
+| <a id="var-rtp_append_audio_sdp"></a>`rtp_append_audio_sdp` | 向本地 SDP 生成的音频 `m=` 段追加原始文本。 |
+| <a id="var-rtp_append_video_sdp"></a>`rtp_append_video_sdp` | 向本地 SDP 生成的视频 `m=` 段追加原始文本。 |
+| <a id="var-rtp_disable_byteswap"></a>`rtp_disable_byteswap` | 为 `true` 时，在小端序主机上禁用 L16 自动字节交换。 |
+| <a id="var-rtp_video_max_bandwidth"></a>`rtp_video_max_bandwidth` | 最大视频带宽（如 `1mb`/`256kb`，默认 1mb）；未设置时回退到 `rtp_video_max_bandwidth_out`。 |
+| <a id="var-rtp_video_max_bandwidth_in"></a>`rtp_video_max_bandwidth_in` | 为视频流通告/应用的最大入站视频带宽。 |
+| <a id="var-rtp_video_max_bandwidth_out"></a>`rtp_video_max_bandwidth_out` | 视频编码器使用的最大出站视频带宽。 |
+
+### SRTP、DTLS 与安全媒体 {#srtp-dtls-and-secure-media}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-rtp_use_dtls"></a>`rtp_use_dtls` | 为 `true` 时，即使不使用 AVPF 也强制音频引擎采用 DTLS-SRTP。 |
+| <a id="var-rtp_dtls_mtu"></a>`rtp_dtls_mtu` | DTLS 握手 MTU，单位字节（1 到最大值；默认 1200）。 |
+| <a id="var-rtp_allow_crypto_in_avp"></a>`rtp_allow_crypto_in_avp` | 为 `true` 时，允许在 RTP/AVP（而非 RTP/SAVP）下提供 `a=crypto`，与 RFC 3711 的要求不符。 |
+| <a id="var-srtp_allow_idle_gaps"></a>`srtp_allow_idle_gaps` | 为 `true` 时，允许 SRTP 流出现空闲/静音间隔，而不强制持续发送。 |
+| <a id="var-webrtc_enable_dtls"></a>`webrtc_enable_dtls` | 显式设为 `false` 时，禁用 WebRTC 媒体的 DTLS。 |
+| <a id="var-uuid_media_secure_media"></a>`uuid_media_secure_media` | 通过 `uuid_media` 重新建立媒体时应用的安全媒体（SRTP）设置。 |
+| <a id="var-media_webrtc"></a>`media_webrtc` | 为 `true` 时，将媒体会话视为 WebRTC（启用 WebRTC 媒体默认设置）。 |
+| <a id="var-NDLB_support_asterisk_missing_srtp_auth"></a>`NDLB_support_asterisk_missing_srtp_auth` | 为 `true` 时，容忍 Asterisk 对端省略 SRTP 认证参数。 |
+
+### 媒体旁路与代理媒体 {#bypass-and-proxy-media}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-bypass_keep_codec"></a>`bypass_keep_codec` | 为 `true` 时，进入媒体旁路/代理转发模式时，将当前 `ep_codec_string` 复制到 `absolute_codec_string` 以保留已协商编解码器。 |
+| <a id="var-bypass_media_resume_on_hold"></a>`bypass_media_resume_on_hold` | 为 `true` 时，通过 `bypass_media_after_hold` 控制保持/解除保持时重新评估媒体旁路行为。 |
+| <a id="var-bypass_media_after_hold"></a>`bypass_media_after_hold` | 为 `true` 且同时设置 `bypass_media_resume_on_hold` 时，在保持/解除保持后尝试退出媒体路径。 |
+| <a id="var-bypass_media_after_bridge_oldschool"></a>`bypass_media_after_bridge_oldschool` | 为 `true` 时，桥接后切换媒体旁路时使用旧版代码路径。 |
+| <a id="var-bypass_media_sdp_filter"></a>`bypass_media_sdp_filter` | 在旁路/代理 SDP 转发给另一条腿之前应用的 SDP 过滤表达式。 |
+
+### 语音活动、传真音调及其他媒体 {#voice-activity-fax-tone-misc-media}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-rtp_enable_vad_in"></a>`rtp_enable_vad_in` | 为 `true` 时，启用入站语音活动检测（VAD）。 |
+| <a id="var-rtp_enable_vad_out"></a>`rtp_enable_vad_out` | 为 `true` 时，启用出站语音活动检测（VAD）。 |
+| <a id="var-rtp_disable_vad_in"></a>`rtp_disable_vad_in` | 为 `true` 时，禁用入站语音活动检测（VAD）。 |
+| <a id="var-rtp_disable_vad_out"></a>`rtp_disable_vad_out` | 为 `true` 时，禁用出站语音活动检测（VAD）。 |
+| <a id="var-vad_thresh"></a>`vad_thresh` | `vad` 检测器使用的 VAD 能量阈值。 |
+| <a id="var-vad_voice_ms"></a>`vad_voice_ms` | VAD 检测器判定为语音前要求的最短语音持续时间（毫秒）。 |
+| <a id="var-suppress_cng"></a>`suppress_cng` | 为 `true` 时，禁止生成/使用舒适噪声（CNG）。 |
+| <a id="var-rtp_disable_hold"></a>`rtp_disable_hold` | 为 `true` 时，禁用通道保持处理（阻止 sendonly/保持状态切换）。 |
+| <a id="var-fax_tone_detect_expires"></a>`fax_tone_detect_expires` | 带内传真（CNG/CED）音调检测的有效期（秒）。 |
+| <a id="var-fax_tone_detect_sleep"></a>`fax_tone_detect_sleep` | 两次传真音调检测尝试之间的静默间隔（秒）。 |
+| <a id="var-v18_mode"></a>`v18_mode` | 选择 V.18 TDD/文本电话模式（如 `5BIT_45`/`baudot`、`5BIT_50`、`DTMF`、`EDT`、`BELL103`/`ascii`）。 |
+| <a id="var-core_video_blank_image"></a>`core_video_blank_image` | 作为空白/占位视频帧使用的图片路径。 |
+| <a id="var-stream_prebuffer"></a>`stream_prebuffer` | 打开流媒体文件播放时使用的预缓冲区大小（字节）。 |
+| <a id="var-media_reneg_after_broadcast"></a>`media_reneg_after_broadcast` | 控制广播（Displace）结束后的媒体重新协商。 |
+
+## 录音 {#recording}
+
+这些变量控制 `record_session` 与 `record` 应用的行为。按惯例以大写形式命名的变量，必须严格使用所示的大小写。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-RECORD_STEREO"></a>`RECORD_STEREO` | 为 `true` 时，将 A 腿音频录至立体声文件左声道、B 腿音频录至右声道。默认：`false`。 |
+| <a id="var-RECORD_STEREO_SWAP"></a>`RECORD_STEREO_SWAP` | 为 `true` 时，交换 `RECORD_STEREO` 的左右声道分配：B 腿在左、A 腿在右。 |
+| <a id="var-RECORD_READ_ONLY"></a>`RECORD_READ_ONLY` | 为 `true` 时，只将读取方向（入站）的音频写入录音文件。 |
+| <a id="var-RECORD_WRITE_ONLY"></a>`RECORD_WRITE_ONLY` | 为 `true` 时，只将写入方向（出站）的音频写入录音文件。 |
+| <a id="var-record_sample_rate"></a>`record_sample_rate` | 录音文件的整数采样率（Hz），例如 `8000`、`16000`、`48000`。 |
+| <a id="var-RECORD_MIN_SEC"></a>`RECORD_MIN_SEC` | 最短录音时长（秒）；会话结束后会删除短于该值的录音。默认：3。 |
+| <a id="var-RECORD_HANGUP_ON_ERROR"></a>`RECORD_HANGUP_ON_ERROR` | 为 `true` 时，无法打开或写入录音文件就终止呼叫。 |
+| <a id="var-RECORD_APPEND"></a>`RECORD_APPEND` | 为 `true` 时，将音频追加到已有录音文件，而不覆盖。 |
+| <a id="var-RECORD_BRIDGE_REQ"></a>`RECORD_BRIDGE_REQ` | 为 `true` 时，仅在通道进入已桥接状态后开始录音。 |
+| <a id="var-RECORD_TITLE"></a>`RECORD_TITLE` | 写入录音文件头的类 ID3 标题标签（格式支持时，如 WAV、OGG）。 |
+| <a id="var-RECORD_COPYRIGHT"></a>`RECORD_COPYRIGHT` | 写入录音文件头的类 ID3 版权标签。 |
+| <a id="var-RECORD_SOFTWARE"></a>`RECORD_SOFTWARE` | 写入录音文件头的类 ID3 软件标签。 |
+| <a id="var-RECORD_ARTIST"></a>`RECORD_ARTIST` | 写入录音文件头的类 ID3 艺术家标签。 |
+| <a id="var-RECORD_COMMENT"></a>`RECORD_COMMENT` | 写入录音文件头的类 ID3 注释标签。 |
+| <a id="var-RECORD_DATE"></a>`RECORD_DATE` | 写入录音文件头的类 ID3 日期标签。 |
+| <a id="var-record_fill_cng"></a>`record_fill_cng` | 为 `true` 时，在静音期间向录音插入舒适噪声，避免文件出现完全无声的空白段。 |
+| <a id="var-recording_follow_transfer"></a>`recording_follow_transfer` | 为 `true` 时，活动 `record_session` 录音会在通道转接至新腿后继续跟随呼叫，而不在转接时停止。 |
+| <a id="var-record_post_process_exec_app"></a>`record_post_process_exec_app` | 录音完成后执行的拨号计划应用，格式 `app_name::app_args`。在 `switch_types.h` 中定义为 `SWITCH_RECORD_POST_PROCESS_EXEC_APP_VARIABLE`。 |
+| <a id="var-record_post_process_exec_api"></a>`record_post_process_exec_api` | 录音完成后执行的 API 命令，在 `switch_types.h` 中定义为 `SWITCH_RECORD_POST_PROCESS_EXEC_API_VARIABLE`。 |
+
+---
+
+### 其他录音控制 {#additional-recording-controls}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-record_rate"></a>`record_rate` | `record` 应用输出文件的采样率（Hz）。 |
+| <a id="var-record_indication"></a>`record_indication` | 录音读取流中播放的提示/舒适音频文件路径。 |
+| <a id="var-recording_follow_attxfer"></a>`recording_follow_attxfer` | 为 `true` 时，活动录音会穿过咨询转接并跟随相应呼叫腿。 |
+| <a id="var-flip_record_on_hold"></a>`flip_record_on_hold` | 为 `true` 时，呼叫保持时交换录音声道。 |
+| <a id="var-RECORD_TOGGLE_ON_REPEAT"></a>`RECORD_TOGGLE_ON_REPEAT` | 为 `true` 时，重复触发录音 DTMF 绑定将切换录音开关，而不是重新开始录音。 |
+| <a id="var-native_backup_extension"></a>`native_backup_extension` | 原生格式播放/录音时备份文件使用的后备扩展名（默认 `wav`）。 |
+| <a id="var-failed_xml_cdr_prefix"></a>`failed_xml_cdr_prefix` | 附加在失败呼出腿上的 XML CDR 数据所使用的变量名前缀。 |
+| <a id="var-failed_json_cdr_prefix"></a>`failed_json_cdr_prefix` | 附加在失败呼出腿上的 JSON CDR 数据所使用的变量名前缀。 |
+
+## 挂机与 CDR {#hangup-and-cdr}
+
+这些变量在挂机时填充，常用于 CDR 模板及挂机后的拨号计划逻辑。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-hangup_cause"></a>`hangup_cause` | 该通道挂机的 Q.850 原因名称（如 `NORMAL_CLEARING`、`USER_BUSY`），由核心状态机在挂机时设置，可用于 CDR 处理及 `api_hangup_hook` 逻辑。 |
+| <a id="var-hangup_cause_q850"></a>`hangup_cause_q850` | 与 `hangup_cause` 对应的数字 Q.850 原因码，在 `switch_core_state_machine.c` 中与 `hangup_cause` 一起设置。 |
+| <a id="var-bridge_hangup_cause"></a>`bridge_hangup_cause` | 该通道最后一次桥接的 B 腿的 Q.850 挂机原因，由核心在桥接终止时设置。`continue_on_fail=true` 且 `hangup_after_bridge=false` 时尤其有用：可在决定下一条拨号计划动作前，检查 B 腿为何断开。 |
+| <a id="var-last_bridge_hangup_cause"></a>`last_bridge_hangup_cause` | 核心（`switch_channel.c`）在 A 腿设置，保存最近一个终止 B 腿的挂机原因，适用于多次顺序桥接尝试。 |
+| <a id="var-proto_specific_hangup_cause"></a>`proto_specific_hangup_cause` | 强制 FreeSWITCH 挂机时使用指定 SIP 响应码，不受 Q.850 原因影响。格式 `sip:NNN`（如 `sip:503`）。在执行 `hangup` 前设置后，`mod_sofia` 会发送该状态码；桥接失败后也可读取，以检查远端返回的确切 SIP 响应码。 |
+| <a id="var-sip_hangup_disposition"></a>`sip_hangup_disposition` | `mod_sofia` 设置的 SIP 会话终止方式。值可为 `send_bye`（FreeSWITCH 发 BYE）、`recv_bye`（远端发 BYE）、`send_cancel`（FreeSWITCH 取消未应答出站腿）、`recv_cancel`（远端取消）、`send_refuse`（FreeSWITCH 以 4xx/5xx 拒绝）、`recv_refuse`（远端以 4xx/5xx 拒绝）。只读；挂机时设置。 |
+| <a id="var-process_cdr"></a>`process_cdr` | 控制该通道是否生成 CDR。取值：`true`（默认，处理 CDR）、`false`（禁止 CDR）、`a_only`（仅为 A 腿生成）、`b_only`（仅为 B 腿生成）。无条件导出。对应 `SWITCH_PROCESS_CDR_VARIABLE`。 |
+| <a id="var-skip_cdr_causes"></a>`skip_cdr_causes` | 以逗号分隔的 Q.850 原因名称列表；若通道以其中某原因挂机，将禁止生成 CDR。对应 `SWITCH_SKIP_CDR_CAUSES_VARIABLE`。 |
+| <a id="var-force_process_cdr"></a>`force_process_cdr` | 为 `true` 时，即使通常应排除（如 Loopback 腿），仍强制处理其 CDR。对应 `SWITCH_FORCE_PROCESS_CDR_VARIABLE`。 |
+| <a id="var-copy_xml_cdr"></a>`copy_xml_cdr` | 为 `true` 时，在桥接时把 A 腿 XML CDR 复制到 B 腿，用于关联源呼叫腿与桥接腿的 CDR。对应 `SWITCH_COPY_XML_CDR_VARIABLE`。 |
+| <a id="var-copy_json_cdr"></a>`copy_json_cdr` | 为 `true` 时，在桥接时把 A 腿 JSON CDR 复制到 B 腿，作用类似 `copy_xml_cdr`，但格式为 JSON。对应 `SWITCH_COPY_JSON_CDR_VARIABLE`。 |
+| <a id="var-accountcode"></a>`accountcode` | 附加在通道上的任意账户代码。CDR 模块会使用它：如果该值与 `cdr_csv.conf.xml` 中的某个模板名一致，则使用该模板生成 CSV CDR。 |
+
+---
+
+## 会话 UUID {#session-uuids}
+
+这些变量用于实现 RFC 7989（Session-ID）跟踪及其他基于 UUID 的会话标识，由核心管理，在拨号计划中通常为只读。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-session_uuid"></a>`session_uuid` | 该呼叫腿的 RFC 7989 Session-ID。由核心生成，并通过 SIP Session-ID 头与远端交换；跨转接和桥接保持，用于端到端呼叫关联。对应 `SWITCH_RFC7989_SESSION_ID_VARIABLE`。 |
+| <a id="var-remote_session_uuid"></a>`remote_session_uuid` | 从远端收到的 RFC 7989 Session-ID；远端携带 Session-ID 头时由 `mod_sofia` 填充。对应 `SWITCH_RFC7989_REMOTE_SESSION_ID_VARIABLE`。 |
+| <a id="var-app_session_uuid"></a>`app_session_uuid` | 应用层会话 UUID，不同于 RFC 7989 信令 UUID。当应用创建自身的会话关联上下文时使用。对应 `SWITCH_RFC7989_APP_SESSION_ID_VARIABLE`。 |
+| <a id="var-generic_param_session_uuid"></a>`generic_param_session_uuid` | 通过通用 SIP 参数而不是专用 Session-ID 头传递的会话 UUID；用于不支持 Session-ID 头的互通场景。对应 `SWITCH_RFC7989_GENERIC_PARAM_VARIABLE`。 |
+
+---
+
+## 应用执行与 CDR {#application-execution-and-cdr}
+
+这些变量控制每通道应用日志和语音句柄缓存。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-disable_app_log"></a>`disable_app_log` | 为 `true` 时，核心不记录该通道的应用执行记录（`switch_core_session.c`），可降低大量自动化通道的日志输出量。对应 `SWITCH_DISABLE_APP_LOG_VARIABLE`。 |
+| <a id="var-current_application"></a>`current_application` | 由核心设置为该通道当前正在执行的拨号计划应用名称。只读；每次运行应用前在 `switch_core_session.c` 中更新。对应 `SWITCH_CURRENT_APPLICATION_VARIABLE`。 |
+| <a id="var-current_application_data"></a>`current_application_data` | 由核心设置为当前执行应用的参数字符串。只读；与 `current_application` 同步更新。对应 `SWITCH_CURRENT_APPLICATION_DATA_VARIABLE`。 |
+| <a id="var-current_application_response"></a>`current_application_response` | 某些应用设置的执行结果说明字符串（如 `SUCCESS`、`TIMEOUT`、`FAILURE`），在应用返回后可读取。对应 `SWITCH_CURRENT_APPLICATION_RESPONSE_VARIABLE`。 |
+| <a id="var-read_result"></a>`read_result` | `read` 应用执行结束后设置。值为 `success`（已收集数字）、`timeout`（超时未输入）、`failure`（通道错误）。对应 `SWITCH_READ_RESULT_VARIABLE`。 |
+| <a id="var-read_terminator_used"></a>`read_terminator_used` | `read` 应用设置的结束按键；如果达到数字数量限制而未输入终止键，则为空。对应 `SWITCH_READ_TERMINATOR_USED_VARIABLE`。 |
+| <a id="var-cache_speech_handles"></a>`cache_speech_handles` | 为 `true` 时，`detect_speech` 或 TTS 播放打开的 ASR/TTS 引擎句柄可跨多次调用缓存，而不是每次关闭重开，降低重复语音操作的延迟。对应 `SWITCH_CACHE_SPEECH_HANDLES_VARIABLE`。 |
+
+---
+
+### 播放、TTS 与应用控制 {#playback-tts-and-application-controls}
+
+这些变量调整 `playback`、`speak`/TTS 及其他各种拨号计划应用的行为。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-tts_engine"></a>`tts_engine` | 未显式指定时，`speak`/播放使用的默认 TTS 引擎。 |
+| <a id="var-tts_voice"></a>`tts_voice` | 未显式指定时，`speak`/播放使用的默认 TTS 音色。 |
+| <a id="var-playback_timeout_sec"></a>`playback_timeout_sec` | 单个文件的播放超时（秒）。 |
+| <a id="var-playback_timeout_sec_cumulative"></a>`playback_timeout_sec_cumulative` | 多个文件累计播放的超时（秒）。 |
+| <a id="var-playback_timeout_as_success"></a>`playback_timeout_as_success` | 为 `true` 时，将播放超时视为成功，而不是失败。 |
+| <a id="var-playback_delimiter"></a>`playback_delimiter` | 播放字符串中分隔多个文件的分隔符字符。 |
+| <a id="var-playback_sleep_val"></a>`playback_sleep_val` | 使用 `playback_delimiter` 时在文件之间插入的休眠时间（毫秒）。 |
+| <a id="var-app_disable_expand_variables"></a>`app_disable_expand_variables` | 为 `true` 时，禁用应用参数字符串中的 `${var}` 展开。 |
+| <a id="var-ivr_menu_terminator"></a>`ivr_menu_terminator` | IVR 菜单收集数字时使用的终止键。 |
+| <a id="var-DISPLACE_HANGUP_ON_ERROR"></a>`DISPLACE_HANGUP_ON_ERROR` | 控制 `displace_session` 出错时是否挂断通道。 |
+| <a id="var-hangup_after_conference"></a>`hangup_after_conference` | 为 `false` 时，退出会议后不会挂断通道（默认挂机）。 |
+| <a id="var-outcall_flags"></a>`outcall_flags` | 通过 `conference dial` 外呼的呼叫腿所使用的会议标志。 |
+| <a id="var-valet_ticket"></a>`valet_ticket` | `mod_valet_parking` 使用的票据/泊位标识符。 |
+| <a id="var-python_script_path"></a>`python_script_path` | 追加到 `mod_python3` 的 Python 模块搜索路径中的额外路径。 |
+| <a id="var-mutex_timeout"></a>`mutex_timeout` | 通道等待获取 `mutex` 的超时时长（秒）。 |
+| <a id="var-mutex_feedback"></a>`mutex_feedback` | 等待 `mutex` 时向通道播放的音频/文件（或 `silence`）。 |
+| <a id="var-mutex_orbit_exten"></a>`mutex_orbit_exten` | 等待 `mutex` 超时后转入的分机（并设置默认 60 秒超时）。 |
+| <a id="var-mutex_orbit_context"></a>`mutex_orbit_context` | `mutex` 超时后转移所使用的拨号计划上下文。 |
+| <a id="var-mutex_orbit_dialplan"></a>`mutex_orbit_dialplan` | `mutex` 超时后转移所使用的拨号计划引擎。 |
+
+## DTMF {#dtmf}
+
+这些变量控制通道上的 DTMF 处理。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-dtmf_type"></a>`dtmf_type` | 设置出站呼叫腿的 DTMF 信令方式。取值：`rfc2833`（带内 RTP telephone-event）、`info`（SIP INFO 消息）、`none`（不发送 DTMF）。未设置时使用 SDP 协商结果。FreeSWITCH 在 `switch_core_media.c` 中读写此变量。若要检测音频带内 DTMF，还必须在拨号计划中调用 `start_dtmf`。 |
+| <a id="var-drop_dtmf"></a>`drop_dtmf` | 为 `true` 时，丢弃通道接收到的 DTMF 事件，不转发给桥接对端。可在入站通道 `answer` 前或出站通道 `bridge` 前设置。已针对 RFC 4733（带内）验证；也可能适用于 SIP INFO 和音频带内 DTMF。定义于 `switch_core_io.c`。 |
+| <a id="var-drop_dtmf_masking_digits"></a>`drop_dtmf_masking_digits` | 当 `drop_dtmf=true` 时，指定代替原 DTMF 音调写入音频流的数字序列，用于掩盖按键声，而不是留下静音。 |
+| <a id="var-drop_dtmf_masking_file"></a>`drop_dtmf_masking_file` | 当 `drop_dtmf=true` 时，指定插入音频流中、用于掩盖被丢弃 DTMF 音调的音频文件路径。 |
+| <a id="var-sensitive_dtmf"></a>`sensitive_dtmf` | 为 `true` 时，不在应用日志中记录 DTMF 事件；适用于处理 PIN 输入的通道。对应 `SWITCH_SENSITIVE_DTMF_VARIABLE`。 |
+
+---
+
+### DTMF 绑定与音调检测 {#dtmf-binding-and-tone-detection}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-bind_meta_key"></a>`bind_meta_key` | `bind_meta_app` 用作元键/触发键的 DTMF 数字（默认 `*`）。 |
+| <a id="var-bind_digit_digit_timeout"></a>`bind_digit_digit_timeout` | `bind_digit_action` 状态机的两次按键间超时（毫秒，默认 1500）。 |
+| <a id="var-bind_digit_input_timeout"></a>`bind_digit_input_timeout` | `bind_digit_action` 状态机的总输入超时（毫秒）。 |
+| <a id="var-bda_terminators"></a>`bda_terminators` | `bind_digit_action` 创建的状态机使用的结束按键。 |
+| <a id="var-asr_intercept_dtmf"></a>`asr_intercept_dtmf` | 为 `true` 时，ASR 引擎检测到的 DTMF 会被拦截/排队，而不是透传。 |
+| <a id="var-pass_rfc2833"></a>`pass_rfc2833` | 为 `true` 时，透明透传 RFC 2833（telephone-event）DTMF。 |
+| <a id="var-digits_dialed_filter"></a>`digits_dialed_filter` | 正则表达式；匹配的拨号数字会在 `digits_dialed` 历史记录中被掩码。 |
+| <a id="var-sleep_eat_digits"></a>`sleep_eat_digits` | 为 `true` 时，`sleep` 应用会消耗休眠期间收到的 DTMF。 |
+| <a id="var-min_dup_digit_spacing_ms"></a>`min_dup_digit_spacing_ms` | 接收重复音频带内 DTMF 数字前要求的最小间隔（毫秒）。 |
+| <a id="var-dtmf_verbose"></a>`dtmf_verbose` | 为 `true` 时，启用检测到的音频带内 DTMF 详细日志。 |
+| <a id="var-pound_replace"></a>`pound_replace` | 在 say/spell 播放中替代 `#` 的数字字符串。 |
+| <a id="var-star_replace"></a>`star_replace` | 在 say/spell 播放中替代 `*` 的数字字符串。 |
+| <a id="var-tone_detect_expires"></a>`tone_detect_expires` | `tone_detect` 检测器的有效期（秒）。 |
+| <a id="var-tone_detect_hits"></a>`tone_detect_hits` | 触发 `tone_detect` 前要求的检测命中次数。 |
+| <a id="var-tone_detect_sleep"></a>`tone_detect_sleep` | 两次 `tone_detect` 判定之间的静默间隔（秒）。 |
+
+## 用户目录与账户 {#directory-and-account}
+
+这些变量通常在用户目录 XML 条目中设置，并在用户完成认证时加载到通道。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-user_context"></a>`user_context` | 来自该用户的呼叫路由使用的拨号计划上下文。在用户目录 `<variable>` 块中设置。例如 `default`。 |
+| <a id="var-toll_allow"></a>`toll_allow` | 授予该用户的呼叫类别名称列表，以逗号分隔（如 `local,domestic,international`）。拨号计划将其与条件表达式比较，实现服务等级路由。 |
+| <a id="var-vm-password"></a>`vm-password` | 该用户的语音信箱 PIN，在目录 `<param>`（不是 `<variable>`）中设置，由 `mod_voicemail` 在邮箱认证时读取。 |
+
+---
+
+## 执行钩子 {#execution-hooks}
+
+这些变量在呼叫生命周期的指定时点自动触发拨号计划应用或 API 命令。
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-execute_on_answer"></a>`execute_on_answer` | 被叫应答时执行的拨号计划应用。可使用 `export nolocal:execute_on_answer=app args` 作用于 B 腿。仅在尚未应答的通道上执行该应用。 |
+| <a id="var-execute_on_pre_answer"></a>`execute_on_pre_answer` | 通道进入预应答（早期媒体）状态时执行的拨号计划应用。 |
+| <a id="var-execute_on_media"></a>`execute_on_media` | 通道建立媒体时执行的拨号计划应用。 |
+| <a id="var-execute_on_ring"></a>`execute_on_ring` | 通道开始振铃时执行的拨号计划应用。 |
+| <a id="var-execute_on_originate"></a>`execute_on_originate` | 呼出成功后（B 腿应答）立即执行的拨号计划应用。对应 `SWITCH_CHANNEL_EXECUTE_ON_ORIGINATE_VARIABLE`。 |
+| <a id="var-execute_on_pre_originate"></a>`execute_on_pre_originate` | 呼出开始前执行的拨号计划应用。对应 `SWITCH_CHANNEL_EXECUTE_ON_PRE_ORIGINATE_VARIABLE`。 |
+| <a id="var-execute_on_post_originate"></a>`execute_on_post_originate` | 呼出全部完成后执行的拨号计划应用。对应 `SWITCH_CHANNEL_EXECUTE_ON_POST_ORIGINATE_VARIABLE`。 |
+| <a id="var-execute_on_pre_bridge"></a>`execute_on_pre_bridge` | 桥接建立前立即执行的拨号计划应用。 |
+| <a id="var-execute_on_post_bridge"></a>`execute_on_post_bridge` | 桥接完成后立即执行的拨号计划应用。 |
+| <a id="var-execute_on_tone_detect"></a>`execute_on_tone_detect` | `tone_detect` 应用检测到音调时执行的拨号计划应用。对应 `SWITCH_CHANNEL_EXECUTE_ON_TONE_DETECT_VARIABLE`。 |
+| <a id="var-api_on_answer"></a>`api_on_answer` | 被叫应答时执行的 API 命令。可使用 `export nolocal:api_on_answer=command args` 作用于 B 腿；如果要执行拨号计划应用，应使用 `execute_on_answer`。 |
+| <a id="var-api_on_pre_answer"></a>`api_on_pre_answer` | 通道进入预应答状态时执行的 API 命令。 |
+| <a id="var-api_on_media"></a>`api_on_media` | 通道建立媒体时执行的 API 命令。 |
+| <a id="var-api_on_ring"></a>`api_on_ring` | 通道开始振铃时执行的 API 命令。 |
+| <a id="var-api_on_originate"></a>`api_on_originate` | 呼出成功后执行的 API 命令。对应 `SWITCH_CHANNEL_API_ON_ORIGINATE_VARIABLE`。 |
+| <a id="var-api_on_pre_originate"></a>`api_on_pre_originate` | 呼出开始前执行的 API 命令。对应 `SWITCH_CHANNEL_API_ON_PRE_ORIGINATE_VARIABLE`。 |
+| <a id="var-api_on_post_originate"></a>`api_on_post_originate` | 呼出全部完成后执行的 API 命令。对应 `SWITCH_CHANNEL_API_ON_POST_ORIGINATE_VARIABLE`。 |
+| <a id="var-api_on_tone_detect"></a>`api_on_tone_detect` | `tone_detect` 应用检测到音调时执行的 API 命令。对应 `SWITCH_CHANNEL_API_ON_TONE_DETECT_VARIABLE`。 |
+| <a id="var-api_before_bridge"></a>`api_before_bridge` | 桥接建立前立即执行的 API 命令。对应 `SWITCH_API_BRIDGE_START_VARIABLE`。 |
+| <a id="var-api_after_bridge"></a>`api_after_bridge` | 桥接完成后执行的 API 命令。 |
+| <a id="var-api_hangup_hook"></a>`api_hangup_hook` | 通道挂机时执行的 API 命令。 |
+| <a id="var-api_reporting_hook"></a>`api_reporting_hook` | 通道进入报告状态（挂机后的 CDR 阶段）时执行的 API 命令。对应 `SWITCH_API_REPORTING_HOOK_VARIABLE`。 |
+| <a id="var-session_in_hangup_hook"></a>`session_in_hangup_hook` | 为 `true` 时，执行 `api_hangup_hook` 期间会话仍可使用，使 API 命令能够访问通道变量。对应 `SWITCH_SESSION_IN_HANGUP_HOOK_VARIABLE`。 |
+
+---
+
+### 事件与日志钩子 {#event-and-logging-hooks}
+
+| 变量 | 用途 |
+|---|---|
+| <a id="var-fire_talk_events"></a>`fire_talk_events` | 为 `true` 时，RTP VAD 触发“正在说话”事件。 |
+| <a id="var-fire_not_talk_events"></a>`fire_not_talk_events` | 为 `true` 时，RTP VAD 触发“未说话”事件。 |
+| <a id="var-fire_asr_events"></a>`fire_asr_events` | 为 `true` 时，向事件系统触发 ASR 检测事件。 |
+| <a id="var-verbose_presence"></a>`verbose_presence` | 为 `true` 时，为当前会话生成详细 Presence 事件。 |
+| <a id="var-heartbeat_fire_on_set"></a>`heartbeat_fire_on_set` | 为 `true` 时，设置或重新设置心跳时立即触发一次会话心跳事件。 |
+| <a id="var-heartbeat_use_scheduler"></a>`heartbeat_use_scheduler` | 为 `true` 时，通过调度器而非内联方式驱动会话心跳。 |
+| <a id="var-session_copy_loglevel"></a>`session_copy_loglevel` | 为 `true` 时，将会话日志级别复制到新呼出的子会话。 |
+| <a id="var-log_audio_stats_on_hangup"></a>`log_audio_stats_on_hangup` | 为 `true` 时，挂机时记录 RTP 音频统计信息。 |
+| <a id="var-hangup_complete_with_xml"></a>`hangup_complete_with_xml` | 为 `true` 时，在挂机完成处理流程中包含通道 XML CDR。 |
+
+## 模块参考变量 {#module-reference-variables}
+
+以下变量由[第 9 部分：模块参考](/module-reference)介绍的可选模块提供。每个模块页面都有权威的变量说明表（设置者、读取者和允许值）；下方索引将各变量映射至所属模块，便于检索。对于仅被这些模块读取的通用核心变量（如 `caller_id_number`、`destination_number`、`language` 或用户目录变量），前文已说明，此处不再重复。
+
+| 模块 | 变量 | 参考文档 |
+|---|---|---|
+| <a id="var-mod_avmd"></a>`mod_avmd` | `avmd_detect`, `avmd_total_time`, `execute_on_avmd_beep` | [mod_avmd](/module-reference/applications/mod_avmd) |
+| <a id="var-mod_bert"></a>`mod_bert` | `bert_window_ms`, `bert_timeout_ms`, `bert_max_err`, `bert_hangup_on_error`, `bert_debug_io_file`, `bert_timer_name`, `bert_stats_sync_lost`, `bert_stats_sync_lost_count` | [mod_bert](/module-reference/applications/mod_bert) |
+| <a id="var-mod_cidlookup"></a>`mod_cidlookup` | `original_caller_id_name`, `cidlookup_source`, `cidlookup_area` | [mod_cidlookup](/module-reference/applications/mod_cidlookup) |
+| <a id="var-mod_com_amd"></a>`mod_com_amd` | `amd_status`, `amd_result`, `amd_wait_status`, `amd_wait_result`, `amd_execute_on_machine`, `amd_execute_on_person`, `amd_execute_on_unsure`, `amd_debug` | [mod_com_amd](/module-reference/applications/mod_com_amd) |
+| <a id="var-mod_curl"></a>`mod_curl` | `curl_response_data`, `curl_response_code`, `curl_method`, `curl_connect_timeout`, `curl_timeout`, `curl_sendfile_url`, `curl_sendfile_filename_element`, `curl_sendfile_filename`, `curl_sendfile_extrapost`, `curl_sendfile_report`, `curl_sendfile_identifier` | [mod_curl](/module-reference/applications/mod_curl) |
+| <a id="var-mod_cv"></a>`mod_cv` | `execute_on_cv_detect_primary`, `execute_on_cv_detect_off_primary`, `execute_on_cv_detect_nested`, `execute_on_cv_detect_off_nested` | [mod_cv](/module-reference/applications/mod_cv) |
+| <a id="var-mod_directory"></a>`mod_directory` | `directory_group_selection`, `directory_voicemail_profile`, `directory_search_order` | [mod_directory](/module-reference/applications/mod_directory) |
+| <a id="var-mod_distributor"></a>`mod_distributor` | `DISTRIBUTOR` | [mod_distributor](/module-reference/applications/mod_distributor) |
+| <a id="var-mod_easyroute"></a>`mod_easyroute` | `easy_destnum`, `easy_dialstring`, `easy_group`, `easy_limit`, `easy_acctcode` | [mod_easyroute](/module-reference/applications/mod_easyroute) |
+| <a id="var-mod_fsk"></a>`mod_fsk` | `fsk_phone_num`, `fsk_phone_name`, `fsk_datetime`, `fsk_uri`, `execute_on_fsk`, `fsk_simplify_profile`, `fsk_simplify_context` | [mod_fsk](/module-reference/applications/mod_fsk) |
+| <a id="var-mod_lcr"></a>`mod_lcr` | `intrastate`, `intralata`, `lrn`, `max_rate`, `lcr_auto_route`, `lcr_route_count`, `lcr_route_N`, `lcr_rate_N`, `lcr_carrier_N`, `lcr_codec_N`, `lcr_carrier`, `lcr_rate`, `lcr_user_rate`, `lcr_rate_field`, `lcr_user_rate_field`, `lcr_query_digits`, `lcr_query_profile`, `lcr_query_expanded_digits`, `lcr_query_expanded_lrn_digits`, `lcr_lrn` | [mod_lcr](/module-reference/applications/mod_lcr) |
+| <a id="var-mod_nibblebill"></a>`mod_nibblebill` | `nibble_rate`, `nibble_account`, `nibble_increment`, `nibble_rounding`, `nibble_minimum`, `nobal_amt`, `lowbal_amt`, `nibble_bill`, `nibble_total_billed`, `nibble_current_balance` | [mod_nibblebill](/module-reference/applications/mod_nibblebill) |
+| <a id="var-mod_osp"></a>`mod_osp` | `osp_source_device`, `osp_source_nid`, `osp_custom_info_1 … osp_custom_info_8`, `osp_networkid_userparam`, `osp_networkid_uriparam`, `osp_outstring_userparam`, `osp_outstring_uriparam`, `osp_user_phone`, `osp_outbound_proxy`, `osp_profile_name`, `osp_transaction_handle`, `osp_transaction_id`, `osp_lookup_status`, `osp_next_status`, `osp_route_total`, `osp_route_count`, `osp_auto_route`, `osp_termination_cause` | [mod_osp](/module-reference/applications/mod_osp) |
+| <a id="var-mod_translate"></a>`mod_translate` | `translated`, `translate_profile`, `country`, `default_country`, `areacode`, `default_areacode` | [mod_translate](/module-reference/applications/mod_translate) |
+| <a id="var-mod_vmd"></a>`mod_vmd` | `vmd_detect`, `vmd_min_time` | [mod_vmd](/module-reference/applications/mod_vmd) |
+| <a id="var-mod_voicemail_ivr"></a>`mod_voicemail_ivr` | `voicemail_authorized` | [mod_voicemail_ivr](/module-reference/applications/mod_voicemail_ivr) |
+| <a id="var-mod_h323"></a>`mod_h323` | `progress-indication`, `alerting-indication`, `fax_enable_t38_insist` | [mod_h323](/module-reference/endpoints/mod_h323) |
+| <a id="var-mod_opal"></a>`mod_opal` | `has_t38`, `opal_execute_on_t38`, `opal_api_on_t38` | [mod_opal](/module-reference/endpoints/mod_opal) |
+| <a id="var-mod_vlc"></a>`mod_vlc` | `vlc_force_width`, `vlc_force_height`, `vlc_capture_offset`, `vlc_interval`, `vlc_rate`, `vlc_channels` | [mod_vlc](/module-reference/formats/mod_vlc) |
+| <a id="var-mod_webm"></a>`mod_webm` | `webmv2_video_offset` | [mod_webm](/module-reference/formats/mod_webm) |
+| <a id="var-mod_smpp"></a>`mod_smpp` | `smpp_gateway`, `smpp_from_user`, `smpp_to_user` | [mod_smpp](/module-reference/event-handlers/mod_smpp) |
+| <a id="var-mod_format_cdr"></a>`mod_format_cdr` | `format_cdr_base`, `force_process_cdr` | [mod_format_cdr](/module-reference/event-handlers/mod_format_cdr) |
+| <a id="var-mod_json_cdr"></a>`mod_json_cdr` | `json_cdr_base`, `force_process_cdr` | [mod_json_cdr](/module-reference/event-handlers/mod_json_cdr) |
+| <a id="var-mod_odbc_cdr"></a>`mod_odbc_cdr` | `odbc-cdr-ignore-leg` | [mod_odbc_cdr](/module-reference/event-handlers/mod_odbc_cdr) |
+| <a id="var-mod_hiredis"></a>`mod_hiredis` | `hiredis_raw_response`, `hiredis_limit_exceeded` | [mod_hiredis](/module-reference/data-stores/mod_hiredis) |

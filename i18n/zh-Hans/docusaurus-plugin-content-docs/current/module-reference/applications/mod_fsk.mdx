@@ -1,0 +1,105 @@
+---
+sidebar_position: 20
+id: mod_fsk
+slug: /module-reference/applications/mod_fsk
+title: "mod_fsk——FSK 数据与主叫号码信令"
+description: "使用 mod_fsk 发送、接收和解码 Bell 202 FSK 主叫识别数据。"
+sidebar_label: "mod_fsk"
+---
+# mod_fsk——FSK 数据与主叫号码信令 {#mod_fsk-—-fsk-data-and-caller-id-signaling}
+
+`mod_fsk` 为 FreeSWITCH 音频通道提供 Bell 202 FSK（频移键控）调制解调信令。它既能发送也能接收 MDMF（多数据消息格式）主叫号码数据，包括日期/时间、电话号码、主叫名称，以及编码为 FSK 音频的任意名称/值数据对。
+
+当使用模拟电话适配器、FXS/FXO 网关，或者通过带内 FSK 音频而非 SIP 头传递主叫号码信息的 SIP 中继时，可以使用此模块。它也可用于支持 FSK 的端点之间进行专有带内数据传输。
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 中使用的模块名为 `mod_fsk`。默认配置**不加载**此模块：对应条目存在，但已被注释。
+
+```xml
+<!--<load module="mod_fsk"/>-->
+```
+
+要启用它，请取消 `autoload_configs/modules.conf.xml` 中该行的注释；也可以在运行时通过 `fs_cli` 加载：
+
+```
+load mod_fsk
+```
+
+无需特殊构建标志；标准 FreeSWITCH 构建即可编译该模块。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `fsk_send` | 将 FSK 主叫号码数据编码并通过通道音频发送 | 可选：发送数据前先发出的 DTMF 字符串 |
+| `fsk_recv` | 附加媒体钩子（media bug），检测并解码接收到的 FSK 数据 | 可选标志 `w`：检查写入（出站）流，而不是读取流 |
+| `fsk_display` | 利用已解码的 FSK 变量发送 `SWITCH_MESSAGE_INDICATE_DISPLAY` 更新 | 可选标志 `b`：将显示更新发送到已桥接的对端 |
+| `fsk_simplify` | 将会话直接转接到 `fsk_uri` 收到的 URI，消除中间呼叫腿 | 无 |
+
+### `fsk_send`
+
+读取当前通道上名称以 `fsk_` 开头的所有变量，将它们编码成 Bell 202 FSK 音频，再把音频写入通道。`MDMF_DATETIME` 字段始终置于消息开头，其值为当前本地时间。`fsk_phone_num` 和 `fsk_phone_name` 分别编码到专用的 MDMF 字段；其他 `fsk_*` 变量编码为 `MDMF_NAME_VALUE` 对（`name:value`）。
+
+如果提供参数，则会在 FSK 数据突发发送前一秒将其作为 DTMF 字符串发出；这是唤醒 ATA 设备的一种常见要求。
+
+```xml
+<!-- Send FSK caller ID, preceded by a "*" hook-flash DTMF -->
+<action application="set" data="fsk_phone_num=5551234567"/>
+<action application="set" data="fsk_phone_name=John Doe"/>
+<action application="fsk_send" data="*"/>
+```
+
+```xml
+<!-- Send FSK with no preceding DTMF -->
+<action application="set" data="fsk_phone_num=5559876543"/>
+<action application="fsk_send"/>
+```
+
+### `fsk_recv`
+
+在通道上安装一个监听 Bell 202 FSK 数据的媒体钩子。默认监听读取（入站）流；传入标志 `w` 后改为监听写入（出站）流。完整的 MDMF 消息解码后，媒体钩子会自动移除，并将解码结果写入通道变量。如果设置了通道变量 `execute_on_fsk`，解码完成后会立即执行对应拨号计划应用。
+
+```xml
+<!-- Listen for FSK on the inbound audio; run fsk_display when data arrives -->
+<action application="set" data="execute_on_fsk=fsk_display"/>
+<action application="fsk_recv"/>
+```
+
+```xml
+<!-- Listen on the outbound (write) stream -->
+<action application="fsk_recv" data="w"/>
+```
+
+### `fsk_display`
+
+通常由 `fsk_recv` 解码数据后通过 `execute_on_fsk` 调用。利用 `fsk_phone_name` 和 `fsk_phone_num` 的值发送显示更新消息（`SWITCH_MESSAGE_INDICATE_DISPLAY`）。使用标志 `b` 时，消息发给桥接会话，而非当前会话。
+
+```xml
+<action application="set" data="execute_on_fsk=fsk_display b"/>
+<action application="fsk_recv"/>
+```
+
+### `fsk_simplify`
+
+通常由 `execute_on_fsk` 调用。从通道变量读取 `fsk_uri`，通过 Sofia `internal` 配置实例（可由 `fsk_simplify_profile` 覆盖）将会话直接转接到该 SIP URI。被桥接的对端也会重新定向，从而移除中间的 FreeSWITCH 呼叫腿。
+
+```xml
+<action application="set" data="execute_on_fsk=fsk_simplify"/>
+<action application="fsk_recv"/>
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `fsk_phone_num` | 读写 | 电话号码字段（MDMF 类型 2）。解码时设置，编码时读取。 |
+| `fsk_phone_name` | 读写 | 主叫名称字段（MDMF 类型 7）。解码时设置，编码时读取。 |
+| `fsk_datetime` | 写入 | 从 MDMF 日期时间字段（MDMF 类型 1）解码的日期/时间，格式为 `MMDDhhmm`。 |
+| `fsk_*`（任意名称） | 读写 | 发送时，任何以 `fsk_` 开头的通道变量都会编码为 MDMF 名称/值对；接收时，将解码结果存为 `fsk_<name>` 通道变量。 |
+| `fsk_uri` | 读取 | `fsk_simplify` 用于重定向呼叫的 SIP URI。必须是没有 `sip:` 协议前缀的纯 SIP URI。 |
+| `execute_on_fsk` | 读取 | `fsk_recv` 成功解码 FSK 消息后立即执行的应用（可包含参数）。 |
+| `fsk_simplify_profile` | 读取 | `fsk_simplify` 构造桥接目标时使用的 Sofia 配置实例名称，默认 `internal`。 |
+| `fsk_simplify_context` | 读取 | `fsk_simplify` 调用 `switch_ivr_session_transfer` 时传入的拨号计划上下文。 |
+
+**源码：** `src/mod/applications/mod_fsk`

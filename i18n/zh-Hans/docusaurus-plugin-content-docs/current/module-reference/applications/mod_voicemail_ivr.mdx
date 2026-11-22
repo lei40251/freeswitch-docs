@@ -1,0 +1,164 @@
+---
+sidebar_position: 41
+id: mod_voicemail_ivr
+slug: /module-reference/applications/mod_voicemail_ivr
+title: "mod_voicemail_ivr——语音信箱 IVR 导航"
+description: "DTMF 操作的语音信箱 IVR 菜单、认证、消息操作与配置参考。"
+sidebar_label: "mod_voicemail_ivr"
+---
+# mod_voicemail_ivr——语音信箱 IVR 导航 {#mod_voicemail_ivr-—-voicemail-ivr-navigation}
+
+`mod_voicemail_ivr` 位于 `src/mod/applications/mod_voicemail_ivr`，为语音信箱检索和管理提供完全通过 DTMF 操作的 IVR 前端。它负责来电者身份认证、收件箱导航（新消息/已保存消息）、删除、保存、转发消息（可选在转发前附加录音），以及问候语、姓名录音和密码修改等用户偏好操作。
+
+模块将所有存储操作委托给可配置的后端 API 命令——默认使用 `mod_voicemail` 提供的 `vm_fsdb_*` 系列——因此 IVR 逻辑与存储层解耦。如果需要基于现有语音信箱存储，为用户提供电话拨入式消息检索体验，可选用本模块。
+
+<SignalWireCallout
+  title="无需加载模块的语音信箱菜单"
+  href="https://signalwire.com/docs/call-flow-builder"
+  page="mod-voicemail-ivr"
+  linkText="查看呼叫流程构建器">
+
+SignalWire 的无代码呼叫流程构建器包含语音信箱录音及菜单节点；托管 AI 智能体还可以在同一次通话中留言并回答问题。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 中使用的模块名为 `mod_voicemail_ivr`。它**不在**默认 `modules.conf.xml` 加载列表中（该列表只有 `mod_voicemail`）；必须手动加入，再重启 FreeSWITCH 或在 `fs_cli` 中执行 `load mod_voicemail_ivr`。
+
+```xml
+<load module="mod_voicemail_ivr"/>
+```
+
+无需特殊构建标志；源码目录存在时，会作为标准 FreeSWITCH 构建的一部分编译。
+
+## 配置：`voicemail_ivr.conf.xml` {#configuration-voicemail_ivrconfxml}
+
+模块从 FreeSWITCH 自动加载配置路径读取 `voicemail_ivr.conf.xml`。文件包含一个或多个具名 `<profile>` 块，每个配置实例有三个子节：
+
+- `<settings>`：运行参数。
+- `<apis>`：将逻辑操作名称映射到执行存储操作的 FreeSWITCH API 命令。
+- `<menus>`：每个 IVR 页面上的 DTMF 键位绑定和语音短语宏名称。
+
+全部 13 个 `<api>` 条目都是必需的。缺少任何一项时，模块会记录错误并拒绝使用该配置实例。
+
+### 设置参数 {#settings-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `IVR-Maximum-Attempts` | 退出 IVR 页面前允许的最多 DTMF 输入重试次数 | 正整数 | `3` |
+| `IVR-Entry-Timeout` | 音频播放结束后等待 DTMF 输入的毫秒数 | 正整数（毫秒） | `3000` |
+| `Record-Format` | 录制问候语、姓名或附加消息时使用的音频文件格式 | FreeSWITCH 支持的任意格式字符串（如 `wav`、`mp3`） | `wav` |
+| `Record-Sample-Rate` | 录音采样率覆盖值 | 整数 Hz（如 `8000`） | 未设置（使用通道采样率） |
+| `Record-Silence-Hits` | 触发停止录音所需的连续静音帧数量 | 正整数 | `4` |
+| `Record-Silence-Threshold` | 结束录音检测所用的静音能量阈值 | 整数 | `200` |
+| `Record-Maximum-Length` | 最大录音时长（秒） | 正整数 | `30` |
+| `Record-Minimum-Length` | 可接受的最短录音时长（秒）；更短的录音会被拒绝 | 正整数 | 未设置（不强制最短时长） |
+| `Exit-Purge` | 为 `true` 时，在会话结束时永久删除所有标记为待删除的消息 | `true` / `false` | `true` |
+| `Password-Mask` | 收集密码或新密码时使用的 DTMF 输入掩码；`.` 表示重复一次或多次 | 掩码字符串（如 `XXX.`） | `XXX.` |
+| `User-Mask` | 收集语音信箱 ID 时使用的 DTMF 输入掩码 | 掩码字符串（如 `X.`） | `X.` |
+
+`<profile>` 级设置作为默认值；单独的 `<menu>` 块可以在自身 `<settings>` 节中覆盖 `IVR-Maximum-Attempts` 和 `IVR-Entry-Timeout`。导航菜单还支持 `Nav-Action-On-Delete`（如 `next_msg`），用于控制删除消息后游标的移动方向。主菜单支持 `Action-On-New-Message`（如 `new_msg:std_navigator`）：存在新消息、来电者在菜单选项播报期间没有按键时，IVR 会自动跳转一次到绑定的菜单函数，而不是等待超时。随附配置将其设置在 `std_main_menu` 上。
+
+### API 映射 {#api-mappings}
+
+每个 `<api>` 元素将一项逻辑操作绑定到模块在运行时调用的 FreeSWITCH API 命令。默认配置实例将所有操作映射到 `mod_voicemail` 提供的 `vm_fsdb_*` 命令。
+
+| `name` 属性 | 默认 `value` | 执行的操作 |
+|---|---|---|
+| `auth_login` | `vm_fsdb_auth_login` | 验证语音信箱 ID 和密码 |
+| `msg_list` | `vm_fsdb_msg_list` | 列出文件夹中的消息 |
+| `msg_count` | `vm_fsdb_msg_count` | 按状态统计消息数量 |
+| `msg_delete` | `vm_fsdb_msg_delete` | 标记消息为待删除 |
+| `msg_undelete` | `vm_fsdb_msg_undelete` | 取消待删除标记 |
+| `msg_save` | `vm_fsdb_msg_save` | 将消息移动到已保存文件夹 |
+| `msg_purge` | `vm_fsdb_msg_purge` | 永久清除已删除消息 |
+| `msg_get` | `vm_fsdb_msg_get` | 获取单条消息的元数据及路径 |
+| `msg_forward` | `vm_fsdb_msg_forward` | 将消息转发到另一个语音信箱 |
+| `pref_greeting_set` | `vm_fsdb_pref_greeting_set` | 设置当前使用的问候语槽位 |
+| `pref_greeting_get` | `vm_fsdb_pref_greeting_get` | 获取当前问候语文件路径 |
+| `pref_recname_set` | `vm_fsdb_pref_recname_set` | 保存姓名录音文件 |
+| `pref_password_set` | `vm_fsdb_pref_password_set` | 更新语音信箱密码 |
+
+### 配置示例 {#configuration-example}
+
+下面是随附 `voicemail_ivr.conf.xml` 的精简片段：
+
+```xml
+<configuration name="voicemail_ivr.conf" description="Voicemail IVR">
+  <profiles>
+    <profile name="default">
+      <settings>
+        <param name="IVR-Maximum-Attempts"     value="3" />
+        <param name="IVR-Entry-Timeout"        value="3000" />
+        <param name="Record-Format"            value="wav" />
+        <!--<param name="Record-Sample-Rate"   value="8000" />-->
+        <param name="Record-Silence-Hits"      value="4" />
+        <param name="Record-Silence-Threshold" value="200" />
+        <param name="Record-Maximum-Length"    value="30" />
+        <!--<param name="Record-Minimum-Length" value="3" />-->
+        <param name="Exit-Purge"               value="true" />
+        <param name="Password-Mask"            value="XXX." />
+        <param name="User-Mask"                value="X." />
+      </settings>
+      <apis>
+        <api name="auth_login"        value="vm_fsdb_auth_login" />
+        <api name="msg_list"          value="vm_fsdb_msg_list" />
+        <api name="msg_count"         value="vm_fsdb_msg_count" />
+        <api name="msg_delete"        value="vm_fsdb_msg_delete" />
+        <api name="msg_undelete"      value="vm_fsdb_msg_undelete" />
+        <api name="msg_save"          value="vm_fsdb_msg_save" />
+        <api name="msg_purge"         value="vm_fsdb_msg_purge" />
+        <api name="msg_get"           value="vm_fsdb_msg_get" />
+        <api name="msg_forward"       value="vm_fsdb_msg_forward" />
+        <api name="pref_greeting_set" value="vm_fsdb_pref_greeting_set" />
+        <api name="pref_greeting_get" value="vm_fsdb_pref_greeting_get" />
+        <api name="pref_recname_set"  value="vm_fsdb_pref_recname_set" />
+        <api name="pref_password_set" value="vm_fsdb_pref_password_set" />
+      </apis>
+      <!-- <menus> section omitted for brevity; see voicemail_ivr.conf.xml -->
+    </profile>
+  </profiles>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `voicemail_ivr` | 为已认证或未认证的来电者启动语音信箱 IVR | `check <profile> <domain> [id]` |
+
+### `voicemail_ivr`
+
+模块唯一注册的应用。第一个位置参数必须是字面量 `check`。`profile` 指定 `voicemail_ivr.conf.xml` 中的 `<profile>` 块；`domain` 标识语音信箱域；可选的 `id` 用于预先提供语音信箱号码。未提供 `id` 时，IVR 会在认证阶段提示来电者输入。
+
+如果提供了 `id` 且通道变量 `voicemail_authorized` 为 `true`，则完全跳过认证页面，直接进入主菜单。
+
+```xml
+<!-- Route to voicemail retrieval without pre-supplying the mailbox number -->
+<action application="voicemail_ivr" data="check default $${domain}"/>
+
+<!-- Skip authentication when the dialplan already verified the caller -->
+<action application="set" data="voicemail_authorized=true"/>
+<action application="voicemail_ivr" data="check default $${domain} ${caller_id_number}"/>
+```
+
+#### IVR 流程 {#ivr-flow}
+
+应用依次执行三个阶段，每个阶段对应一个具名菜单函数：
+
+1. **身份认证**（`std_authenticate`）：通过 DTMF 收集语音信箱 ID（未预先提供时）和密码，并调用 `auth_login` API。`voicemail_authorized=true` 时跳过。
+2. **主菜单**（`std_main_menu`）：播报消息数量，并接收按键以导航新消息、已保存消息或偏好设置。
+3. **结束处理**（`std_purge`）：若 `Exit-Purge` 为 `true`，在会话结束前调用 `msg_purge` API。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `voicemail_authorized` | 读取 | 在调用 `voicemail_ivr` 前将通道变量设置为 `true`，则跳过认证页面，来电者直接进入主菜单。 |
+
+## 相关文档 {#see-also}
+
+- [第 19 章：语音信箱](../../applications/voicemail.mdx)
+
+**源码：** `src/mod/applications/mod_voicemail_ivr`、`conf/vanilla/autoload_configs/voicemail_ivr.conf.xml`

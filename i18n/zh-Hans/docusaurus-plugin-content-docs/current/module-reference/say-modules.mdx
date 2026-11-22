@@ -1,0 +1,224 @@
+---
+sidebar_position: 11
+id: say-modules
+slug: /module-reference/say
+title: "Say 模块——数字、日期与货币金额播报"
+description: "FreeSWITCH 多语言数字、日期、金额和文字播报模块及 say 命令。"
+sidebar_label: "Say Modules"
+---
+# Say 模块——数字、日期与货币金额播报 {#say-modules-—-number-date-and-money-pronunciation}
+
+Say 子系统通过拼接预录制音频文件的顺序，将整数、货币金额、时间戳、IP 地址以及拼读姓名等结构化数据转换为语音。每个 `mod_say_*` 模块实现一种特定语言的发音算法，确定播放哪些音频文件及其先后顺序。拨号计划 `say` 应用和 `say_string` API 命令都会在运行时调用这些模块。
+
+音频文件位于当前语言的 `sound_prefix` 指定路径下（在 `freeswitch.xml` 的 `<languages>` 节配置）。模块使用该前缀下的 `digits/`、`currency/`、`time/` 等子目录。
+
+<SignalWireCallout
+  title="由语音供应商处理发音"
+  href="https://signalwire.com/docs/platform/voice/tts"
+  page="say-modules"
+  linkText="查看语音与语言支持">
+
+托管 SignalWire 通过文本转语音服务商生成语音；现代 TTS 音色可根据上下文朗读数字、日期和货币，无需 say 宏。切换语言只需指定语音字符串，而不是切换模块集合。
+
+</SignalWireCallout>
+
+## 支持的语言 {#supported-languages}
+
+以下模块随 `src/mod/say` 提供。每个模块都以自身的接口名称注册 say 接口；调用 `say` 应用时需将该名称作为 `<module_name>` 传入。
+
+| 模块 | 接口名称 | 语言 |
+|---|---|---|
+| `mod_say_de` | `de` | 德语 |
+| `mod_say_en` | `en` | 英语 |
+| `mod_say_es` | `es` | 西班牙语（卡斯蒂利亚） |
+| `mod_say_es_ar` | `es_ar` | 西班牙语（阿根廷） |
+| `mod_say_fa` | `fa` | 波斯语（Farsi） |
+| `mod_say_fr` | `fr` | 法语 |
+| `mod_say_he` | `he` | 希伯来语 |
+| `mod_say_hr` | `hr` | 克罗地亚语 |
+| `mod_say_hu` | `hu` | 匈牙利语 |
+| `mod_say_it` | `it` | 意大利语 |
+| `mod_say_ja` | `ja` | 日语 |
+| `mod_say_nl` | `nl` | 荷兰语 |
+| `mod_say_pl` | `pl` | 波兰语 |
+| `mod_say_pt` | `pt` | 葡萄牙语 |
+| `mod_say_ru` | `ru` | 俄语 |
+| `mod_say_sv` | `sv` | 瑞典语 |
+| `mod_say_th` | `th` | 泰语 |
+| `mod_say_zh` | `zh` | 中文 |
+| `mod_say_zh` | `zh_CN` | 中文（中国大陆，货币读法不同） |
+
+**默认加载：** `autoload_configs/modules.conf.xml` 中仅默认启用 `mod_say_en`。所有其他 say 模块都被注释，必须显式添加：
+
+```xml
+<load module="mod_say_en"/>
+<!-- <load module="mod_say_ru"/> -->
+<!-- <load module="mod_say_zh"/> -->
+<!-- <load module="mod_say_sv"/> -->
+```
+
+要启用其他语言，请取消相应 `<load>` 行的注释，或在本地模块配置中添加等效条目。
+
+## `say` 应用与 `say_string` {#the-say-application-and-say_string}
+
+### `say` 拨号计划应用 {#say-dialplan-application}
+
+由 `mod_dptools` 注册。语法（来自 `mod_dptools.c` 中的 `SAY_SYNTAX`）：
+
+```
+say <module_name>[:<lang>] <say_type> <say_method> [<say_gender>] <text>
+```
+
+- `<module_name>`：say 接口名称（如 `en`、`de`、`fr`）。可以附加 `:<lang>`，在保持发音模块不变的同时覆盖音频路径查找使用的语言标签（如 `en:fr`）。
+- `<say_type>`：要播报哪种类型的值（见下表）。
+- `<say_method>`：采用何种播报方法（见下表）。
+- `<say_gender>`：可选的语法性别（见下表）；仅对有性别屈折变化的语言有意义。
+- `<text>`：要播报的值（数字、纪元时间戳、点分十进制 IP、货币字符串等）。
+
+完整参数字符串必须恰好包含 4 或 5 个空格分隔的标记：`<module_name> <say_type> <say_method> <text>`（4 个）或 `<module_name> <say_type> <say_method> <say_gender> <text>`（5 个）。开始播放前会将 `PLAYBACK_TERMINATOR_USED` 设置为空。
+
+**示例：**
+
+```xml
+<action application="say" data="en NUMBER PRONOUNCED 12345"/>
+<action application="say" data="en CURRENCY PRONOUNCED 19.99"/>
+<action application="say" data="en CURRENT_DATE_TIME PRONOUNCED 0"/>
+<action application="say" data="de NUMBER COUNTED MASCULINE 1"/>
+```
+
+### `say_string` API 命令 {#say_string-api-command}
+
+由 `mod_commands` 注册。它返回冒号分隔的文件路径字符串，而不是播放音频。语法（来自 `mod_commands.c` 中的 `SAY_STRING_SYNTAX`）：
+
+```
+say_string <module_name>[.<ext>] <lang>[.<ext>] <say_type> <say_method> [<say_gender>] <text>
+```
+
+第一个或第二个标记后可带可选的 `.ext` 后缀，设置音频文件扩展名（默认 `wav`）。`<lang>` 标记用于音频路径查找语言。将 `<text>` 以 `~` 开头，可从返回路径中移除 `file_string://` 协议前缀。
+
+**示例：**
+
+```
+say_string en en NUMBER PRONOUNCED 42
+say_string en.wav en NUMBER ITERATED 555
+```
+
+### 播报类型 {#say-types}
+
+`<say_type>` 标记对应 `switch_say_type_t`；名称不区分大小写。
+
+| 标记 | 说明 |
+|---|---|
+| `NUMBER` | 基数整数 |
+| `ITEMS` | 物品数量 |
+| `PERSONS` | 人数 |
+| `MESSAGES` | 消息数量 |
+| `CURRENCY` | 货币金额（英语为美元和美分） |
+| `TIME_MEASUREMENT` | 以小时、分钟、秒表示的时长 |
+| `CURRENT_DATE` | 时间戳的日期部分 |
+| `CURRENT_TIME` | 时间戳的时间部分 |
+| `CURRENT_DATE_TIME` | 时间戳的完整日期和时间 |
+| `SHORT_DATE_TIME` | 简写日期时间（按今天/昨天/星期几进行判断） |
+| `TELEPHONE_NUMBER` | 逐位播报电话号码 |
+| `TELEPHONE_EXTENSION` | 分机号码数字 |
+| `IP_ADDRESS` | IPv4 点分十进制地址 |
+| `URL` | URL 字符串 |
+| `EMAIL_ADDRESS` | 电子邮件地址 |
+| `POSTAL_ADDRESS` | 邮政地址 |
+| `ACCOUNT_NUMBER` | 账户号码 |
+| `NAME_SPELLED` | 使用 `ascii/` 音频文件逐字母拼读姓名 |
+| `NAME_PHONETIC` | 使用 `phonetic-ascii/` 音频文件按语音字母拼读姓名 |
+
+并非所有模块都支持每一种类型。例如 `mod_say_en` 支持 `TELEPHONE_NUMBER`；`mod_say_fr` 还支持 `TELEPHONE_EXTENSION`、`URL`、`EMAIL_ADDRESS`、`POSTAL_ADDRESS` 和 `ACCOUNT_NUMBER`。若干模块（如 `mod_say_es`、`mod_say_ja`、`mod_say_nl`、`mod_say_th`）不实现 `SHORT_DATE_TIME`。无法识别的类型会记录错误并返回 false。
+
+### 播报方法 {#say-methods}
+
+`<say_method>` 标记对应 `switch_say_method_t`。
+
+| 标记 | 说明 |
+|---|---|
+| `PRONOUNCED` | 作为自然数播报（例如英文“twelve thousand three hundred forty-five”，12345） |
+| `ITERATED` | 逐个播报数字或字符（例如英文“one two three”，123） |
+| `COUNTED` | 按序数词播报（例如英文“twelfth”，第十二） |
+| `PRONOUNCED_YEAR` | 将年份按惯常方式分成两组播报（例如英文“nineteen ninety-nine”，1999） |
+
+当 `say_method` 为 `ITERATED`、`say_type` 为 `CURRENT_TIME` 时，`mod_say_en` 使用 24 小时制（军用）时间格式。
+
+### 语法性别 {#say-genders}
+
+`<say_gender>` 标记对应 `switch_say_gender_t`。该参数可选，不使用语法性别的模块会静默忽略。
+
+| 标记 | 说明 |
+|---|---|
+| `MASCULINE` | 阳性语法性别 |
+| `FEMININE` | 阴性语法性别 |
+| `NEUTER` | 中性语法性别 |
+
+`mod_say_de` 根据性别选择屈折变化的序数词音频文件：阳性使用 `digits/h-1_m.wav`，中性使用 `digits/h-1_n.wav`；阴性（及未指定性别）回退到无后缀形式 `digits/h-1.wav`。`mod_say_he`、`mod_say_ru` 等具有语法性别的模块采用类似方式。
+
+## 选择语言 {#selecting-the-language}
+
+调用 `switch_ivr_say`（从 `say` 应用）时，会按以下优先顺序确定活动语言：
+
+1. `<module_name>` 参数上的 `:lang` 后缀（若有）。
+2. 通道变量 `language`。
+3. 通道变量 `default_language`。
+4. 模块名称本身（不带后缀）。
+
+随后使用解析出的语言标签，在 `freeswitch.xml` 的 `languages` 节中查找 `<language>` 元素。查找由 `switch_xml_locate_language` 完成。
+
+### `<languages>` 节 {#the--section}
+
+`freeswitch.xml` 包含一个 `<section name="languages">` 块，用于引用各语言 XML 文件：
+
+```xml
+<section name="languages" description="Language Management">
+  <X-PRE-PROCESS cmd="include" data="lang/de/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/en/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/fr/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/ru/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/he/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/es/es_ES.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/pt/pt_BR.xml"/>
+</section>
+```
+
+每个包含的文件定义一个 `<language>` 元素。`<language>` 上的 `say-module` 属性告诉核心使用哪个 say 接口模块；`sound-prefix` 设置音频文件的基础路径。
+
+**英语（`lang/en/en.xml`）：**
+
+```xml
+<language name="en" say-module="en" sound-prefix="$${sound_prefix}"
+          tts-engine="cepstral" tts-voice="callie">
+  <phrases>
+    <macros>
+      <X-PRE-PROCESS cmd="include" data="demo/*.xml"/>
+      <X-PRE-PROCESS cmd="include" data="vm/sounds.xml"/>
+      <X-PRE-PROCESS cmd="include" data="dir/sounds.xml"/>
+      <X-PRE-PROCESS cmd="include" data="ivr/*.xml"/>
+    </macros>
+  </phrases>
+</language>
+```
+
+**法语（`lang/fr/fr.xml`）：**
+
+```xml
+<language name="fr" say-module="fr"
+          sound-prefix="$${sounds_dir}/fr/ca/june"
+          tts-engine="cepstral" tts-voice="david">
+```
+
+| 属性 | 用途 |
+|---|---|
+| `name` | 与 `language` / `default_language` 通道变量匹配的语言标签 |
+| `say-module` | 要加载的 say 接口名称（必须与模块注册的 `interface_name` 匹配） |
+| `sound-prefix` | 该语言全部音频文件的基础目录 |
+| `tts-engine` | TTS 引擎名称（供调用 TTS 的短语宏使用，不由 say 子系统直接使用） |
+| `tts-voice` | TTS 音色名称（作用范围与 `tts-engine` 相同） |
+
+如果没有 `say-module`，核心会先回退到已弃用的 `module` 属性（同时记录警告），然后再回退到语言标签本身。
+
+可在通话期间覆盖 `sound_prefix` 通道变量。每次调用 `say` 前后，核心会保存并恢复原来的值，除非通道上的 `sound_prefix_enforced` 设置为真值。
+
+**源码：** `src/mod/say`、`src/mod/applications/mod_dptools`、`src/mod/applications/mod_commands`、`src/switch_ivr.c`、`src/switch_ivr_say.c`

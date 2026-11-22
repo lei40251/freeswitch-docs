@@ -1,0 +1,162 @@
+---
+sidebar_position: 9
+id: mod_cv
+slug: /module-reference/applications/mod_cv
+title: "mod_cv——OpenCV 视频分析与叠加"
+description: "通过 OpenCV 进行视频目标识别、覆盖层绘制及事件触发。"
+sidebar_label: "mod_cv"
+---
+# mod_cv——OpenCV 视频分析与叠加 {#mod_cv-—-opencv-video-analysis-and-overlay}
+
+`mod_cv` 将 OpenCV 计算机视觉库集成到 FreeSWITCH，对传入的视频帧进行实时 Haar 级联分类器检测。检测到对象（通常是人脸）时，模块触发自定义事件，并可在检测对象所处位置自动叠加 PNG 图片或文本标签。
+
+需要在视频呼叫中自动识别对象时可使用此模块，例如在发言人的脸部叠加徽标、根据对象出现/消失事件触发拨号计划动作，或为视频流添加滚动字幕条。模块归类于 `src/mod/applications`。
+
+## 加载模块 {#loading-the-module}
+
+默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，需要手动添加。要启用，请在 `modules.conf.xml` 的 Applications 部分加入以下行：
+
+```xml
+<load module="mod_cv"/>
+```
+
+然后在运行时加载：
+
+```
+load mod_cv
+```
+
+模块构建时需要 OpenCV。构建系统检查 `HAVE_OPENCV`，并链接 `OPENCV_CFLAGS` / `OPENCV_LIBS`。编译之前请安装开发包（通常为 `libopencv-dev`）。
+
+## 配置 {#configuration}
+
+`mod_cv` 没有随附的 `.conf.xml` 文件，加载时不读取 XML 配置。所有参数都通过拨号计划应用或 API 命令的参数传入。初始化上下文时，两个可选的 FreeSWITCH 全局变量会影响模块行为：
+
+| 变量 | 用途 |
+|---|---|
+| `cv_png_prefix` | 加在相对 PNG 文件名之前的目录路径 |
+| `cv_default_cascade` | 未指定时加载的默认 Haar 级联 XML 路径 |
+| `cv_default_nested_cascade` | 默认嵌套级联 XML 路径（用于子区域检测） |
+
+可以使用 `vars.xml` 中的 `global_setvar` 或拨号计划内联方式设置这些变量。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `cv` | 执行级联检测和叠加的阻塞式视频分析循环 | `[cascade_path [nested_cascade_path]] [param=value ...]` |
+| `cv_bug` | 非阻塞媒体钩子，在现有呼叫上附加检测与叠加功能 | `[stop \| [patch] [param=value ...]]` |
+
+### `cv`
+
+应答呼叫，启用已解码视频读取，并进入阻塞循环。视频帧通过级联分类器处理，每一帧都可以触发自定义事件和可选覆盖层。通道结束后，控制权返回拨号计划。
+
+```xml
+<action application="cv" data="/usr/share/opencv/haarcascades/haarcascade_frontalface_alt.xml png=/opt/logo.png abs=center-mid scale=1.2 skip=2"/>
+```
+
+### `cv_bug`
+
+将媒体钩子附加到通道，使检测与正常呼叫处理并行运行。传入 `stop` 移除钩子。以第一个词或独立参数传入 `patch`，可仅使用 `SMBF_VIDEO_PATCH` 模式，而不是默认的组合模式 `SMBF_READ_VIDEO_PING | SMBF_READ_VIDEO_PATCH`。
+
+```xml
+<action application="cv_bug" data="cascade=/usr/share/opencv/haarcascades/haarcascade_frontalface_alt.xml png=/opt/overlay.png abs=top-right"/>
+```
+
+要在通话过程中停止钩子：
+
+```xml
+<action application="cv_bug" data="stop"/>
+```
+
+### `cv` 与 `cv_bug` 的参数参考 {#parameter-reference-for-cv-and-cv_bug}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `cascade` | 主 Haar 级联 XML 文件的路径 | 文件系统路径 | 全局变量 `cv_default_cascade` 的值 |
+| `nested_cascade` | 嵌套（子区域）级联 XML 文件路径 | 文件系统路径 | 全局变量 `cv_default_nested_cascade` 的值 |
+| `confidence` | 触发检测事件前要求的同时检测次数 | 整数 | `20` |
+| `skip` | 两次检测之间跳过的帧数（越高越省 CPU） | 整数 ≥ 1 | `1` |
+| `neighbors` | 传给 `detectMultiScale` 的最小邻域数量 | 整数 | `2` |
+| `max_search_w` | 级联搜索使用的最小对象宽度（像素） | 整数 | `20` |
+| `max_search_h` | 级联搜索使用的最小对象高度（像素） | 整数 | `20` |
+| `search_scale` | `detectMultiScale` 图像金字塔每层的缩放因子（必须大于 1） | 浮点数 | `1.1` |
+| `debug` | 在原始帧上绘制检测图形，以便可视化调试 | `0` 或 `1` | `0` |
+| `png` | 要叠加的 PNG 文件（设置 `cv_png_prefix` 后相对于该路径） | 文件系统路径 | — |
+| `nick` | 下一覆盖层的逻辑名称，供后续引用 | 字符串 | — |
+| `abs` | 覆盖层在画面上的绝对位置（忽略检测区域） | 位置关键字（如 `center-mid`、`top-right`、`left-bot`） | — |
+| `scale` | 覆盖层相对于检测图形宽度的缩放倍数 | 浮点数 | `1.0` |
+| `scaleto` | 将覆盖层拉伸至帧宽（`W`）、帧高（`H`）、两者或都不拉伸。小写 `w`/`h` 则会*清除*相应缩放标志 | 包含 `W`/`H`（设置）或 `w`/`h`（清除）的字符串 | — |
+| `xo` | 水平偏移，按检测图形宽度的比例表示 | 浮点数 | `0` |
+| `yo` | 垂直偏移，按检测图形高度的比例表示 | 浮点数 | `0` |
+| `zidx` | Z 顺序索引，渲染前按升序排序覆盖层 | 整数 | `0` |
+| `txt` | 将文本标签渲染为覆盖层，格式 `fg:bg:font_face:fontsz:text` | 冒号分隔字符串 | — |
+| `ticker` | 滚动字幕条，格式 `fg:bg:font_face:fontsz:speed:pos:text`。`pos` 只能为 `left-bot` 或 `left-top`，其他值回退到 `left-bot` | 7 个字段的冒号分隔字符串 | — |
+| `clear` | 移除当前覆盖层槽位 | 无值标志 | — |
+| `allclear` | 移除所有覆盖层槽位 | 无值标志 | — |
+| `home` | 将当前覆盖层的位置和缩放恢复默认值 | 无值标志 | — |
+| `allhome` | 将所有覆盖层的位置和缩放恢复默认值 | 无值标志 | — |
+| `allflat` | 将所有覆盖层的 z-index 重置为 `0`（类似 `allhome`，但只重置 z-index） | 无值标志 | — |
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `cv_bug` | 按 UUID 在通道上启动、修改或停止 cv 媒体钩子 | `cv_bug <uuid> <start\|stop\|mod\|patch> [param=value ...]` |
+
+### 示例 {#examples}
+
+在活动呼叫上开始检测：
+
+```
+cv_bug <uuid> start cascade=/usr/share/opencv/haarcascades/haarcascade_frontalface_alt.xml
+```
+
+向已运行的钩子添加 PNG 覆盖层：
+
+```
+cv_bug <uuid> mod png=/opt/logo.png abs=top-right scale=0.5
+```
+
+停止检测并移除覆盖层：
+
+```
+cv_bug <uuid> stop
+```
+
+## 通道变量 {#channel-variables}
+
+`mod_cv` 不直接调用 `switch_channel_set_variable`，但在检测状态变化时调用 `switch_channel_execute_on`，以触发由拨号计划变量控制的动作：
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `execute_on_cv_detect_primary` | 读取 | 主对象开始被检测到时执行的拨号计划应用及参数 |
+| `execute_on_cv_detect_off_primary` | 读取 | 主对象停止被检测到时执行的拨号计划应用及参数 |
+| `execute_on_cv_detect_nested` | 读取 | 嵌套对象开始被检测到时执行的拨号计划应用及参数 |
+| `execute_on_cv_detect_off_nested` | 读取 | 嵌套对象停止被检测到时执行的拨号计划应用及参数 |
+
+调用 `cv` 或 `cv_bug` 前先在通道上设置这些变量：
+
+```xml
+<action application="set" data="execute_on_cv_detect_primary=log INFO Face detected"/>
+<action application="set" data="execute_on_cv_detect_off_primary=log INFO Face gone"/>
+```
+
+## 事件 {#events}
+
+`mod_cv` 触发自定义事件子类 `cv::video_detect`（类型 `SWITCH_EVENT_CUSTOM`）。主级联与嵌套级联的检测开始及结束时都会触发。
+
+| 事件头 | 值 | 含义 |
+|---|---|---|
+| `Detect-Type` | `primary`、`nested` | 触发事件的级联类型 |
+| `Detect-Disposition` | `start`、`stop` | 对象出现或消失 |
+| `Detect-Simo-Count` | 整数 | 事件时刻的同时检测帧计数 |
+| `Detect-Average` | 浮点数 | 运行平均检测分数 |
+| `Detect-Last-Score` | 整数 | 最近一次原始检测分数 |
+| `Unique-ID` | UUID | 通道 UUID |
+
+## 依赖项 {#dependencies}
+
+`mod_cv` 编译时需要 **OpenCV**（`libopencv-dev` 或同等软件包）。找不到该库时构建会报错终止。OpenCV 不随 FreeSWITCH 提供，必须通过系统软件包管理器单独安装或自行编译。Haar 级联 XML 数据文件（如 `haarcascade_frontalface_alt.xml`）也必须从 OpenCV 数据发行包取得，并在运行时提供。
+
+**源码：** `src/mod/applications/mod_cv`

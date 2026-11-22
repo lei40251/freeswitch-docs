@@ -1,0 +1,177 @@
+---
+sidebar_position: 1
+id: event-model
+slug: /programming/event-model
+title: "第 44 章：事件模型"
+description: "了解 FreeSWITCH 如何使用带命名头字段及可选正文的事件表示运行状态。"
+sidebar_label: "44. 事件模型"
+---
+
+FreeSWITCH 本质上采用事件驱动架构。系统内部发生的几乎所有重要操作——创建通道、接通呼叫、按下按键、加载模块、执行 API 命令等——都会发布为一个*事件*。你的程序不需要持续轮询 FreeSWITCH 的状态，而是订阅关心的事件并作出响应。理解事件模型是学习本手册这一部分其他内容的基础：事件套接字、脚本 API 和事件处理模块使用的都是本章介绍的同一种事件。
+
+<SignalWireCallout
+  title="将事件流作为托管服务使用"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="event-model"
+  linkText="查看 RELAY 实时 SDK">
+
+SignalWire 的实时 WebSocket API——RELAY——采用与 FreeSWITCH 事件系统相同的思路：通过强类型 Python 和 TypeScript SDK 订阅呼叫事件，并在自己的进程中处理。对于只需单向通知的场景，也可以使用 Webhook。
+
+</SignalWireCallout>
+
+## 什么是事件 {#what-an-event-is}
+
+事件是一种带类型的消息，包含三个部分：
+
+- **类型**（事件 ID，为 `SWITCH_EVENT_*` 枚举值之一）。
+- 一组**头字段**，由名称和值构成的字符串键值对，用于携带事件数据。
+- 可选的**正文**，用于放置不适合放入头字段的自由格式文本，例如 API 调用结果或聊天消息。
+
+开发时最常处理的是头字段。字段名和字段值都是字符串，因此一个事件实际上是一个自描述的小型字典，加上类型标记和可选负载。统一的消息结构使单个事件套接字连接能够通过同一套解析代码接收 `CHANNEL_ANSWER`、`DTMF` 和 `BACKGROUND_JOB` 等事件。
+
+在内部实现中，正文保存在事件结构体上，通过核心 API 读取；`switch_event_add_body()` 用于设置正文，事件消费者读到的就是该字段（参见 `freeswitch/src/switch_event.c` 第 862–870 行和第 1258–1267 行）。
+
+## 事件类型 {#event-types}
+
+事件类型集合由固定枚举 `switch_event_types_t` 定义，声明于 `freeswitch/src/include/switch_types.h` 第 2083–2178 行。每个枚举值在 `freeswitch/src/switch_event.c` 第 137–232 行的 `EVENT_NAMES[]` 表中都有对应的字符串名称。这个字符串会出现在 `Event-Name` 头字段中，也用作按名称订阅事件时的标识。两个列表的条目及顺序始终对应。
+
+例如，枚举值为 `SWITCH_EVENT_CHANNEL_ANSWER`，其线路协议中的名称则为 `CHANNEL_ANSWER`。以下名称均直接取自 `EVENT_NAMES[]`。
+
+### 通道生命周期事件 {#the-channel-lifecycle-events}
+
+这些事件描述某个呼叫腿（即*通道*）的生命周期，也是应用最常接收的事件。
+
+| 事件名称 | 含义 |
+| --- | --- |
+| `CHANNEL_CREATE` | 创建了通道。 |
+| `CHANNEL_STATE` | 通道内部状态发生改变。 |
+| `CHANNEL_CALLSTATE` | 通道的呼叫状态发生改变。 |
+| `CHANNEL_ANSWER` | 通道已应答。 |
+| `CHANNEL_HANGUP` | 通道开始挂机处理。 |
+| `CHANNEL_HANGUP_COMPLETE` | 通道挂机处理完成。 |
+| `CHANNEL_DESTROY` | 通道已销毁，其会话资源已释放。 |
+| `CHANNEL_BRIDGE` | 通道已与另一个通道桥接。 |
+| `CHANNEL_UNBRIDGE` | 通道已解除与另一个通道的桥接。 |
+| `CHANNEL_EXECUTE` | 通道开始执行应用程序。 |
+| `CHANNEL_EXECUTE_COMPLETE` | 通道执行应用程序结束。 |
+| `CHANNEL_PROGRESS` | 通道开始振铃。 |
+| `CHANNEL_PROGRESS_MEDIA` | 通道开始早期媒体。 |
+| `CHANNEL_ORIGINATE` | 已发起创建该通道的呼叫。 |
+| `CHANNEL_PARK` / `CHANNEL_UNPARK` | 通道进入 / 退出驻留状态。 |
+| `CHANNEL_HOLD` / `CHANNEL_UNHOLD` | 通道进入 / 退出保持状态。 |
+
+### 其他常用事件 {#other-commonly-used-events}
+
+| 事件名称 | 含义 |
+| --- | --- |
+| `DTMF` | 在通道上检测到 DTMF 按键。 |
+| `CUSTOM` | 自定义事件，由子类字符串进一步限定（见下文）。 |
+| `HEARTBEAT` | 系统仍然存活，由核心定期发出。 |
+| `BACKGROUND_JOB` | 异步（`bgapi`）任务已完成，包含执行结果。 |
+| `API` | 执行了 API 命令。 |
+| `RECORD_START` / `RECORD_STOP` | 通道录音开始 / 停止。 |
+| `PLAYBACK_START` / `PLAYBACK_STOP` | 通道播放开始 / 停止。 |
+| `STARTUP` / `SHUTDOWN` | 系统启动 / 关闭。 |
+| `MODULE_LOAD` / `MODULE_UNLOAD` | 模块加载 / 卸载。 |
+| `RELOADXML` | XML 注册表已重新加载。 |
+| `LOG` | 产生了一条日志。 |
+| `PRESENCE_IN` / `PRESENCE_OUT` / `PRESENCE_PROBE` | 在线状态（BLF）信令。 |
+
+全部事件类型大约有九十种，上表列出常用部分。完整枚举见前述两个源码文件，最常用事件的逐项说明参见[事件目录](./events-catalog.mdx)。
+
+### CUSTOM 事件和子类 {#custom-events-and-subclasses}
+
+`CUSTOM` 比较特殊。模块发布新类型的业务事件时，不必每次都增加新的枚举值，而是发送 `CUSTOM` 事件，并用**子类（subclass）**标识，通常采用 `module::name` 的命名空间格式。子类位于 `Event-Subclass` 头字段（`freeswitch/src/switch_event.c` 第 784 行）。订阅者同时按照 `CUSTOM` 类型与子类字符串匹配事件。随附模块中的例子包括：
+
+- `sofia::register`：某个 SIP 端点完成注册（`freeswitch/src/mod/endpoints/mod_sofia/mod_sofia.h` 第 84 行）。
+- `conference::maintenance`：会议状态变化，例如成员加入或离开（`freeswitch/src/mod/applications/mod_conference/mod_conference.h` 第 63 行）。
+
+订阅时可以指定某个 `CUSTOM` 子类，这比接收系统中的所有自定义事件精确得多。
+
+## 标准头字段 {#standard-headers}
+
+任何事件在实际发出时，核心都会附加一组通用头字段。相关逻辑位于 `switch_event_prepare_for_fire()`（`freeswitch/src/switch_event.c` 第 1986–2002 行）。
+
+| 头字段 | 内容 |
+| --- | --- |
+| `Event-Name` | 事件的线路名称，例如 `CHANNEL_ANSWER`。 |
+| `Core-UUID` | 当前 FreeSWITCH 核心实例的 UUID。 |
+| `FreeSWITCH-Hostname` | 服务器的操作系统主机名。 |
+| `FreeSWITCH-Switchname` | 配置的交换机名称，可能与主机名不同。 |
+| `FreeSWITCH-IPv4` / `FreeSWITCH-IPv6` | 推断得到的本地 IP 地址。 |
+| `Event-Date-Local` | 事件发出时的本地墙上时钟时间。 |
+| `Event-Date-GMT` | 同一时刻的 RFC 822（GMT）格式时间戳。 |
+| `Event-Date-Timestamp` | 自 Unix Epoch 起算的微秒数。 |
+| `Event-Calling-File` | 触发事件的源码文件。 |
+| `Event-Calling-Function` | 触发事件的源码函数。 |
+| `Event-Calling-Line-Number` | 触发事件的源码行号。 |
+| `Event-Sequence` | 当前核心实例内单调递增的事件序号。 |
+
+`CUSTOM` 事件还会带有前述的 `Event-Subclass` 字段。
+
+### 通道事件头字段 {#channel-event-headers}
+
+事件与某个通道关联时，核心通过 `switch_channel_event_set_basic_data()` 增加一组通道头字段（`freeswitch/src/switch_channel.c` 第 2672–2718 行）。
+
+| 头字段 | 内容 |
+| --- | --- |
+| `Unique-ID` | 通道 UUID，也是定位和操作该通道的关键标识。 |
+| `Channel-Name` | 通道名称，例如 `sofia/internal/1001@example.com`。 |
+| `Channel-State` | 内部状态机的状态，例如 `CS_EXECUTE`。 |
+| `Channel-State-Number` | 该状态对应的数值。 |
+| `Channel-Call-State` | 呼叫状态，例如 `RINGING`、`ACTIVE`、`HANGUP`。 |
+| `Call-Direction` | `inbound` 或 `outbound`。 |
+| `Answer-State` | `ringing`、`early`、`answered` 或 `hangup`。 |
+| `Channel-Call-UUID` | 用于关联同一次呼叫中各呼叫腿的 UUID。 |
+| `Hangup-Cause` | 挂机原因字符串，在通道进入销毁流程后出现。 |
+
+核心通过 `switch_caller_profile_event_set_data()`（`freeswitch/src/switch_caller.c` 第 322–385 行）从通道的 Caller Profile 中增加以 `Caller-` 为前缀的主叫信息，例如 `Caller-Caller-ID-Name`、`Caller-Caller-ID-Number`、`Caller-Destination-Number`、`Caller-ANI`、`Caller-Network-Addr` 和 `Caller-Unique-ID`。通道被桥接时，对端呼叫腿的 Caller Profile 则以 `Other-Leg-` 前缀写入。
+
+### DTMF、BACKGROUND_JOB 与 API 头字段 {#dtmf-background_job-and-api-headers}
+
+一些常见的非生命周期事件拥有自己特有的头字段：
+
+- `DTMF` 包含 `DTMF-Digit`（按下的字符）以及 `DTMF-Duration`（采样数），参见 `freeswitch/src/switch_channel.c` 第 681–682 行。
+- `BACKGROUND_JOB` 包含 `Job-UUID`、`Job-Command` 和 `Job-Command-Arg`；命令文本输出放在事件**正文**中（`freeswitch/src/mod/event_handlers/mod_event_socket/mod_event_socket.c` 第 1570–1574 行）。
+- `API` 包含 `API-Command` 和 `API-Command-Argument`（`freeswitch/src/switch_loadable_module.c` 第 2959–2962 行）。
+
+## 将通道生命周期视为事件流 {#the-channel-lifecycle-as-a-stream-of-events}
+
+一次入站呼叫经历应答、桥接和挂机时，会在其通道上产生可预期的事件序列。沿着同一个 `Unique-ID` 追踪该序列，是监控呼叫的标准方式。一通已应答并经过桥接的典型呼叫如下：
+
+```text
+CHANNEL_CREATE            a new channel exists (Unique-ID assigned)
+  CHANNEL_STATE  ...      one per internal state transition (CS_NEW, CS_INIT, ...)
+  CHANNEL_CALLSTATE ...   call-state transitions (DOWN -> RINGING -> ...)
+CHANNEL_PROGRESS          remote end is ringing
+CHANNEL_PROGRESS_MEDIA    early media (optional)
+CHANNEL_ANSWER            the call is answered
+  CHANNEL_EXECUTE         dialplan application starts (e.g. bridge)
+  CHANNEL_BRIDGE          this leg is bridged to another channel
+  ... DTMF, media events ...
+  CHANNEL_UNBRIDGE        the bridge ends
+  CHANNEL_EXECUTE_COMPLETE application finished
+CHANNEL_HANGUP            hangup has begun; Hangup-Cause is now set
+CHANNEL_HANGUP_COMPLETE   teardown finished, channel statistics finalized
+CHANNEL_DESTROY           the session is freed; no further events for this UUID
+```
+
+需要特别理解两组区别：
+
+- `CHANNEL_HANGUP` 在挂机处理**开始**时触发，`CHANNEL_HANGUP_COMPLETE` 在处理**结束**时触发。进行计费统计应使用 `CHANNEL_HANGUP_COMPLETE`，因为此时通话时长和最终 `Hangup-Cause` 都已确定。
+- `CHANNEL_DESTROY` 是指定 `Unique-ID` 的最后一条事件，之后该 UUID 已不存在。此时适合释放应用自行维护的呼叫状态。
+
+状态变化分别通过 `CHANNEL_STATE`（内部状态机状态 `Channel-State`）和 `CHANNEL_CALLSTATE`（上层呼叫状态 `Channel-Call-State`）报告。大多数应用只需要呼叫状态以及前述生命周期事件；如需更细粒度的追踪，再使用底层状态变化事件。
+
+## 变量如何随事件传递 {#how-variables-ride-on-events}
+
+通道变量会作为带 `variable_` 前缀的头字段出现在通道事件中：例如名为 `foo` 的变量对应头字段 `variable_foo`。核心在 `switch_channel_event_set_extended_data()` 中将通道变量复制到符合条件的事件上（`freeswitch/src/switch_channel.c` 第 2825–2837 行，其中第 2834 行通过 `switch_snprintf(buf, sizeof(buf), "variable_%s", vvar)` 构造字段名）。
+
+因此，在呼叫上设置的数据——`sip_h_X-*` SIP 头字段、计费标签、路由决策、保存在变量中的拨号数字——可以不经额外处理，直接随事件到达消费者。不过不是每种事件都会带上全部变量；扩展数据主要附加在创建、应答、挂机、销毁、执行等重要生命周期事件，以及通道启用了详细事件时（`freeswitch/src/switch_channel.c` 第 2768–2800 行）。
+
+有关 `variable_*` 头字段中的各个变量含义，请参阅[通道变量参考](../reference/channel-variables.mdx)。
+
+## 后续阅读 {#where-to-go-next}
+
+- [事件目录](./events-catalog.mdx)按头字段说明最常使用的具体事件。
+- [通过入站事件套接字接收事件](./esl-inbound.mdx)介绍如何连接 FreeSWITCH、订阅事件并在自己的代码中处理事件。

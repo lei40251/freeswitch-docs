@@ -1,0 +1,133 @@
+---
+sidebar_position: 14
+id: mod_odbc_cdr
+slug: /module-reference/event-handlers/mod_odbc_cdr
+title: "mod_odbc_cdr——向 ODBC 数据表写入 CDR"
+description: "配置 mod_odbc_cdr 在 ODBC 数据库中写入呼叫详细记录。"
+sidebar_label: "mod_odbc_cdr"
+---
+# mod_odbc_cdr——向 ODBC 数据表写入 CDR {#mod_odbc_cdr-—-cdr-to-odbc-tables}
+
+`mod_odbc_cdr` 是 `src/mod/event_handlers` 分类中的状态处理模块，在呼叫腿结束的 `on_reporting` 钩子触发时，将呼叫详细记录直接插入到一个或多个可通过 ODBC（或 FreeSWITCH 原生 DSN 格式）访问的数据库表中。各个表及其数据库列与通道变量的映射都在配置文件中声明，因此修改数据表模式不需要重新编译代码。
+
+如果需要直接把 CDR 存入关系型数据库，避免中间解析 CSV 文件的步骤，可使用此模块。它支持为 A-leg 和 B-leg 分别配置表、插入失败时可选的 CSV 回退，以及通过 FreeSWITCH 统一 DSN 层访问 PostgreSQL、MySQL、SQLite 等所有兼容 ODBC 的数据库。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_odbc_cdr`，默认的 `modules.conf.xml` 加载列表**不包含**该模块，需要手动添加：
+
+```xml
+<load module="mod_odbc_cdr"/>
+```
+
+除编译 FreeSWITCH 时已启用 ODBC 支持外，不需要特殊构建标志（在配置阶段存在 ODBC 头文件时，核心构建会包含 `switch_odbc` 层）。
+
+## 配置：`odbc_cdr.conf.xml` {#configuration-odbc_cdrconfxml}
+
+`mod_odbc_cdr` 加载时读取 `autoload_configs/odbc_cdr.conf.xml`。配置分为两节：`<settings>` 存放全局参数，`<tables>` 存放数据表到通道变量的映射。
+
+### 全局设置 {#global-settings}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `odbc-dsn` | 访问数据库所使用的 ODBC 或原生 DSN 连接字符串 | 任意 DSN 字符串（ODBC 的 `db:user:pass` 或原生 `pgsql://...`、`sqlite://...` 等） | 无（回退到 `dbname`） |
+| `dbname` | 未设置 `odbc-dsn` 时使用的 SQLite 数据库名称 | 字符串 | `odbc_cdr` |
+| `log-leg` | 全局记录哪些呼叫腿 | `a-leg`、`b-leg`、`both` | `both` |
+| `write-csv` | 是否写入 VALUES 字符串的 CSV 副本 | `always`、`never`、`on-db-fail` | `never` |
+| `csv-path` | `write-csv` 为 `always` 时，成功插入后写入 CSV 的目录 | 绝对文件系统路径 | `$${log_dir}/odbc-cdr` |
+| `csv-path-on-fail` | 数据库 INSERT 失败时写入 CSV 的目录 | 绝对文件系统路径 | `$${log_dir}/odbc-cdr-failed` |
+| `debug-sql` | 每条呼叫腿结束后，将完整 INSERT 语句记录到 FreeSWITCH 日志 | `true`、`false` | `false` |
+
+### 数据表定义 {#table-definitions}
+
+`<tables>` 中每个 `<table>` 元素指定一个数据库表，并可通过 `log-leg` 属性限制由哪侧呼叫腿填充（`a-leg`、`b-leg`，或省略表示两者都记录）。每个子 `<field>` 元素把一个数据库列映射到一个通道变量。
+
+**字段属性：**
+
+| 属性 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `name` | 数据库列名称 | 与目标列匹配的字符串 | 必需 |
+| `chan-var-name` | 挂机时读取的通道变量 | 任意通道变量名 | 必需 |
+| `quote` | SQL 语句中的值是否用单引号包裹 | `true`、`false` | `true` |
+| `default-value` | 通道变量未设置时插入的值 | 任意字符串 | 无（INSERT 中省略此字段） |
+
+### 配置示例 {#configuration-example}
+
+```xml
+<configuration name="odbc_cdr.conf" description="ODBC CDR Configuration">
+  <settings>
+    <!-- <param name="odbc-dsn" value="database:username:password"/> -->
+    <param name="odbc-dsn" value="pgsql://hostaddr=192.168.0.100 dbname=freeswitch user=freeswitch password='freeswitch' options='-c client_min_messages=NOTICE'"/>
+    <!-- global value can be "a-leg", "b-leg", "both" (default is "both") -->
+    <param name="log-leg" value="both"/>
+    <!-- value can be "always", "never", "on-db-fail" -->
+    <param name="write-csv" value="on-db-fail"/>
+    <!-- location to store csv copy of CDR -->
+    <param name="csv-path" value="/usr/local/freeswitch/log/odbc_cdr"/>
+    <!-- if "csv-path-on-fail" is set, failed INSERTs will be placed here as CSV files otherwise they will be placed in "csv-path" -->
+    <param name="csv-path-on-fail" value="/usr/local/freeswitch/log/odbc_cdr/failed"/>
+    <!-- dump SQL statement after leg ends -->
+    <param name="debug-sql" value="true"/>
+  </settings>
+  <tables>
+    <!-- only a-legs will be inserted into this table -->
+    <table name="cdr_table_a_leg" log-leg="a-leg">
+      <field name="CallId"                    chan-var-name="call_uuid"/>
+      <field name="orig_id"                   chan-var-name="uuid"/>
+      <field name="term_id"                   chan-var-name="sip_call_id"/>
+      <field name="ClientId"                  chan-var-name="uuid"/>
+      <field name="IP"                        chan-var-name="sip_network_ip"/>
+      <field name="IPInternal"                chan-var-name="sip_via_host"/>
+      <field name="CODEC"                     chan-var-name="read_codec"/>
+      <field name="directGateway"             chan-var-name="sip_req_host"/>
+      <field name="redirectGateway"           chan-var-name="sip_redirect_contact_host_0"/>
+      <field name="CallerID"                  chan-var-name="sip_from_user"/>
+      <field name="TelNumber"                 chan-var-name="sip_req_user"/>
+      <field name="TelNumberFull"             chan-var-name="sip_to_user"/>
+      <field name="sip_endpoint_disposition"  chan-var-name="endpoint_disposition"/>
+      <field name="sip_current_application"   chan-var-name="current_application"/>
+    </table>
+    <!-- only b-legs will be inserted into this table -->
+    <table name="cdr_table_b_leg" log-leg="b-leg">
+      <field name="CallId"                    chan-var-name="call_uuid"/>
+      <field name="orig_id"                   chan-var-name="uuid"/>
+      <field name="term_id"                   chan-var-name="sip_call_id"/>
+      <field name="ClientId"                  chan-var-name="uuid"/>
+      <field name="IP"                        chan-var-name="sip_network_ip"/>
+      <field name="IPInternal"                chan-var-name="sip_via_host"/>
+      <field name="CODEC"                     chan-var-name="read_codec"/>
+      <field name="directGateway"             chan-var-name="sip_req_host"/>
+      <field name="redirectGateway"           chan-var-name="sip_redirect_contact_host_0"/>
+      <field name="CallerID"                  chan-var-name="sip_from_user"/>
+      <field name="TelNumber"                 chan-var-name="sip_req_user"/>
+      <field name="TelNumberFull"             chan-var-name="sip_to_user"/>
+      <field name="sip_endpoint_disposition"  chan-var-name="endpoint_disposition"/>
+      <field name="sip_current_application"   chan-var-name="current_application"/>
+    </table>
+    <!-- both legs will be inserted into this table -->
+    <table name="cdr_table_both">
+      <field name="CallId"  chan-var-name="uuid"/>
+      <field name="orig_id" chan-var-name="Caller-Unique-ID"/>
+      <field name="TEST_id" chan-var-name="sip_from_uri"/>
+    </table>
+  </tables>
+</configuration>
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `odbc-cdr-ignore-leg` | 读取 | 如果在通道上设置为 `true`，无论全局或单表的 `log-leg` 如何配置，都跳过该呼叫腿，不写入任何记录。 |
+
+模块会在呼叫腿结束时读取（而非设置）每个 `<field>` 元素的 `chan-var-name` 所指定的通道变量。运维人员可以编辑 `odbc_cdr.conf.xml` 中的数据表字段列表，决定采集哪些变量。
+
+## 依赖项 {#dependencies}
+
+`mod_odbc_cdr` 通过 FreeSWITCH 的 `switch_cache_db` 层访问数据库。针对非 SQLite 数据库时，该层要求 FreeSWITCH 构建时存在 unixODBC（或 iODBC）头文件及库。还必须安装目标数据库对应的 ODBC 驱动（例如 PostgreSQL 的 `psqlodbc`、MySQL 的 `libmyodbc`），并在 `/etc/odbc.ini` 注册；也可以改用原生 DSN。
+
+## 相关文档 {#see-also}
+
+- [第 27 章：呼叫详细记录](../../integration/call-detail-records.mdx)
+
+**源码：** `src/mod/event_handlers/mod_odbc_cdr`、`src/mod/event_handlers/mod_odbc_cdr/conf/autoload_configs/odbc_cdr.conf.xml`

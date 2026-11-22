@@ -1,0 +1,89 @@
+---
+sidebar_position: 11
+id: mod_webm
+slug: /module-reference/formats/mod_webm
+title: "mod_webm — WebM 文件格式"
+description: "注册 WebM 文件接口，使用 VP8 视频与 Vorbis 音频将音视频通话录制为 .webm 文件。"
+sidebar_label: "mod_webm"
+---
+
+# mod_webm — WebM 文件格式 {#mod_webm-—-webm-file-format}
+
+`mod_webm` 是文件格式模块（`src/mod/formats`），向 FreeSWITCH 注册 `.webm` 文件接口，使核心能够把音视频通话媒体写入 WebM 容器文件。音频使用 Vorbis 编码，视频使用 VP8 编码。模块随附自己的 Vorbis 编解码器实现（`mod_vorbis.c`），并使用 `libwebm` mkvmuxer 库生成符合 Matroska 规范的 WebM 输出。
+
+如果需要直接将视频通话（例如通过 `mod_verto` 或 `mod_rtc` 建立的浏览器 WebRTC 会话）录制成独立的 `.webm` 文件，并让它无须转码即可在现代浏览器或媒体播放器中播放，可以使用该模块。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_webm`。默认的 `autoload_configs/modules.conf.xml` 中**没有**它，需要手动添加。在文件的 `<modules>` 块中加入：
+
+```xml
+<load module="mod_webm"/>
+```
+
+若需在不重启 FreeSWITCH 的情况下运行时加载：
+
+```
+load mod_webm
+```
+
+## 文件接口 {#file-interface}
+
+`mod_webm` 向 FreeSWITCH 文件接口注册扩展名 `webm`。凡是接受文件路径的核心 API（`record`、`record_session`、`uuid_record`、视频录制桥接）都会自动将 `.webm` 路径交给该模块。
+
+此模块**仅支持写入**。读取路径（`webm_file_read`）与定位（`webm_file_seek`）尚未实现，都会返回 `SWITCH_STATUS_FALSE`。唯一支持的用途是录制。
+
+### 独立的 VORBIS 编解码器 {#standalone-vorbis-codec}
+
+除文件接口外，`mod_webm` 还通过 `SWITCH_ADD_CODEC` 注册独立的 `VORBIS` 编解码器接口。它并不限于 WebM 容器内部的音轨编码，而是完整的编解码器实现，可在 8000、44100 和 48000 Hz 采样率下独立用于 RTP 和呼叫协商。
+
+打开文件准备写入时：
+
+- 根据会话采样率及声道数添加音轨，以 20 ms 包时长使用 Vorbis 编码。
+- 在收到第一帧视频时自动添加 VP8 视频轨道；轨道尺寸取自首帧图像。
+- 复用器使用 `kFile` 模式，生成带有 Cue 索引、可以定位的 WebM 文件。
+- 复用应用元数据设为 `FreeSWITCH`，写入应用则设置为完整的 FreeSWITCH 版本字符串。
+
+开始写入前，音频帧会预先缓存 1200 ms，用于补偿视频同步。
+
+## 在拨号计划中使用模块 {#using-the-module-in-the-dialplan}
+
+由于 `mod_webm` 接入了文件接口，标准拨号计划应用可直接处理 `.webm` 路径。该模块专用于录制，不支持回放。
+
+### 录制视频通话 {#recording-a-video-call}
+
+```xml
+<action application="record_session" data="/recordings/${uuid}.webm"/>
+```
+
+### 视频桥接录制 {#video-bridge-recording}
+
+```xml
+<action application="set" data="RECORD_STEREO=true"/>
+<action application="set" data="recording_follow_transfer=true"/>
+<action application="record_session" data="/recordings/${uuid}.webm"/>
+<action application="bridge" data="sofia/gateway/mygw/15551234567"/>
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 设置／读取 | 用途 |
+|---|---|---|
+| `webmv2_video_offset` | 读取 | 文件打开时应用于视频帧时间戳的整数偏移（毫秒）。从文件打开参数集合（`handle->params`）读取，而非直接从通道读取。 |
+
+`webmv2_video_offset` 通过文件打开参数传递，而不是标准通道变量。内部默认值为 `-100`。
+
+## 依赖 {#dependencies}
+
+`mod_webm` 需要两个未包含在默认 FreeSWITCH 构建中的外部库：
+
+| 库 | 用途 |
+|---|---|
+| `libwebm`（mkvmuxer） | WebM/Matroska 容器复用 |
+| `libvorbis`／`libogg` | Vorbis 音频编码与 Ogg 包封装 |
+
+编译时必须存在这两个库。`libwebm` 提供由模块直接包含的 `mkvwriter.hpp` 复用器头文件。
+
+---
+
+**源码：** `src/mod/formats/mod_webm`

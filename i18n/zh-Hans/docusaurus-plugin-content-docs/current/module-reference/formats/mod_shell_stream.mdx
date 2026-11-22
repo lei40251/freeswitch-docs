@@ -1,0 +1,72 @@
+---
+sidebar_position: 6
+id: mod_shell_stream
+slug: /module-reference/formats/mod_shell_stream
+title: "mod_shell_stream — 通过 Shell 命令生成音频流"
+description: "注册 shell_stream 文件接口，将任意 Shell 命令的标准输出作为只读音频源进行播放。"
+sidebar_label: "mod_shell_stream"
+---
+
+# mod_shell_stream — 通过 Shell 命令生成音频流 {#mod_shell_stream-—-audio-streaming-from-a-shell-command}
+
+`mod_shell_stream` 是文件格式模块（`src/mod/formats`），注册 `shell_stream` 文件接口。它启动一个 Shell 命令作为子进程，通过管道把子进程的标准输出送入 FreeSWITCH 音频引擎，并把该字节流作为可播放的音频源。
+
+当你需要通过外部程序实时合成或转换音频时，可以使用此模块。例如，调用 TTS 可执行文件、运行音频编码流水线，或通过单行 Shell 命令从网络音源获取音频，而无须编写专用的 FreeSWITCH 模块。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_shell_stream`，**默认不加载**；默认 `autoload_configs/modules.conf.xml` 中对应条目被注释。
+
+若要启用，请在 `autoload_configs/modules.conf.xml` 中取消注释或添加以下行：
+
+```xml
+<load module="mod_shell_stream"/>
+```
+
+除标准 FreeSWITCH 构建环境外，不需要特殊编译标志。
+
+## 文件接口 {#file-interface}
+
+`mod_shell_stream` 注册一个文件扩展名：
+
+| 扩展名 | 模式 | 描述 |
+|---|---|---|
+| `shell_stream` | 只读 | 执行 Shell 命令，并将其标准输出作为原始音频流 |
+
+模块会明确拒绝写入模式。凡是 FreeSWITCH 接受文件路径的地方（例如拨号计划 `playback` 应用），都可以使用 `shell_stream` 接口。
+
+### FreeSWITCH 如何调用命令 {#how-freeswitch-invokes-the-command}
+
+当 FreeSWITCH 打开 `shell_stream` 路径时，会在执行前向命令路径尾部附加采样率和声道数。无论呼叫协商的声道数是多少，该模块都强制将声道数设为 1：
+
+```
+<your-command> -r <samplerate> -c <channels>
+```
+
+子进程必须以指定采样率和声道数向标准输出写入原始音频数据。子进程退出（或一次写入不足 4 字节）时，流即结束。
+
+### 在拨号计划中使用 {#usage-in-the-dialplan}
+
+使用 `shell_stream://` 前缀，将 Shell 命令作为文件路径传入：
+
+```xml
+<action application="playback" data="shell_stream:///usr/local/bin/my-tts-script.sh hello world"/>
+```
+
+模块会启动 `/usr/local/bin/my-tts-script.sh hello world -r 8000 -c 1`（采样率和声道参数由 FreeSWITCH 追加）。脚本把原始音频字节写入标准输出，FreeSWITCH 再将其读入呼叫的音频路径。
+
+如有需要，也可以通过 FreeSWITCH 的 `file_string://` 文件格式串接多个文件：
+
+```xml
+<action application="playback" data="file_string://shell_stream:///path/to/intro.sh!shell_stream:///path/to/main.sh"/>
+```
+
+## 依赖 {#dependencies}
+
+除标准 POSIX 管道与 `fork` API 外，不需要其他外部库。
+
+## 另请参阅 {#see-also}
+
+- [第 18 章：音频文件与流媒体源](../../media/audio-files-and-streaming.mdx)
+
+**源码：** `src/mod/formats/mod_shell_stream`

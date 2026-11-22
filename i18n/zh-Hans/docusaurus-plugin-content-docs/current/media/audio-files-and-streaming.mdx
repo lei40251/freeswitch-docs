@@ -1,0 +1,796 @@
+---
+sidebar_position: 3
+id: audio-files-and-streaming
+slug: /media-and-codecs/audio-files
+title: "第 18 章：音频文件与流媒体源"
+description: "播放文件路径、音调流、本地播放列表及远程 MP3/Icecast 音频，以及处理各种音频源的格式模块。"
+sidebar_label: "18. 音频文件与流媒体源"
+---
+
+# 第 18 章：音频文件与流媒体源 {#chapter-18-audio-files-and-streaming-sources}
+
+FreeSWITCH 可以从多种来源解析音频：通过媒体文件系统解析的普通文件路径、合成音调流、本地管理的播放列表流，以及远程 MP3 或 Icecast 音频流。每种音频源都由专门的格式模块处理，模块会注册一个或多个 URI Scheme 或文件扩展名。本章介绍管理员可使用的全部可播放音频源类型、对应的模块，以及控制其行为的配置参数。
+
+<SignalWireCallout
+  title="一行完成录音与存储"
+  href="https://signalwire.com/docs/swml/reference/calling/record-call"
+  page="audio-files"
+  linkText="查看 SWML 中的 record_call">
+
+在 SignalWire 的 JSON/YAML 呼叫控制标记语言 SWML 中，`record_call` 只需一行即可录制通话。文件会保存到项目中，并提供 URL 和 Webhook；格式、磁盘存储和轮转由平台负责。
+
+</SignalWireCallout>
+
+## 可播放音频源概览 {#playable-sources-overview}
+
+在 FreeSWITCH 所有接受音频源的地方——例如拨号计划应用 `playback`、`ringback`、`hold_music`、会议提示音、IVR 菜单等——取值都属于以下两类之一：
+
+- **文件路径**：绝对路径，或相对于 `$${sound_prefix}` 的路径。
+- **流 URI**：带有 Scheme 的字符串，例如 `local_stream://moh`、`tone_stream://...`、`shout://...` 或 `silence_stream://500`。
+
+### sound\_prefix 变量 {#the-sound_prefix-variable}
+
+`$${sound_prefix}` 是在 `conf/vanilla/vars.xml` 中设置的预处理变量：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="sound_prefix=$${sounds_dir}/en/us/callie"/>
+```
+
+如果给出不以 `/` 开头的文件名，FreeSWITCH 会在前面加 `$${sound_prefix}`，形成完整路径。运行时可使用 `global_setvar sound_prefix=<path>` 覆盖该变量；若要永久修改，需编辑 `vars.xml` 并重新加载配置。
+
+`$${sounds_dir}` 是 FreeSWITCH 内置变量，会自动解析为编译时指定的声音文件安装目录（Debian 系列系统通常为 `/usr/share/freeswitch/sounds`）。
+
+### URI Scheme 汇总 {#uri-scheme-summary}
+
+| Scheme | 模块 | 用途 |
+|---|---|---|
+| `local_stream://` | `mod_local_stream` | 基于目录的播放列表音频流 |
+| `tone_stream://` | `mod_tone_stream` | 合成 TGML 音调 |
+| `silence_stream://` | `mod_tone_stream` | 指定时长的静音 |
+| `shout://` | `mod_shout` | HTTP MP3 或 Icecast 音频流（普通连接） |
+| `shouts://` | `mod_shout` | HTTP MP3 或 Icecast 音频流（TLS） |
+
+普通文件路径（`.wav`、`.ogg`、`.mp3` 等）会根据扩展名交给 `mod_sndfile` 或 `mod_shout`。
+
+FreeSWITCH 还附带其他流媒体源格式模块，加载后会注册自己的 Scheme 或扩展名：[`mod_vlc`](../module-reference/formats/mod_vlc.mdx) 通过 libVLC 播放和推送媒体，[`mod_shell_stream`](../module-reference/formats/mod_shell_stream.mdx) 将外部命令的标准输出作为音频流，[`mod_http_cache`](../module-reference/applications/mod_http_cache.mdx) 则通过 HTTP(S) 获取并缓存远程音频供播放。具体内容见第 9 部分的模块参考。
+
+---
+
+## mod\_sndfile 与支持的文件格式 {#mod_sndfile-and-supported-file-formats}
+
+`mod_sndfile` 封装 libsndfile，是已录制音频文件的默认处理模块。加载时，它会根据主机系统上 libsndfile 报告的可用格式动态注册扩展名。
+
+### 核心扩展名 {#core-extensions}
+
+以下扩展名通常都会注册（前提是 libsndfile 支持，且未受可选 `allowed-extensions` 配置参数限制）：
+
+| 扩展名 | 格式 |
+|---|---|
+| `wav` | Microsoft WAV（PCM，通常为 16 位） |
+| `aiff`、`iff` | AIFF / IFF（16 位 PCM） |
+| `ogg`、`oga` | Ogg Vorbis |
+| `flac` | FLAC |
+| `au`、`snd` | Sun AU |
+| `raw`、`r8` | 原始 PCM，16 位、8 kHz |
+| `r16` | 原始 PCM，16 位、16 kHz |
+| `r24` | 原始 PCM，24 位、24 kHz |
+| `r32` | 原始 PCM，32 位、32 kHz |
+| `gsm` | 原始 GSM 6.10，8 kHz |
+| `ul`、`ulaw` | 原始 G.711 μ-law，8 kHz |
+| `al`、`alaw` | 原始 G.711 A-law，8 kHz |
+| `vox` | Dialogic VOX ADPCM，8 kHz，单声道 |
+| `adpcm` | IMA ADPCM WAV，8 kHz，单声道 |
+| `wve` | Psion WVE（A-law），8 kHz |
+| `htk` | HTK 格式，8 kHz |
+| `xi` | 乐器文件（16 位 DPCM，44.1 kHz） |
+| `sds` | MIDI Sample Dump 标准，8 kHz |
+
+### 采样率解析 {#sample-rate-resolution}
+
+打开文件时，`mod_sndfile` 首先尝试打开 `<dir>/<rate>/<filename>`（将会话采样率作为路径的一部分）。如果路径不存在，依次回退到可用的最高采样率目录（48000、32000、16000、8000），最终尝试传入的原始路径。
+
+### 配置 {#configuration}
+
+`mod_sndfile` 无需强制配置。默认安装提供 `conf/autoload_configs/sndfile.conf.xml`，其中全部参数均被注释。可选的 `allowed-extensions`（逗号分隔列表）限制注册哪些扩展名；未设置时，注册 libsndfile 报告支持的全部扩展名。
+
+---
+
+## mod\_native\_file {#mod_native_file}
+
+`mod_native_file` 负责处理数据已采用编解码器原生格式编码的文件，可绕过 PCM 转码。加载时，它枚举所有 `encoded_bytes_per_packet` 非零的音频编解码器实现，并将编解码器的 IANA 名称注册为文件扩展名。
+
+典型的已注册扩展名有 `PCMU`、`PCMA`、`G722`、`G729`、`GSM`、`iLBC`、`OPUS` 等，具体取决于加载了哪些编解码器模块。
+
+由 `mod_native_file` 处理的文件会原样传输，不会重新编码（设置 `SWITCH_FILE_NATIVE` 和 `SWITCH_FILE_NOMUX` 标志）。模块根据扩展名推断采样率：`G722` 文件默认 16000 Hz，其他文件默认 8000 Hz。
+
+---
+
+## mod\_local\_stream 与保持音乐 {#mod_local_stream-and-music-on-hold}
+
+`mod_local_stream` 提供由音频文件目录支持的、持续运行的共享音频流。多个通道可以同时连接到同一个流，所有听众都在相同播放位置听到相同声音。因此适合保持音乐（MOH）和背景音乐场景。
+
+URI Scheme 如下：
+
+```
+local_stream://<directory-name>
+```
+
+其中 `<directory-name>` 与 `local_stream.conf.xml` 中 `<directory>` 元素的 `name` 属性匹配。
+
+当 FreeSWITCH 打开 `local_stream://moh` 时，会先查找 `moh/<session_sample_rate>`（例如 `moh/16000`）。若没有配置该目录，则回退到 `moh`；如果仍不存在，则回退到 `default`。
+
+### 配置文件 {#configuration-file}
+
+`conf/autoload_configs/local_stream.conf.xml` 定义一个或多个命名目录。默认配置附带四个针对不同采样率的 MOH 目录和一个 `default` 目录：
+
+```xml
+<configuration name="local_stream.conf" description="stream files from local dir">
+
+  <!-- fallback to default if requested moh class isn't found -->
+  <directory name="default" path="$${sounds_dir}/music/8000">
+    <param name="rate"       value="8000"/>
+    <param name="shuffle"    value="true"/>
+    <param name="channels"   value="1"/>
+    <param name="interval"   value="20"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+
+  <directory name="moh/8000" path="$${sounds_dir}/music/8000">
+    <param name="rate"       value="8000"/>
+    <param name="shuffle"    value="true"/>
+    <param name="channels"   value="1"/>
+    <param name="interval"   value="20"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+
+  <directory name="moh/16000" path="$${sounds_dir}/music/16000">
+    <param name="rate"       value="16000"/>
+    <param name="shuffle"    value="true"/>
+    <param name="channels"   value="1"/>
+    <param name="interval"   value="20"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+
+  <directory name="moh/32000" path="$${sounds_dir}/music/32000">
+    <param name="rate"       value="32000"/>
+    <param name="shuffle"    value="true"/>
+    <param name="channels"   value="1"/>
+    <param name="interval"   value="20"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+
+  <directory name="moh/48000" path="$${sounds_dir}/music/48000">
+    <param name="rate"       value="48000"/>
+    <param name="shuffle"    value="true"/>
+    <param name="channels"   value="1"/>
+    <param name="interval"   value="10"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+
+</configuration>
+```
+
+`path` 属性指定读取音频文件的文件系统目录。模块会读取该目录中全部受支持的音频文件；扩展名为 `.loc` 的文件被视为纯文本文件路径列表，每行一个路径。
+
+### 目录参数参考 {#directory-parameter-reference}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `rate` | 流采样率，按此采样率打开文件。 | `8000`、`12000`、`16000`、`24000`、`32000`、`48000` | `8000` |
+| `shuffle` | 将目录中的播放顺序随机化。为 `true` 时，从文件列表的随机位置开始。 | `true`、`false` | `false` |
+| `channels` | 音频通道数量。 | `1`（单声道）、`2`（立体声） | `1` |
+| `interval` | 打包时间间隔，单位毫秒。必须是 10 的整数倍且不超过 120 毫秒；越界时回退到默认值。 | 整数，10 的倍数，`10`～`120` | `20` |
+| `timer-name` | 音频输出节拍所使用的定时器。`soft` 为软件定时器，`posix` 使用 POSIX 定时器。 | `soft`、`posix` | `soft` |
+| `chime-list` | 需要定期插播的音频文件，使用逗号分隔，轮流播放。 | 逗号分隔的文件路径 | 无 |
+| `chime-freq` | 插播提示音的间隔（秒），必须大于 1。 | 大于 1 的整数 | `30` |
+| `chime-max` | 插播提示音在切回主音频流之前，最多允许播放的秒数，必须大于 1。 | 大于 1 的整数 | 不限 |
+| `volume` | 调整输出音量；精细音量控制，内部会将其限制在允许的范围内。 | 整数 `-50`～`50` | `0`（不调整） |
+| `auto-volume` | 自动增益控制（AGC）的目标平均能量；`0` 关闭 AGC。 | 整数 `0`～`20000` | `0` |
+| `auto-volume-low-point` | AGC 的低能量阈值，配合 `auto-volume` 使用。 | 整数 `0`～`20000` | `0` |
+| `prebuf` | 预缓冲大小（字节），控制将音频分发给听众前要缓冲多少数据。 | 整数（字节） | `65536` |
+| `blank-img` | 音频流没有视频时显示的 PNG 图片路径。 | `.png` 文件路径 | 无 |
+| `logo-img` | 有横幅时，叠加到视频帧上的 PNG 徽标图片路径。 | `.png` 文件路径 | 无 |
+| `logo-always` | 为 `true` 时，即使没有横幅文字也显示徽标。 | `true`、`false` | `false` |
+| `logo-position` | 徽标图像在视频帧上的位置。 | `left-top`、`left-mid`、`left-bot`、`center-top`、`center-mid`、`center-bot`、`right-top`、`right-mid`、`right-bot`、`none` | 无 |
+| `logo-opacity` | 徽标叠加层的不透明度（0 表示透明，100 表示不透明）。 | 整数 `0`～`100` | `100` |
+| `text-opacity` | 视频帧上横幅文字的不透明度。 | 整数 `0`～`100` | `100` |
+
+### 运行时管理 {#runtime-management}
+
+`mod_local_stream` 提供以下 API 命令用于运行时控制：
+
+```
+local_stream <show|start|reload|stop|hup|vol> <stream-name> [<args>]
+```
+
+| 子命令 | 作用 |
+|---|---|
+| `show` | 列出所有正在运行的流（名称和路径）。带流名称时显示详情；附加 `as xml` 以 XML 输出。 |
+| `start` | 按名称启动已停止或新添加的流。 |
+| `stop` | 停止指定流。已连接的听众会收到静音。 |
+| `reload` | 重新加载流配置并重启播放。流正在使用时，执行部分重新加载，只更新无需重启线程即可修改的参数。 |
+| `hup` | 跳过当前文件，立即开始下一文件。 |
+| `vol` | 在运行时调整流音量。格式：`local_stream vol <name> <level\|auto:avg[:low]>`。整数音量级别（限制在 `-50`～`50`）用于设置固定增益并关闭 AGC。`auto:` 形式启用 AGC：`avg` 是目标平均能量，可选的 `:low` 是低能量阈值（各为 `0`～`20000`）。无参数时报告当前设置。 |
+
+示例：
+
+```
+local_stream show moh/8000
+local_stream reload moh/8000
+```
+
+---
+
+## mod\_tone\_stream 与 TGML 生成器 {#mod_tone_stream-and-the-tgml-generator}
+
+`mod_tone_stream` 通过 Teletone Generation Markup Language（TGML）文本描述合成音频。URI Scheme 如下：
+
+```
+tone_stream://<tgml-string>[;loops=<n>]
+```
+
+可选的 `loops` 后缀（以 `;` 分隔）指定音调序列的重复次数。值为 `-1` 表示无限循环。
+
+### TGML 语法 {#tgml-syntax}
+
+TGML 是用分号分隔的一系列命令和音调规格。每个音调规格的形式如下：
+
+```
+%(on_ms,off_ms,freq1[,freq2,...])
+```
+
+| 字段 | 含义 |
+|---|---|
+| `on_ms` | 有音持续时长（毫秒） |
+| `off_ms` | 静音持续时长（毫秒），0 表示持续音调 |
+| `freq1`、`freq2`、…… | 一个或多个频率（Hz），混合输出 |
+
+其他 TGML 修饰符（放在音调规格之前，以 `;` 结束）：
+
+| 修饰符 | 语法 | 含义 |
+|---|---|---|
+| 音量 | `v=<db>` | 设置初始音量（dB，例如 `v=-7`） |
+| 持续时间上限 | `d=<ms>` | 应用于后续音调的最大持续时间（毫秒） |
+| 循环（单条音调） | `l=<n>` | 紧接其后的音调规格重复次数 |
+| 循环（整个序列） | `L=<n>` | 整个音调序列的重复次数 |
+| 音量衰减间隔 | `>=<ms>` | 每隔 `<ms>` 毫秒进行一次音量衰减，每次按衰减系数降低音量 |
+| 音量增长间隔 | `<=<ms>` | 每隔 `<ms>` 毫秒进行一次音量增长，每次按增长系数提高音量 |
+| 音量变化量 | `+=<db>` | 每次衰减或增长时调整的 dB 值（与 `>` 或 `<` 配合） |
+| 等待 | `w=<ms>` | 在下一个音调前插入指定毫秒数的静音等待 |
+| 通道数 | `c=<n>` | 设置输出音频通道数量 |
+| 采样率 | `r=<hz>` | 设置后续生成音调使用的采样率 |
+
+**示例：美国拨号音（350 Hz + 440 Hz，持续）**
+
+```
+tone_stream://%(10000,0,350,440);loops=-1
+```
+
+**示例：美国回铃音（响 2 秒、停 4 秒）**
+
+```
+tone_stream://%(2000,4000,440,480);loops=-1
+```
+
+**示例：SIT（特殊信息音）**
+
+```
+tone_stream://%(274,0,913.8);%(274,0,1370.6);%(380,0,1776.7)
+```
+
+默认 `vars.xml` 中使用此语法定义各国回铃音，例如：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="us-ring=%(2000,4000,440,480)"/>
+```
+
+之后可以在任何需要回铃音的地方通过 `$${us-ring}` 引用该变量。
+
+### 音调文件输入 {#tone-file-input}
+
+除了内联 TGML 字符串，`tone_stream` 还可以从文件中读取音调描述：
+
+```
+tone_stream://path=</path/to/tone.tgml>
+```
+
+文件包含多行 TGML，每行一条命令或一个音调规格。
+
+### silence\_stream {#silence_stream}
+
+`mod_tone_stream` 还注册了用于生成静音的 `silence_stream://` Scheme：
+
+```
+silence_stream://<duration_ms>[,<comfort_noise_level>]
+```
+
+`duration_ms` 指定静音的持续时长（毫秒）。负值表示无限期静音。可选的 `comfort_noise_level` 是一个正整数除数，用于控制生成的舒适噪声幅度：值越小，噪声越响；值越大，噪声越轻（例如 `400` 是较轻舒适噪声的典型值）。省略该参数时，生成纯数字静音（全零）。
+
+**示例：5 秒静音**
+
+```
+silence_stream://5000
+```
+
+**示例：带舒适噪声的无限静音**
+
+```
+silence_stream://-1,400
+```
+
+---
+
+## mod\_shout 与 shout:// Scheme {#mod_shout-and-the-shout-scheme}
+
+`mod_shout` 提供 MP3 文件和基于 HTTP 的 Icecast/SHOUTcast 音频流读写能力。它链接到 libshout、libmp3lame 和 libmpg123。
+
+### 注册的扩展名与 Scheme {#registered-extensions-and-schemes}
+
+`mod_shout` 注册以下文件扩展名：`mp3`、`mpga`。
+
+还注册以下 URI Scheme：`shout`、`shouts`。
+
+使用 `shout://` 或 `shouts://` URI 时，模块会在内部构建 HTTP 或 HTTPS URL，并通过 libcurl 获取流。`shouts://` 对应 `https://`。
+
+模块源码注释给出用于 Icecast 广播的 URL 形式：
+
+```
+shout://user:pass@host.com/mount.mp3
+```
+
+### 读取：HTTP 与 Icecast 音频流 {#reading-http-and-icecast-streams}
+
+要播放 HTTP 上的 MP3 文件或 Icecast 音频流：
+
+```xml
+<action application="playback" data="shout://icecast.example.com/stream.mp3"/>
+```
+
+```xml
+<action application="playback" data="shout://user:password@broadcast.example.com/live.mp3"/>
+```
+
+对于使用 TLS 保护的流：
+
+```xml
+<action application="playback" data="shouts://secure.example.com/stream.mp3"/>
+```
+
+本地 MP3 文件可直接通过路径和已注册的 `mp3` 扩展名打开，不需要 `shout://` 前缀：
+
+```xml
+<action application="playback" data="/var/sounds/hold_music.mp3"/>
+```
+
+### 写入：Icecast 广播 {#writing-icecast-broadcasting}
+
+将 `shout://` URL 作为录音目标时，`mod_shout` 可以把音频编码并广播至 Icecast 服务器。模块运行时通过 LAME 将 PCM 音频编码为 MP3。
+
+### 全局配置 {#global-configuration}
+
+默认配置附带 `conf/autoload_configs/shout.conf.xml`，全部参数均被注释。`mod_shout` 在加载时读取该文件中的可选全局设置：
+
+| 参数 | 用途 | 默认值 |
+|---|---|---|
+| `decoder` | 强制使用指定的 mpg123 解码器架构（如 `i586`）。为空时 mpg123 自动选择最优解码器。 | 空，自动选择 |
+| `volume` | mpg123 播放音量的浮点乘数（如 `0.1`）。仅设置了 `decoder` 或 `outscale` 时应用。 | 未设置 |
+| `outscale` | mpg123 输出缩放系数（整数）。64 位构建中，如果没有显式全局配置，FreeSWITCH 会应用默认值 `8192`；设置该参数可覆盖。 | 未设置；64 位且无其他全局设置时应用 `8192` |
+| `encode-brate` | 写入 MP3 或向 Icecast 广播时，LAME 编码器使用的比特率（kbps）。 | `16 * (samplerate/8000) * channels` kbps（8 kHz 单声道为 16 kbps） |
+| `encode-resample` | LAME 编码器输出采样率（Hz）。 | 未设置，LAME 使用会话采样率 |
+| `encode-quality` | LAME 编码质量（整数，值越小质量越高）。未设置时 FreeSWITCH 使用质量等级 `2`（高）。 | `2` |
+
+---
+
+## hold\_music 变量 {#the-hold_music-variable}
+
+全局变量 `hold_music` 指定播放给进入保持状态的主叫方的音频源。它在 `conf/vanilla/vars.xml` 中设置：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
+```
+
+任何 FreeSWITCH 文件接口支持的可播放音频源都可以赋给 `hold_music`：`local_stream://` URI、`tone_stream://` URI、绝对文件路径或 `shout://` 流 URL。
+
+该变量在发起保持时求值。按单通呼叫或用户目录覆盖时，遵循标准变量优先级：拨号计划或用户目录设置的通道变量优先于全局值。
+
+**示例：**
+
+```xml
+<!-- Use a local stream (default) -->
+<X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
+
+<!-- Use a synthesized ringback tone as hold music -->
+<X-PRE-PROCESS cmd="set" data="hold_music=tone_stream://%(2000,4000,440,480);loops=-1"/>
+
+<!-- Use a remote Icecast stream -->
+<X-PRE-PROCESS cmd="set" data="hold_music=shout://icecast.example.com/jazz.mp3"/>
+
+<!-- Per-call override in dialplan -->
+<action application="set" data="hold_music=local_stream://moh/16000"/>
+```
+
+当 `hold_music` 指向 `local_stream://moh` 时，FreeSWITCH 会根据会话协商的编解码器采样率，自动选择匹配的采样率子目录（`moh/8000`、`moh/16000` 等）；找不到时依次回退至 `moh`、`default`。
+
+---
+
+## 通话录音 {#recording-calls}
+
+FreeSWITCH 提供两种互补的录音机制：拨号计划应用 `record_session` 在建立呼叫时为会话附加录音器；API 命令 `uuid_record` 则可通过 CLI 或 ESL 对正在进行的呼叫开始或停止录音。两者都可以写入已加载格式模块支持的文件格式（WAV、通过 `mod_shout` 编码的 MP3、OGG 等）。录音行为由一组以 `RECORD_` 开头的通道变量控制。
+
+### record\_session：通过拨号计划录制完整通话 {#record_session-full-call-recording-from-the-dialplan}
+
+`record_session` 启动后台媒体挂钩（media tap），把读取方向（入站、主叫）和写入方向（出站、被叫）的音频混合录制到同一个文件。录音器独立于拨号计划运行，持续至呼叫结束、显式执行 `stop_record_session`，或可选超时到期。
+
+**语法：**
+
+```text
+record_session <path> [+<timeout_sec>] [{var1=val1,var2=val2,...}]
+```
+
+| 参数 | 说明 |
+|---|---|
+| `<path>` | 目标文件路径，必须是绝对路径或相对于 `sound_prefix` 的路径。文件扩展名决定输出格式。 |
+| `+<timeout_sec>` | 可选；在指定秒数后停止录音，必须带 `+` 前缀。 |
+| `{var=val,...}` | 可选的内联变量区块。设置只对该次录音生效的 `RECORD_*` 变量（多个录音并行时优先于通道变量）。 |
+
+要停止由 `record_session` 开始的录音：
+
+```text
+stop_record_session <path>
+```
+
+`stop_record_session` 的 `<path>` 参数必须与调用 `record_session` 时传入的路径完全一致。
+
+其他按录音实例控制的应用（均接受匹配当前录音的 `<path>`）：
+
+| 应用 | 作用 |
+|---|---|
+| `record_session_pause <path>` | 暂停向文件写入音频。暂停期间收到的音频会被丢弃。 |
+| `record_session_resume <path>` | 恢复对已暂停录音的写入。 |
+| `record_session_mask <path>` | 在文件中用静音（舒适噪声）替换音频，但不停录。见 18.8.5 节。 |
+| `record_session_unmask <path>` | 取消遮蔽，恢复正常音频采集。 |
+
+### uuid\_record：通过 API 控制正在进行的录音 {#uuid_record-live-recording-control-via-api}
+
+`uuid_record` 是 FreeSWITCH API 命令（可在 `fs_cli` 提示符或通过 ESL 使用），用于对已经建立的呼叫附加或移除录音器。
+
+**语法：**
+
+```text
+uuid_record <uuid> <start|stop|mask|unmask|pause|resume> <path> [<limit>] [<recording_vars>]
+```
+
+| 字段 | 说明 |
+|---|---|
+| `<uuid>` | 目标会话的 UUID。 |
+| `<start\|stop\|mask\|unmask\|pause\|resume>` | 要执行的操作。 |
+| `<path>` | 目标文件路径；所有操作都需要指定，停止或遮蔽时必须与 `start` 使用的路径一致。 |
+| `<limit>` | 可选；最长录音时长（秒），仅适用于 `start`。 |
+| `<recording_vars>` | 可选；经过 URL 编码的内联变量区块（语法与拨号计划应用的 `{var=val,...}` 相同）。 |
+
+**示例：**
+
+```text
+uuid_record 2dcb9f46-3a73-11ef-8d62-b7e5a3d1e2f9 start /var/recordings/2dcb9f46.wav
+uuid_record 2dcb9f46-3a73-11ef-8d62-b7e5a3d1e2f9 stop  /var/recordings/2dcb9f46.wav
+uuid_record 2dcb9f46-3a73-11ef-8d62-b7e5a3d1e2f9 pause /var/recordings/2dcb9f46.wav
+uuid_record 2dcb9f46-3a73-11ef-8d62-b7e5a3d1e2f9 resume /var/recordings/2dcb9f46.wav
+```
+
+### 立体声录音 {#stereo-recordings}
+
+默认情况下，`record_session` 将呼叫的两条腿混合录制为单声道文件。设置 `RECORD_STEREO=true` 后，生成双声道 WAV：声道 1 是读取流（主叫音频），声道 2 是写入流（被叫音频）。要求输出文件格式支持立体声；`.wav` 和 `.ogg` 均可，通过 `mod_shout` 编码的 `.mp3` 也支持立体声输出。
+
+`RECORD_STEREO_SWAP=true` 仍进行相同的立体声拆分，但交换声道分配：声道 1 接收写入流，声道 2 接收读取流。
+
+`RECORD_STEREO` 与 `RECORD_STEREO_SWAP` 互斥；若同时设置，`RECORD_STEREO` 优先。只有被录制的会话腿是单声道时，才能使用立体声分轨；如果该腿协商的编解码器本身就是立体声，这两个标志都不会生效。
+
+### RECORD\_\* 控制与元数据变量 {#record_-control-and-metadata-variables}
+
+以下通道变量（或内联录音变量）控制录音行为。可以通过标准 `set` 设置通道变量，也可以在 `{...}` 内联变量区块中传入，让变量仅作用于单次录音。
+
+| 变量 | 用途 |
+|---|---|
+| `RECORD_STEREO` | 为 `true` 时，写入双声道文件：声道 1 为读取腿，声道 2 为写入腿。 |
+| `RECORD_STEREO_SWAP` | 为 `true` 时，写入双声道文件：声道 1 为写入腿，声道 2 为读取腿。 |
+| `RECORD_READ_ONLY` | 为 `true` 时，只录制读取方向（入站/主叫），排除写入腿。 |
+| `RECORD_WRITE_ONLY` | 为 `true` 时，只录制写入方向（出站/被叫），排除读取腿。 |
+| `RECORD_ANSWER_REQ` | 为 `true` 时，通道应答前不写入音频。 |
+| `RECORD_BRIDGE_REQ` | 为 `true` 时，在通道桥接到另一条腿之前不写入音频。 |
+| `RECORD_MIN_SEC` | 最短录音时长（秒）。停止时如果录音短于此值，就删除文件。默认 `0`（不设下限）；启用 `RECORD_APPEND` 时实际默认值为 `3`。 |
+| `RECORD_APPEND` | 为 `true` 时，以追加模式而不是覆盖模式打开文件。 |
+| `record_sample_rate` | 强制指定录音采样率（如 `8000`、`16000`）；未设置时使用会话协商的采样率。 |
+| `record_waste_resources` | 为 `true`（或指定幅度的正整数）时生成舒适噪声，让编码器在静音期间也保持活动，适用于要求持续帧输入的格式。 |
+| `RECORD_TITLE` | 写入输出文件的标题元数据标签（支持 WAV、OGG、FLAC）；应用后从通道清除。 |
+| `RECORD_ARTIST` | 写入输出文件的艺术家元数据标签；应用后清除。 |
+| `RECORD_COMMENT` | 写入输出文件的注释元数据标签；应用后清除。 |
+| `RECORD_COPYRIGHT` | 写入输出文件的版权元数据标签；应用后清除。 |
+| `RECORD_DATE` | 写入输出文件的日期元数据标签；应用后清除。 |
+| `RECORD_SOFTWARE` | 写入输出文件的软件元数据标签；应用后清除。 |
+| `record_post_process_exec_app` | 录音结束后执行的拨号计划应用。格式：`app_name::app_args`，通道变量在执行时展开。 |
+| `record_post_process_exec_api` | 录音结束后执行的 API 命令。格式：`api_name:api_args`，通道变量在执行时展开。 |
+
+### 遮蔽敏感音频 {#masking-sensitive-audio}
+
+如果呼叫进入某个不应在录音中留下声音的阶段（例如主叫方通过按键输入银行卡号），可以遮蔽录音而无需停止后重新开始。遮蔽操作会在输出文件中以静音替代采集的音频；录音时间戳仍正常推进，因此前后语境会保留。
+
+从拨号计划调用：
+
+```xml
+<!-- Begin masking -->
+<action application="record_session_mask" data="/var/recordings/${uuid}.wav"/>
+
+<!-- ... IVR steps for card-number entry ... -->
+
+<!-- End masking -->
+<action application="record_session_unmask" data="/var/recordings/${uuid}.wav"/>
+```
+
+从 CLI 或 ESL 调用：
+
+```text
+uuid_record <uuid> mask   /var/recordings/<uuid>.wav
+uuid_record <uuid> unmask /var/recordings/<uuid>.wav
+```
+
+提供给 `record_session_mask`/`record_session_unmask` 的路径必须与会话上的活动录音路径匹配。
+
+### 录音后处理 {#post-processing-recordings}
+
+两个通道变量可以在录音停止后触发自动后处理。
+
+`record_post_process_exec_app` 指定要执行的拨号计划应用。值的格式为 `<app_name>::<app_args>`；`<app_args>` 中的通道变量在执行时展开，因此可以通过 `${record_file_path}` 或其他会话变量传递录音文件路径。
+
+`record_post_process_exec_api` 指定要执行的 FreeSWITCH API 命令。值的格式为 `<api_name>:<api_args>`；分派命令之前先展开 `<api_args>` 中的通道变量。
+
+两个变量会在会话的每次录音停止后检查，包括由 `stop_record_session` 停止的录音以及呼叫挂机时停止的录音。
+
+**示例：在呼叫结束后将 WAV 转换为 MP3**
+
+```xml
+<action application="set"
+        data="record_post_process_exec_api=system:lame --quiet /var/recordings/${uuid}.wav /var/recordings/${uuid}.mp3"/>
+```
+
+### 实际操作示例 {#worked-examples}
+
+**拨号计划：将桥接呼叫按 UUID 分别录制为立体声文件**
+
+```xml
+<extension name="outbound-record">
+  <condition field="destination_number" expression="^(\d+)$">
+
+    <!-- Enable stereo recording: caller on ch1, callee on ch2 -->
+    <action application="set"          data="RECORD_STEREO=true"/>
+
+    <!-- Delete the file if the call is shorter than 3 seconds -->
+    <action application="set"          data="RECORD_MIN_SEC=3"/>
+
+    <!-- Start recording before bridge so hold audio is captured -->
+    <action application="record_session"
+            data="/var/recordings/${uuid}.wav"/>
+
+    <action application="bridge"       data="sofia/gateway/mygateway/$1"/>
+
+    <!-- Explicit stop is optional; the recording stops on hangup -->
+    <action application="stop_record_session"
+            data="/var/recordings/${uuid}.wav"/>
+  </condition>
+</extension>
+```
+
+**CLI：为进行中的呼叫启动录音，然后停止录音**
+
+```text
+uuid_record 2dcb9f46-3a73-11ef-8d62-b7e5a3d1e2f9 start /var/recordings/2dcb9f46.wav
+uuid_record 2dcb9f46-3a73-11ef-8d62-b7e5a3d1e2f9 stop  /var/recordings/2dcb9f46.wav
+```
+
+**Sofia 配置实例自动录音（交叉参考）**
+
+Sofia SIP 配置实例参数 `record-template` 和 `record-path` 会指示 `mod_sofia` 对该实例处理的每通呼叫自动调用 `record_session`，无需拨号计划操作。有关这些参数的完整参考，请参阅[第 7 章：使用 Sofia 配置 SIP 实例](../users-endpoints/sip-profiles-sofia.mdx)。
+
+---
+
+## 语音短语与 Say 系统 {#phrases-and-the-say-system}
+
+FreeSWITCH 在固定音频文件播放之上提供了两种更高级的音频功能：`say` 应用将数字、日期、货币金额等值交给特定语言的 say 模块，以语音形式读出；`phrase` 应用执行一个具名宏，可以将预录制文件、`say` 操作与拨号计划应用调用组合成一段完整的提示语音。二者共同构成语音 IVR 提示、语音信箱播报，以及其他依赖运行时数据的提示语音系统。
+
+### 三层模型 {#three-layer-model}
+
+| 层次 | 应用 | 作用 |
+|---|---|---|
+| 固定文件 | `playback` | 播放磁盘上的静态音频文件，不进行运行时内容生成。 |
+| Say 模块 | `say` | 把值传给语言专属 say 模块（例如 `mod_say_en`），由该模块拼接预录制的数字与词语文件生成语音。 |
+| 短语宏 | `phrase` | 在已加载的语言 XML 中查找具名宏，并依次执行其 `play-file`、`say`、`execute`、`phrase` 操作。 |
+
+短语系统是最高层：一次 `phrase` 调用就可以依次播放固定文件、调用 `say` 读出数字，再插入停顿，并按照目标语言的顺序组织这些操作。
+
+### 语言加载：languages 配置段 {#language-loading-the-languages-section}
+
+`conf/vanilla/freeswitch.xml` 中包含 `languages` 配置段，启动时会引入所有语言文件：
+
+```xml
+<section name="languages" description="Language Management">
+  <X-PRE-PROCESS cmd="include" data="lang/de/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/en/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/fr/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/ru/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/he/*.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/es/es_ES.xml"/>
+  <X-PRE-PROCESS cmd="include" data="lang/pt/pt_BR.xml"/>
+</section>
+```
+
+每个被引入的 XML 文件定义一个 `<language>` 元素。FreeSWITCH 启动时解析这些 `<language>` 元素，并通过语言名称将其提供给 `phrase` 与 `say` 应用。修改语言文件后，需要执行完整的 `reloadxml` 才能生效。
+
+### 语言文件结构 {#language-file-structure}
+
+`conf/vanilla/lang/en/en.xml` 是英语语言的根配置文件。它定义 `en` 语言，并通过 `<X-PRE-PROCESS cmd="include">` 引入子目录中的宏文件：
+
+```xml
+<language name="en" say-module="en" sound-prefix="$${sound_prefix}"
+          tts-engine="cepstral" tts-voice="callie">
+  <phrases>
+    <macros>
+      <X-PRE-PROCESS cmd="include" data="demo/*.xml"/>
+      <X-PRE-PROCESS cmd="include" data="vm/sounds.xml"/>
+      <X-PRE-PROCESS cmd="include" data="dir/sounds.xml"/>
+      <X-PRE-PROCESS cmd="include" data="ivr/*.xml"/>
+    </macros>
+  </phrases>
+</language>
+```
+
+| 属性 | 作用 |
+|---|---|
+| `name` | 语言标识符，`phrase` 和 `say` 根据它查找对应语言。 |
+| `say-module` | 负责宏内 `say` 操作和 `say` 应用调用的 say 模块（如 `mod_say_en`）。 |
+| `sound-prefix` | 添加到 `play-file` 相对路径之前的基础目录；在宏执行期间覆盖通道变量 `sound_prefix`。 |
+| `tts-engine` | 宏中 `speak-text` 操作使用的默认 TTS 引擎（需要相应的 TTS 模块）。 |
+| `tts-voice` | 与 `tts-engine` 配套的默认 TTS 音色。 |
+
+`<phrases>` 元素包含一个或多个 `<macros>` 区块。每个 `<macros>` 区块包含多个 `<macro>` 元素，后者就是 `phrase` 应用按名称查找的短语宏。
+
+### 短语宏结构 {#phrase-macro-structure}
+
+短语宏是包含一个或多个 `<input>` 区块的 `<macro>` 元素。每个 `<input>` 会用正则表达式匹配传给 `phrase` 的数据字符串。匹配时执行 `<match>` 中的操作；不匹配时则执行 `<nomatch>` 中的操作（若存在）。
+
+**通用结构：**
+
+```xml
+<macro name="macro-name">
+  <input pattern="<regex>">
+    <match>
+      <action function="play-file" data="path/to/file.wav"/>
+      <action function="say" data="$1" method="pronounced" type="number"/>
+      <action function="execute" data="sleep(100)"/>
+    </match>
+    <nomatch>
+      <action function="play-file" data="path/to/error.wav"/>
+    </nomatch>
+  </input>
+</macro>
+```
+
+**来自 `conf/vanilla/lang/en/vm/sounds.xml` 的实际示例：`voicemail_message_count`：**
+
+```xml
+<macro name="voicemail_message_count">
+  <input pattern="^(1):(.*)$" break_on_match="true">
+    <match>
+      <action function="play-file" data="voicemail/vm-you_have.wav"/>
+      <action function="say" data="$1" method="pronounced" type="items"/>
+      <action function="play-file" data="voicemail/vm-$2.wav"/>
+      <action function="play-file" data="voicemail/vm-message.wav"/>
+    </match>
+  </input>
+  <input pattern="^(\d+):(.*)$">
+    <match>
+      <action function="play-file" data="voicemail/vm-you_have.wav"/>
+      <action function="say" data="$1" method="pronounced" type="items"/>
+      <action function="play-file" data="voicemail/vm-$2.wav"/>
+      <action function="play-file" data="voicemail/vm-messages.wav"/>
+    </match>
+  </input>
+</macro>
+```
+
+调用该宏时，可以传入 `1:new` 或 `3:new` 这样的数据字符串。第一个 `<input>` 设置 `break_on_match="true"`，因此匹配成功后 FreeSWITCH 会停止检查后续 `<input>` 区块。正则表达式捕获组可在 `data` 属性中通过 `$1`、`$2` 等引用。
+
+**来自 `conf/vanilla/lang/en/demo/demo.xml` 的实际示例：`saydate`：**
+
+```xml
+<macro name="saydate">
+  <input pattern="(.*)">
+    <match>
+      <action function="say" data="$1" method="pronounced" type="current_date_time"/>
+    </match>
+  </input>
+</macro>
+```
+
+**`<match>` 和 `<nomatch>` 内可用的操作函数：**
+
+| `function` 值 | 作用 |
+|---|---|
+| `play-file` | 播放 `data` 指向的音频文件，路径相对于语言的 `sound-prefix`。 |
+| `say` | 调用对应语言的 say 模块，需要 `type` 和 `method` 属性；`data` 是要读出的值。 |
+| `execute` | 执行 `data` 中指定的拨号计划应用（例如 `sleep(100)`）。 |
+| `phrase` | 递归执行另一个具名短语宏，需要使用 `phrase` 属性指定目标宏名称。 |
+| `speak-text` | 把 `data` 传给 `<language>` 元素配置的 TTS 引擎。 |
+| `break` | 立即停止后续操作和输入处理。 |
+
+在拨号计划中这样调用 `phrase` 应用：
+
+```xml
+<action application="phrase" data="macro-name,data-string"/>
+```
+
+`phrase` 应用读取通道变量 `language`（如果没有则依次回退到 `default_language`、`en`），确定在哪个已加载的 `<language>` 配置中查找具名宏。
+
+### say 应用 {#the-say-application}
+
+`say` 拨号计划应用无需经过短语宏，直接将值传给语言专属的 say 模块。它可以借助语言专属的 `mod_say_*` 模块拼接预录制音频，读出数字、日期、金额、时间、IP 地址、电话号码及逐字拼读的名称。
+
+有关 `say` 的完整语法、类型表（`number`、`currency`、`current_date_time`、`ip_address`、`telephone_number` 等）、say 方法参考（`pronounced`、`iterated`、`counted`、`pronounced_year`）、所支持的语言模块及拨号计划示例，请参阅 [Say 模块参考](/module-reference/say)。
+
+### sound\_prefix 与语言音频文件 {#sound_prefix-and-language-sound-files}
+
+当短语宏中的 `play-file` 使用相对路径时，FreeSWITCH 会在路径前加上语言的 `sound-prefix` 属性，得到完整文件路径。对于 `en` 语言，`en.xml` 将 `sound-prefix` 设为 `$${sound_prefix}`，它会解析为 `conf/vanilla/vars.xml` 中定义的预处理器变量值：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="sound_prefix=$${sounds_dir}/en/us/callie"/>
+```
+
+因此，当 `play-file` 操作使用 `data="voicemail/vm-you_have.wav"` 时，最终路径为：
+
+```
+/usr/share/freeswitch/sounds/en/us/callie/voicemail/vm-you_have.wav
+```
+
+`say` 应用也使用相同的根路径：`mod_say_en` 拼接数字文件时，会引用 `digits/1.wav`、`digits/million.wav`、`currency/dollars.wav`、`phonetic-ascii/65.wav` 等相对路径，它们都在当前生效的 `sound_prefix` 目录下解析。
+
+可以为每次呼叫覆盖通道变量 `sound_prefix`：
+
+```xml
+<action application="set" data="sound_prefix=/var/sounds/en/us/myvoice"/>
+```
+
+语言 XML 还可以在 `<macros>` 区块上设置 `sound-prefix-enforced="true"` 来锁定前缀，禁止通道变量覆盖它。
+
+### 添加自定义短语宏 {#adding-a-custom-phrase-macro}
+
+将新的 XML 文件放在 `conf/vanilla/lang/en/ivr/` 下（`en.xml` 已通过 `ivr/*.xml` 通配模式引入该目录），或者新建文件并在 `en.xml` 的 `<macros>` 区块中显式增加一条 `<X-PRE-PROCESS cmd="include">` 引入指令。
+
+**示例：播报账户余额的宏**
+
+```xml
+<macro name="account_balance">
+  <!-- Match a decimal amount like "142.50" -->
+  <input pattern="^(\d+\.\d+)$">
+    <match>
+      <action function="play-file" data="custom/your_balance_is.wav"/>
+      <action function="say" data="$1" method="pronounced" type="currency"/>
+    </match>
+    <nomatch>
+      <action function="play-file" data="custom/invalid_amount.wav"/>
+    </nomatch>
+  </input>
+</macro>
+```
+
+将宏保存到 `conf/vanilla/lang/en/ivr/account.xml`，在 FreeSWITCH 控制台执行 `reloadxml`，再从拨号计划调用：
+
+```xml
+<action application="phrase" data="account_balance,142.50"/>
+```
+
+`phrase` 应用将字符串 `142.50` 作为数据参数传递。`<input>` 的正则表达式 `^(\d+\.\d+)$` 匹配成功，捕获组 `$1` 的值为 `142.50`；`play-file` 从声音前缀目录播放 `custom/your_balance_is.wav`；然后 `say` 使用 `currency` 类型和 `pronounced` 方法，把金额读成“一百四十二美元五十美分”（实际输出语言取决于所用 say 模块）。
+
+若要使用与通道默认值不同的语言，需要先设置通道变量 `language`，再调用 `phrase`：
+
+```xml
+<action application="set"    data="language=en"/>
+<action application="phrase" data="account_balance,142.50"/>
+```

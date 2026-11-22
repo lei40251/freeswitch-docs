@@ -1,0 +1,153 @@
+---
+sidebar_position: 4
+id: mod_xml_rpc
+slug: /module-reference/xml-interfaces/mod_xml_rpc
+title: "mod_xml_rpc——XML-RPC 与内嵌 HTTP 服务器"
+description: "配置 FreeSWITCH XML-RPC、HTTP API、认证和 WebSocket 事件订阅接口。"
+sidebar_label: "mod_xml_rpc"
+---
+# mod_xml_rpc——XML-RPC 与内嵌 HTTP 服务器 {#mod_xml_rpc-—-xml-rpc-and-embedded-http-server}
+
+`mod_xml_rpc` 在 FreeSWITCH 内部直接嵌入一个小型 HTTP 服务器（基于 xmlrpc-c 的 Abyss 库）。它通过普通 HTTP GET/POST 请求和 `/RPC2` 路径上的 XML-RPC 协议暴露全部 FreeSWITCH API 命令。此外，它还可以提供 `htdocs` 目录中的静态文件，并可选地接受 WebSocket 事件订阅。
+
+需要为 FreeSWITCH API 命令提供简单且受凭据保护的 HTTP 网关时，可使用该模块，例如构建 Web 管理门户、在浏览器中使用 AJAX 轮询，或者对接使用 XML-RPC 而非 ESL 的系统。
+
+<SignalWireCallout
+  title="将交换机能力作为 REST API 提供"
+  href="https://signalwire.com/docs/apis"
+  page="mod-xml-rpc"
+  linkText="查看 REST API">
+
+SignalWire 将呼叫、消息、号码及配置作为 REST 资源提供，支持令牌认证和 SDK。此模块提供的远程命令入口，与托管平台提供的 API 入口具有相似用途。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+`load` 与 `modules.conf.xml` 中使用的名称为 `mod_xml_rpc`。它在默认配置中**不会自动加载**：`conf/vanilla/autoload_configs/modules.conf.xml` 中的对应条目已被注释。
+
+```xml
+<!-- <load module="mod_xml_rpc"/> -->
+```
+
+要启用，请取消该行注释（或添加它）并重启 FreeSWITCH，也可以在运行时加载：
+
+```
+freeswitch@> load mod_xml_rpc
+```
+
+除标准 FreeSWITCH 构建需要提供 xmlrpc-c 支持外，无需其他特殊构建标志。
+
+## 配置：`xml_rpc.conf.xml` {#configuration-xml_rpcconfxml}
+
+模块从 FreeSWITCH 配置目录读取 `xml_rpc.conf`。所有参数位于 `<configuration> / <settings>` 中。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `http-port` | 内嵌 HTTP 服务器监听的 TCP 端口 | 任意有效端口号 | `8080` |
+| `auth-realm` | HTTP Basic Auth 的 realm 名称；必须同时设置全部三个认证参数才能启用认证 | 字符串 | *（无）* |
+| `auth-user` | HTTP Basic Auth 使用的静态用户名 | 字符串 | *（无）* |
+| `auth-pass` | HTTP Basic Auth 使用的静态密码 | 字符串 | *（无）* |
+| `default-domain` | 客户端凭据中未提供域名时使用的域 | 域名字串 | *（无，回退到系统域）* |
+| `virtual-host` | 为 `true` 时从 HTTP `Host` 头推导域名，而不是要求凭据中提供域名 | `true` / `false` | `true` |
+| `enable-websocket` | 在 `/socket` 路径启用 WebSocket 事件订阅端点 | `true` / `false` | `false` |
+| `commands-to-log` | 正则表达式：通过 HTTP 执行且匹配的 API 命令会以 INFO 级别记录日志 | PCRE 正则表达式字符串 | *（无）* |
+
+认证逻辑：如果 `auth-realm`、`auth-user` 和 `auth-pass` 都非空，那么每次请求都必须提供与静态凭据匹配的 HTTP Basic Auth。也可以使用 `user@domain` 作为用户身份，由模块读取其用户目录参数进行认证。目录参数 `http-allowed-api` 是一个逗号分隔的 API 命令名列表（或者 `any`），规定目录用户可以调用哪些命令。
+
+在验证目录用户密码时，模块不仅接受 `password` 参数，还会尝试用户的 `vm-password`。如果这些密码之一匹配，还可用用户的 `number-alias` / 邮箱号码替代登录名，并使用同一密码认证。因此，目录用户既可用语音信箱 PIN 登录，也可用邮箱号码而不是用户 ID 登录。
+
+`/pub` URI 前缀绕过认证，直接提供 `htdocs` 下的文件。`/domains/<domain>/` URI 前缀会触发按域进行的目录认证。
+
+对没有后续路径的 `/portal` 请求，模块会在认证评估之前返回 `302` 重定向到 `/portal/index.html`。
+
+随附配置中的示例片段：
+
+```xml
+<configuration name="xml_rpc.conf" description="XML RPC">
+  <settings>
+    <!-- The port where you want to run the http service (default 8080) -->
+    <param name="http-port" value="8080"/>
+    <!-- if all 3 of the following params exist all http traffic will require auth -->
+    <param name="auth-realm" value="freeswitch"/>
+    <param name="auth-user" value="freeswitch"/>
+    <param name="auth-pass" value="works"/>
+
+    <!-- regex pattern to match against commands called against this service.
+         If a command with arguments matches, it will be logged at INFO level -->
+    <!--<param name="commands-to-log" value=""/> -->
+
+  </settings>
+</configuration>
+```
+
+## API 命令 {#api-commands}
+
+模块自身不注册任何 `SWITCH_ADD_API` 命令。所有 FreeSWITCH API 命令均可通过以下 HTTP 端点访问。
+
+### HTTP API 端点 {#http-api-endpoints}
+
+模块加载后，可以通过下列 URL 格式访问 API 命令（均使用已配置的 `http-port`）：
+
+| URL 格式 | 响应 Content-Type | 说明 |
+|-------------|----------------------|-------|
+| `http://host:port/api/<cmd>[?<args>]` | `text/plain`（自动） | 纯文本输出；API 命令可控制内容类型 |
+| `http://host:port/webapi/<cmd>[?<args>]` | `text/html` | HTML 输出；支持 `&refresh=N` 自动刷新 |
+| `http://host:port/txtapi/<cmd>[?<args>]` | `text/plain` | 显式纯文本输出 |
+| `http://host:port/xmlapi/<cmd>[?<args>]` | `text/xml` | XML 输出 |
+| `http://host:port/RPC2` | XML-RPC | 接受 `freeswitch.api` / `freeswitch_api` 以及 `freeswitch.management` / `freeswitch_management` 方法 |
+
+查询字符串中的键值对（通过 `&` 分隔）会作为 FreeSWITCH 事件头传给 API 命令。特殊键 `refresh=N` 会让模块插入 HTML meta-refresh 头（仅对 `/webapi/` 响应生效，且 API 命令需设置 `HTTP-REFRESH` 事件头）。
+
+如果 HTTP（或 XML-RPC）请求将执行 `unload mod_xml_rpc` 或 `reload mod_xml_rpc`，模块会把调用改写为 `bgapi`，以便在后台线程执行。这是一种防止自卸载问题的保护：如果在模块自身 HTTP 请求处理器中同步卸载模块，正在处理该请求的线程也会随之被销毁。
+
+使用 `curl` 的示例：
+
+```
+# Plain-text API call
+curl -u freeswitch:works http://localhost:8080/api/show?calls
+
+# HTML API call with 5-second auto-refresh
+curl -u freeswitch:works "http://localhost:8080/webapi/show?calls&refresh=5"
+
+# XML-RPC call (freeswitch.api method, args: command and argument)
+curl -u freeswitch:works http://localhost:8080/RPC2 \
+  -d '<?xml version="1.0"?><methodCall><methodName>freeswitch.api</methodName>
+  <params><param><value><string>show</string></value></param>
+  <param><value><string>calls</string></value></param></params></methodCall>'
+```
+
+### XML-RPC 方法 {#xml-rpc-methods}
+
+| 方法 | 用途 | 参数 |
+|--------|---------|-----------|
+| `freeswitch.api` / `freeswitch_api` | 执行任意 FreeSWITCH API 命令 | `(string command, string args)`：返回结果字符串 |
+| `freeswitch.management` / `freeswitch_management` | 读取或写入管理 OID | `(string oid, string action, string data)`：`action` 为 `get` 或 `set` |
+
+### WebSocket 端点 {#websocket-endpoint}
+
+当 `enable-websocket` 为 `true` 时，客户端可以连接到 `ws://host:port/socket`，并通过发送以下格式的文本帧订阅 FreeSWITCH 事件：
+
+```
+event <format> <EVENT_TYPE> [subclass]
+```
+
+其中 `<format>` 可以是 `json`、`xml` 或 `plain`。订阅事件会以 JSON 序列化帧的形式持续返回。发送 WebSocket 关闭帧即可取消订阅。
+
+## 事件 {#events}
+
+模块预留并触发一个自定义事件子类：
+
+| 子类 | 触发时机 |
+|----------|-----------|
+| `websocket::stophook` | 模块关闭时内部触发，通知所有活动 WebSocket 连接关闭 |
+
+## 依赖项 {#dependencies}
+
+`mod_xml_rpc` 依赖 **xmlrpc-c**（包括其附带的 Abyss HTTP 库）。多数 Linux 发行版提供 `libxmlrpc-c3-dev`（Debian/Ubuntu）或 `xmlrpc-c-devel`（RHEL/CentOS）。它不是 FreeSWITCH 核心的一部分，编译时必须提前安装。
+
+## 相关文档 {#see-also}
+
+- [第 26 章：HTTP 集成——XML Curl 与 HTTAPI](../../integration/xml-curl.mdx)
+
+**源码：** `src/mod/xml_int/mod_xml_rpc`、`conf/vanilla/autoload_configs/xml_rpc.conf.xml`

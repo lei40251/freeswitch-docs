@@ -1,0 +1,218 @@
+---
+sidebar_position: 2
+id: inbound-public-context
+slug: /dialplan/public-context
+title: "第 13 章：入站呼叫与 public 上下文"
+description: "未经认证的 PSTN 呼叫如何通过 external Profile 进入 public 上下文，以及默认安装中的主要安全边界。"
+sidebar_label: "13. 入站呼叫与 public 上下文"
+---
+
+# 第 13 章：入站呼叫与 public 上下文 {#chapter-13-inbound-calls-and-the-public-context}
+
+来自公共电话网络、未经认证的入站呼叫通过 `external` SIP Profile 进入 FreeSWITCH，并交由名为 `public` 的专用拨号计划上下文处理。将不可信的入站流量与已认证的内部流量隔离，是 FreeSWITCH 默认安装配置中最重要的安全边界。
+
+<SignalWireCallout
+  title="通过号码配置进行 DID 路由"
+  href="https://signalwire.com/docs/platform/phone-numbers"
+  page="inbound-public-context"
+  linkText="查看电话号码管理">
+
+在 SignalWire 上，电话号码会路由到你指定的处理器：SWML 脚本、无代码流程、AI 智能体或 SIP 端点。本章的 public 上下文模式在托管平台上对应仪表板或 REST API 中针对每个号码的配置。
+
+</SignalWireCallout>
+
+## 为什么入站呼叫进入 public 上下文 {#why-inbound-calls-land-in-the-public-context}
+
+`external` SIP Profile（`conf/sip_profiles/external.xml`）监听端口 `5080`，并将其拨号计划上下文设置为 `public`：
+
+```xml
+<param name="dialplan" value="XML"/>
+<param name="context" value="public"/>
+```
+
+到达此 Profile 的每个 SIP INVITE 都会交由 `public` 上下文路由，无论远端是否已经认证。此 Profile 还将 `auth-calls` 设置为 `false`，即不会向入站呼叫方发起 SIP 认证质询。专用端口、专用上下文和无需认证这三项设置，使 external Profile 适合接收来自 SIP 中继和运营商的呼叫。
+
+internal Profile（端口 `5060`）在路由之前先认证呼叫方，默认将已认证会话放入 `default` 上下文。这两个 Profile 及其上下文必须保持隔离。如果让未经认证的流量进入 `default` 上下文，就可能通过上游运营商任意发起呼叫，造成盗打话费（toll fraud）。
+
+---
+
+## 安全边界：public 与 default {#the-security-boundary-public-vs-default}
+
+`public` 上下文有意保持精简，只包含允许任何互联网来电方安全执行的分机规则，不会开放语音信箱、电话会议、外呼或其他仅应对已注册内部用户提供的服务。
+
+`default` 上下文包含完整的已认证用户路由逻辑：分机拨号、PSTN 外呼、IVR、语音信箱和会议室。只有在 `public` 中匹配了已知 DID，或者通过可选的 SIP Digest 认证质询之后，呼叫才能由 `public` 内的分机规则显式转入 `default`。
+
+这一设计在 `public.xml` 的注释中有明确说明：
+
+> “不要让未经认证的外部呼叫方进入可通过运营商拨打电话的 default 上下文，否则会造成盗打话费。”
+
+---
+
+## public 上下文中的内置分机规则 {#built-in-extensions-in-the-public-context}
+
+默认的 `public` 上下文（`conf/dialplan/public.xml`）包含四组按顺序对入站呼叫进行评估的分机规则。
+
+### `unloop`
+
+检测 SIP 呼叫环路，并将呼叫转回源地址。
+
+```xml
+<extension name="unloop">
+  <condition field="${unroll_loops}" expression="^true$"/>
+  <condition field="${sip_looped_call}" expression="^true$">
+    <action application="deflect" data="${destination_number}"/>
+  </condition>
+</extension>
+```
+
+仅当 `${unroll_loops}` 为 `true` 且通道变量 `${sip_looped_call}` 也为 `true` 时，此规则才会触发。正常情况下不执行任何操作。
+
+### `outside_call`
+
+将所有经过 `public` 的呼叫标记为外部呼叫，并记录 RFC 2822 格式的时间戳。由于设置了 `continue="true"`，即使匹配该规则，拨号计划也会继续处理。
+
+```xml
+<extension name="outside_call" continue="true">
+  <condition>
+    <action application="set" data="outside_call=true"/>
+    <action application="export" data="RFC2822_DATE=${strftime(%a, %d %b %Y %T %z)}"/>
+  </condition>
+</extension>
+```
+
+转入 `default` 上下文之后，可以检查 `outside_call` 变量，以避免路由环路，或对来源于外部的呼叫实施特定策略。
+
+### `call_debug`
+
+当通道变量 `${call_debug}` 为 `true` 时，`info` 应用会将所有通道变量写入 FreeSWITCH 控制台日志。此规则也使用 `continue="true"` 和 `break="never"`，因此不会中断呼叫路由。
+
+### `public_extensions` and `public_conference_extensions`
+
+这两个分机规则分别将目的分机号在 `1000`～`1019` 范围内的呼叫，以及会议室号码在 `3500`～`3819` 范围内的呼叫，直接转入 `default` 上下文。
+
+```xml
+<extension name="public_extensions">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="transfer" data="$1 XML default"/>
+  </condition>
+</extension>
+
+<extension name="public_conference_extensions">
+  <condition field="destination_number" expression="^(3[5-8][01][0-9])$">
+    <action application="transfer" data="$1 XML default"/>
+  </condition>
+</extension>
+```
+
+这些规则只是为了方便在默认安装环境中测试。生产部署通常会删除它们，或用 `public/` 包含目录中按 DID 定义的路由规则取代。
+
+---
+
+## 将 DID 转入 default 上下文 {#transferring-a-did-into-the-default-context}
+
+`transfer` 应用用于将 `public` 中的呼叫移交给 `default`。其语法如下：
+
+```
+transfer <destination> <dialplan_type> <context>
+```
+
+在 XML 拨号计划中路由至 `default`：
+
+```xml
+<action application="transfer" data="1000 XML default"/>
+```
+
+执行 `transfer` 后，当前分机规则停止，FreeSWITCH 从 `default` 上下文开头重新进入拨号计划，并查找与 `1000` 匹配的分机规则。此后呼叫就像从 `default` 内部发起的一样处理，可以使用全部内部路由逻辑。
+
+---
+
+## 将 DID 路由至分机 {#routing-a-did-to-an-extension}
+
+DID 路由是 `public` 上下文的主要功能。默认安装提供 `conf/dialplan/public/00_inbound_did.xml` 作为模板。该文件通过 `public.xml` 底部的 `X-PRE-PROCESS` 指令包含到 `public` 上下文：
+
+```xml
+<X-PRE-PROCESS cmd="include" data="public/*.xml"/>
+```
+
+模板将一个 DID（`5551212`）映射到 `default` 上下文的分机 `1000`：
+
+```xml
+<include>
+  <extension name="public_did">
+    <condition field="destination_number" expression="^(5551212)$">
+      <action application="set" data="domain_name=$${domain}"/>
+      <action application="transfer" data="1000 XML default"/>
+    </condition>
+  </extension>
+</include>
+```
+
+要路由你自己的 DID，请将正则表达式 `^(5551212)$` 替换为运营商在 `To:` 头中提供的 E.164 号码或匹配模式，并将转接目标设置为 `default` 中的目的分机。
+
+`set` 操作会在转接前将 `domain_name` 设为 `$${domain}`，确保 FreeSWITCH 在托管多个域时，能在正确的域内解析被叫分机。`$${domain}` 是 `vars.xml` 中定义的全局变量，在加载配置时展开。多租户部署应将 `$${domain}` 替换为 DID 所属的具体域。
+
+---
+
+## 入站呼叫的主叫号码 {#caller-id-on-inbound-calls}
+
+FreeSWITCH 根据传入 INVITE 的 SIP 头字段填充主叫号码相关的通道变量。呼叫进入 `public` 后，常用变量包括：
+
+| 变量 | 来源 SIP 头字段 | 内容 |
+|---|---|---|
+| `${caller_id_name}` | `From` 显示名称 | 运营商提供的主叫名称 |
+| `${caller_id_number}` | `From` 用户部分 | 运营商提供的主叫号码 |
+| `${sip_from_user}` | `From` URI 用户部分 | `From` 头中的 SIP 用户名 |
+| `${sip_to_user}` | `To` URI 用户部分 | 拨打的号码（你的 DID） |
+| `${destination_number}` | `Request-URI` 用户部分 | FreeSWITCH 用于路由的目的号码 |
+
+运营商在主叫号码呈现方式上并没有统一标准。有的运营商在 `From` 头中传递主叫号码，其他运营商则使用 `P-Asserted-Identity` 或 `Remote-Party-ID`。FreeSWITCH 分别通过 `${sip_p_asserted_identity}` 和 `${sip_remote_party_id}` 暴露这些值。如果运营商通过 `P-Asserted-Identity` 传递已验证的主叫号码，请在转接前用该变量设置 `caller_id_number`：
+
+```xml
+<action application="set" data="caller_id_number=${sip_p_asserted_identity}"/>
+```
+
+`public` 中的 `outside_call` 规则通过 `export` 设置 `RFC2822_DATE`，使该变量经 `transfer` 传播到 `default`。在转接之前通过 `set` 设置的其他变量，在转接完成后也可于 `default` 中使用。
+
+---
+
+## 添加按 DID 划分的路由文件 {#adding-per-did-routing-files}
+
+`public.xml` 底部的 `X-PRE-PROCESS` 包含指令会加载 `conf/dialplan/public/` 中的全部 XML 文件：
+
+```xml
+<X-PRE-PROCESS cmd="include" data="public/*.xml"/>
+```
+
+文件按文件系统排序顺序包含。通常使用两位数字作为文件名前缀来控制加载顺序，与 `00_inbound_did.xml` 的命名模式一致。
+
+每个文件必须使用 `<include>` 元素包裹分机规则（不能使用 `<context>` 元素）。`public.xml` 已定义 `<context name="public">`，被包含文件只需向该上下文添加分机规则。
+
+下面的文件示例将两个 DID 分别路由到不同分机：
+
+```xml
+<include>
+  <extension name="did_sales">
+    <condition field="destination_number" expression="^(12125550100)$">
+      <action application="set" data="domain_name=$${domain}"/>
+      <action application="transfer" data="1001 XML default"/>
+    </condition>
+  </extension>
+
+  <extension name="did_support">
+    <condition field="destination_number" expression="^(12125550199)$">
+      <action application="set" data="domain_name=$${domain}"/>
+      <action application="transfer" data="1002 XML default"/>
+    </condition>
+  </extension>
+</include>
+```
+
+在 `conf/dialplan/public/` 中添加或修改文件后，必须从 FreeSWITCH 控制台或 ESL 重新加载 XML 配置，修改才会生效：
+
+```
+reloadxml
+```
+
+被包含文件中的分机规则，按照它们在最终合并后的上下文中出现的顺序评估。由于包含指令位于内置规则（`outside_call`、`call_debug`、`public_extensions`、`public_conference_extensions`）之后，对能到达这些规则的呼叫而言，内置规则总是先执行。
+
+未匹配 `public` 中任何分机规则的呼叫会被拒绝。默认配置不会无条件将呼叫转入 `default`。`public.xml` 中有一段默认注释掉的示例，演示如何使用 `check_auth` 模式向呼叫方发起 SIP `407` Digest 质询，并在认证成功后转入 `default`。此功能默认禁用；如果误用，其盗打话费风险与允许未经认证的流量直接进入 `default` 相同。

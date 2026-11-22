@@ -1,0 +1,102 @@
+---
+sidebar_position: 29
+id: mod_prefix
+slug: /module-reference/applications/mod_prefix
+title: "mod_prefix — 号码前缀数据库查询"
+description: "把 JSON 前缀表载入内存中的二进制前缀树，并通过 prefix API 命令实现最长前缀匹配查询。"
+sidebar_label: "mod_prefix"
+---
+
+# mod_prefix — 号码前缀数据库查询 {#mod_prefix-—-number-prefix-database-lookup}
+
+`mod_prefix` 是应用程序模块，能把一个或多个 JSON 键值文件加载为内存中的命名二进制 Trie（前缀树）结构，并在呼叫期间执行最长前缀匹配查询。适用于费率表路由、号码分类及国家代码识别等场景：需要将拨号号码与大量前缀条目快速匹配，又不想访问外部数据库。
+
+如果你的数据集能够轻松放入内存，且需要亚毫秒级、读取密集的前缀查询，并希望在运行时原子地重新加载数据、不影响活动呼叫，就适合使用此模块。
+
+## 加载模块 {#loading-the-module}
+
+`modules.conf.xml` 和 `load` 命令中使用的模块名是 `mod_prefix`。默认的 `autoload_configs/modules.conf.xml` **未包含**该模块，需要手动添加：
+
+```xml
+<load module="mod_prefix"/>
+```
+
+无须特殊构建标志；模块使用标准 FreeSWITCH 构建系统。
+
+## 配置：`prefix.conf.xml` {#configuration-prefixconfxml}
+
+启动时和执行 `prefix reload` 时，模块会从 FreeSWITCH 配置目录读取 `prefix.conf`。每个 `<table>` 元素指定一棵前缀树的名称及要载入内存的 JSON 文件。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `name`（`<table>` 属性） | 调用 `prefix get` 时使用的逻辑名称 | 任意字符串标识符 | — |
+| `file`（`<table>` 属性） | JSON 数据文件的绝对路径 | 指向 JSON 对象的有效文件系统路径 | — |
+
+JSON 数据文件必须是扁平 JSON 对象，以前缀字符串为键、关联的载荷字符串为值，例如：
+
+```json
+{
+  "1212": "0.012",
+  "1800": "0.000",
+  "44":   "0.045"
+}
+```
+
+`prefix.conf.xml` 示例：
+
+```xml
+<configuration name="prefix.conf">
+  <tables>
+    <table name="rates" file="/var/lib/freeswitch/prefix/rates.json"/>
+  </tables>
+</configuration>
+```
+
+可以列出多个 `<table>` 元素，以维护各自独立的命名前缀树。
+
+## API 命令 {#api-commands}
+
+`mod_prefix` 注册一个 API/CLI 命令：`prefix`。
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `prefix get` | 对命名表执行最长前缀匹配查询 | `prefix get <table> <key>` |
+| `prefix load` | 从 JSON 文件加载或热重载命名表 | `prefix load <table> <file>` |
+| `prefix drop` | 从内存中删除命名表 | `prefix drop <table>` |
+| `prefix reload` | 重新读取 `prefix.conf.xml` 并重载所有配置表 | `prefix reload` |
+
+### `prefix get`
+
+返回其键是 `<key>` 最长前缀的条目值；如果没有匹配的前缀，则返回空字符串。
+
+```
+prefix get rates 12125551234
+```
+
+### `prefix load`
+
+将 JSON 文件加载到命名表中：若表不存在，则创建；若已存在，则原子替换。成功返回 `+OK`，失败返回 `-ERR`。
+
+```
+prefix load rates /var/lib/freeswitch/prefix/rates.json
+```
+
+### `prefix drop`
+
+从内存中删除命名表并释放对应资源。返回 `+OK`。
+
+```
+prefix drop rates
+```
+
+### `prefix reload`
+
+重新读取 `prefix.conf.xml` 并重载其中声明的所有表。返回 `+OK`。
+
+```
+prefix reload
+```
+
+通常可以在拨号计划中通过 API 内联展开语法 `${prefix(get rates ${destination_number})}` 调用 `prefix get`。
+
+**源码：** `src/mod/applications/mod_prefix`、`src/mod/applications/mod_prefix/conf/prefix.conf.xml`

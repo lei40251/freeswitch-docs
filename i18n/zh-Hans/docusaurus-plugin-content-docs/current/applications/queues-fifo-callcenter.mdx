@@ -1,0 +1,555 @@
+---
+sidebar_position: 4
+id: queues-fifo-callcenter
+slug: /applications/call-queues
+title: "第 22 章：呼叫队列：FIFO 与呼叫中心"
+description: "使用 mod_fifo 和 mod_callcenter 实现呼叫排队、坐席管理、路由策略、层级和 API。"
+sidebar_label: "22. 呼叫队列与坐席"
+---
+
+# 第 22 章：呼叫队列：FIFO 与呼叫中心 {#chapter-22-queues-fifo-and-call-center}
+
+FreeSWITCH 提供两种不同的入站呼叫排队机制：`mod_fifo` 是轻量级的先进先出等待队列应用；`mod_callcenter` 则是具备路由策略、坐席层级和生命周期追踪的完整坐席管理系统。本章介绍两者面向运维人员的配置方法，并说明各自的适用场景。
+
+<SignalWireCallout
+  title="可扩展到人工坐席池之外的队列"
+  href="https://signalwire.com/docs/swml/reference/calling/enter-queue"
+  page="queues"
+  linkText="查看 SWML 中的 enter_queue">
+
+在托管的 SignalWire 平台上，基于 JSON/YAML 的呼叫控制标记语言 SWML 中的 `enter_queue` 无需配置 callcenter XML 即可让来电者进入队列。AI 坐席可作为第一层接待，使每个来电都立即得到应答；需要时再升级转入人工队列。
+
+</SignalWireCallout>
+
+## 如何选择 FIFO 与呼叫中心 {#choosing-between-fifo-and-call-center}
+
+| 能力 | `mod_fifo` | `mod_callcenter` |
+|---|---|---|
+| 按顺序保持来电者等待 | 是 | 是 |
+| 有名称且可跟踪状态的坐席 | 否 | 是 |
+| 路由策略 | 否（仅 FIFO 顺序） | 是（8 种策略） |
+| 坐席层级 / 优先级组 | 否 | 是 |
+| 整理时间、未应答处理 | 否 | 是 |
+| 数据库持久化状态 | 否 | 是（SQLite 或 ODBC） |
+
+需要最少配置的简单等待队列时使用 `mod_fifo`；需要具名坐席、路由策略、分层升级或坐席状态管理时使用 `mod_callcenter`。
+
+---
+
+## mod_fifo：配置与 fifo 应用 {#mod_fifo-configuration-and-the-fifo-application}
+
+`mod_fifo` 默认加载，其配置文件是 `autoload_configs/fifo.conf.xml`。
+
+### fifo.conf.xml 设置 {#fifoconfxml-settings}
+
+`<settings>` 块包含模块的全局选项。
+
+```xml
+<configuration name="fifo.conf" description="FIFO Configuration">
+  <settings>
+    <param name="delete-all-outbound-member-on-startup" value="false"/>
+  </settings>
+  ...
+</configuration>
+```
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `delete-all-outbound-member-on-startup` | 模块加载时从数据库中移除所有出站成员记录。 | `true`、`false` | `false` |
+| `outbound-strategy` | 所有未单独指定 `outbound_strategy` 属性的 FIFO 节点默认采用的出站策略。 | `ringall`、`enterprise` | `ringall` |
+| `odbc-dsn` | 用于外部数据库存储的 ODBC 连接字符串，格式为 `dsn:user:pass`；设置后使用 ODBC 代替内部 SQLite。 | 字符串 | 无（使用 SQLite） |
+| `dbname` | SQLite 数据库文件名或路径。 | 文件路径 | `fifo` |
+| `allow-transcoding` | 为 `true` 时，允许来电者腿与消费端腿之间转码。 | `true`、`false` | `false` |
+| `disable-dtmf-moh-key` | 为 `true` 时，禁止消费端使用 DTMF `0` 触发软保持。 | `true`、`false` | `false` |
+| `db-pre-trans-execute` | 数据库队列管理器开始外层事务前执行的 SQL；用于应用连接级 pragma 或调优。 | SQL 字符串 | 无 |
+| `db-post-trans-execute` | 外层事务完成后立即执行的 SQL。 | SQL 字符串 | 无 |
+| `db-inner-pre-trans-execute` | 每个内部（批量）事务开始前执行的 SQL。 | SQL 字符串 | 无 |
+| `db-inner-post-trans-execute` | 每个内部（批量）事务结束后执行的 SQL。 | SQL 字符串 | 无 |
+
+### 声明 FIFO 节点 {#declaring-a-fifo-node}
+
+FIFO 节点在 `<fifos>` 元素下声明，每个 `<fifo>` 元素定义一个有名称的队列。
+
+```xml
+<fifos>
+  <fifo name="support@$${domain}" importance="0">
+  </fifo>
+</fifos>
+```
+
+**`<fifo>` 属性**
+
+| 属性 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `name` | 队列的唯一名称，通常为 `name@domain`。 | 字符串 | 必填 |
+| `importance` | 消费端同时从多个 FIFO 取呼叫时，该队列相对其他队列的优先级；数值越大越优先，并可覆盖按等待时长排序。 | 大于等于 0 的整数 | `0` |
+| `outbound_strategy` | 外呼成员的策略：`ringall` 同时呼叫成员且保留主叫标识；`enterprise` 以最快速率呼叫所需数量的成员，但不保留主叫标识。 | `enterprise`、`ringall` | 全局 `outbound-strategy` 的值（默认 `ringall`） |
+| `outbound_per_cycle` | 每个分配周期最多呼叫的出站成员数。`ringall` 模式下限制同时振铃的成员数；`enterprise` 模式下限制每个来电者最多呼叫的坐席数。 | 大于等于 0 的整数 | `1` |
+| `outbound_per_cycle_min` | 不论实际需求，每个周期最少呼叫的出站成员数；允许 `enterprise` 为一个来电者振铃多个坐席。 | 大于等于 0 的整数 | `1` |
+| `outbound_ring_timeout` | 放弃某个出站成员前允许的振铃秒数，必须大于 `10`。 | 整数 | `60` |
+| `outbound_default_lag` | 通话结束后等待多少秒才重新将成员置为可用；必须大于 `10`。 | 整数 | `30` |
+| `outbound_priority` | 多个 FIFO 竞争同一出站成员时的优先级，范围 1–10。 | 整数 `1`–`10` | `5` |
+| `outbound_name` | 向出站成员呈现的主叫 ID 姓名前缀。 | 字符串 | 无 |
+| `retry_delay` | 失败后再次尝试外呼前等待的秒数。 | 大于等于 0 的整数 | `0` |
+
+### 出站成员 {#outbound-members}
+
+静态出站成员通过 `<fifo>` 节点的 `<member>` 子元素定义。模块在加载时将其写入内部数据库。
+
+```xml
+<fifo name="support@$${domain}" importance="0">
+  <member timeout="60" simo="1" lag="20">{member_wait=nowait}user/1005@$${domain}</member>
+</fifo>
+```
+
+**`<member>` 属性**
+
+| 属性 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `timeout` | 该成员的振铃超时秒数，最小 10；小于 10 时回退到节点的 `outbound_ring_timeout`。 | 整数 | 节点 `outbound_ring_timeout`（默认 `60`） |
+| `simo` | 此成员允许的最大并发呼叫数。 | 大于等于 1 的整数 | `1` |
+| `lag` | 通话结束后，成员再次可用前需要等待的秒数。负值会回退到节点 `outbound_default_lag`。 | 整数 | `10`（只有传入负值时才使用节点 `outbound_default_lag`） |
+| `taking_calls` | 成员当前是否接收呼叫。小于 `1` 的值会被限制为 `1`。可设为更高值，或运行时切换，以控制是否拨打该成员。 | 大于等于 1 的整数 | `1` |
+
+成员元素的文本正文是 originate 拨号字符串。通道变量 `member_wait`（作为 originate 字符串中的预拨号通道变量设置）控制成员接听后的行为：`wait` 会保持通话，直到有来电者可用；`nowait` 在已有来电者等待时立即桥接，否则挂机。
+
+### fifo 拨号计划应用 {#the-fifo-dialplan-application}
+
+`fifo` 应用将通道作为来电者（入站 `in` 模式）或消费端/坐席（出站 `out` 模式）放入指定 FIFO；[拨号计划工具参考](../dialplan/dptools-reference.mdx)也有概述。
+
+**语法：**
+
+```
+fifo <name>[!<importance>] [in [<announce>|undef] [<music>|undef] [early|noans]
+                           | out [wait|nowait] [<announce>|undef] [<music>|undef]]
+```
+
+**参数参考：**
+
+| 参数 | 位置 | 用途 | 值 |
+|---|---|---|---|
+| `<name>` | 1 | FIFO 节点名称。追加 `!<n>` 可在本次呼叫中设置或覆盖 importance。 | 字符串 |
+| `in` / `out` | 2 | 方向：`in` 让来电者排队；`out` 让该通道成为消费端。 | `in`、`out` |
+| `<announce>` | 3 | 进入队列时向通道播放的音频文件；`undef` 表示跳过。 | 文件路径、`undef` |
+| `<music>` | 4 | 等待音乐文件；`undef` 表示使用通道默认音乐。 | 文件路径、`undef` |
+| `early` / `noans` | 5（`in` 模式） | 控制何时应答来电者。默认（不指定）在入队时立即应答；`noans` 不由 fifo 应用自动应答；`early` 在消费端与来电者桥接时应答。 | `early`、`noans` |
+| `wait` / `nowait` | 3（`out` 模式） | `wait` 让消费端保持桥接等待来电者；`nowait` 有人等待则立即桥接，否则返回。 | `wait`、`nowait` |
+
+通道变量 `fifo_music` 和 `fifo_announce` 分别设置来电者的等待音乐和提示音文件。这两个变量先于应用参数被检查，因此优先级更高。
+
+**呼叫时的 importance：** 在 FIFO 名称后追加 `!<n>` 会为通过 `in` 入队的来电者指定 importance。若节点已存在，应用参数中更低的 importance 会被忽略；更高的值会更新节点。
+
+**示例：来电者入队**
+
+```xml
+<action application="fifo" data="support@$${domain} in undef $${hold_music}"/>
+```
+
+**示例：坐席作为消费端拨入**
+
+```xml
+<action application="fifo" data="support@$${domain} out wait"/>
+```
+
+---
+
+### FIFO 通道变量 {#fifo-channel-variables}
+
+通道变量控制 `mod_fifo` 中的每次呼叫行为。应在调用 `fifo` 前将其设置在来电者或消费端通道上。
+
+**来电者侧变量（`in` 模式）**
+
+| 变量 | 用途 | 值 | 说明 |
+|---|---|---|---|
+| `fifo_music` | 等待时向来电者播放的音乐，覆盖应用参数。 | 文件路径或流 | 优先于应用的 `<music>` 参数读取。 |
+| `fifo_announce` | 入队时向来电者播放的音频，覆盖应用参数。 | 文件路径 | 优先于应用的 `<announce>` 参数读取。 |
+| `fifo_priority` | FIFO 内部的优先级槽位，数字越小越先出队。 | 整数 `0`–`9` | 未设置时默认 `0`。 |
+| `fifo_caller_exit_key` | 让来电者退出队列的 DTMF 按键；退出后该变量被覆盖为实际按下的数字。 | DTMF 数字字符串 | 默认未设置，即没有退出键。 |
+| `fifo_caller_exit_to_orbit` | 为 `true` 时，来电者按退出键后转移到 orbit 分机，而非挂机；需要 `fifo_orbit_exten`。 | `true`、`false` | 默认未设置。 |
+| `fifo_orbit_exten` | 超时或按退出键后转移的分机，格式为 `extension` 或 `extension:timeout_seconds`；没有冒号时默认超时为 60 秒。 | `extension[:timeout]` | 默认未设置；未配置该变量时不执行 orbit。 |
+| `fifo_orbit_dialplan` | orbit 转移使用的拨号计划。 | 拨号计划名称 | 默认使用通道当前拨号计划。 |
+| `fifo_orbit_context` | orbit 转移使用的拨号计划上下文。 | 上下文名称 | 默认使用通道当前上下文。 |
+| `fifo_orbit_announce` | orbit 转移前立即向来电者播放的音频。 | 文件路径 | 默认未设置。 |
+| `fifo_chime_list` | 等待时周期性向来电者播放的音频文件列表，以逗号分隔。 | `file1,file2,...` | 默认未设置。 |
+| `fifo_chime_freq` | 两次提示音之间的间隔秒数。 | 大于 0 的整数 | 设置了 `fifo_chime_list` 且本变量缺失或不大于 0 时默认 `30`。 |
+| `fifo_vip` | 为 `true` 时，将来电者标记为 VIP，优先出队。坐席放弃呼叫而来电者重新入队时，模块会自动设置。 | `true` | 默认未设置。 |
+
+**消费端侧变量（`out` 模式）**
+
+| 变量 | 用途 | 值 | 说明 |
+|---|---|---|---|
+| `fifo_consumer_exit_key` | 消费端按下后挂断来电者并退出的 DTMF 按键。 | 单个 DTMF 字符 | 默认 `*`。 |
+| `fifo_hold_music` | 消费端通过按键 `0` 将来电者置于软保持时向消费端播放的音乐。依次回退到 `fifo_music`、通道默认值。 | 文件路径或流 | 默认未设置。 |
+| `fifo_strategy` | 消费端注册到多个 FIFO 节点时选择节点的策略：`waiting_longer` 服务非空时间最长的节点；`more_ppl` 服务来电者最多的节点。 | `waiting_longer`、`more_ppl` | 默认 `waiting_longer`。 |
+| `fifo_pop_order` | 控制消费端从节点队列取呼叫顺序的优先级槽位号列表，以逗号分隔。 | `0,1,2,...` | 默认按 `0` 到 `9` 升序。 |
+| `fifo_consumer_wrapup_time` | 通话结束后，消费端保持在整理状态并暂不返回资源池的毫秒数；`0` 禁用整理期。 | 整数（毫秒） | 未设置该变量时默认 `5000`。 |
+| `fifo_consumer_wrapup_sound` | 整理期间向消费端播放的音频。 | 文件路径 | 默认未设置。 |
+| `fifo_consumer_wrapup_key` | 消费端可按此 DTMF 键提前结束整理期。 | 单个 DTMF 字符 | 默认未设置。 |
+| `fifo_record_template` | 桥接通话录音的路径模板，支持通道变量及 `strftime` 格式符。 | 字符串 | 默认未设置。 |
+| `fifo_outbound_announce` | 对出站回呼（dial-url 模式）的来电者进行桥接前，向消费端播放的音频。 | 文件路径 | 默认未设置。 |
+| `fifo_override_announce` | 设置在来电者通道上；存在时覆盖当前桥接中消费端的提示音。 | 文件路径 | 默认未设置。 |
+
+---
+
+### fifo_track_call 应用 {#the-fifo_track_call-application}
+
+`fifo_track_call` 应用将某个呼叫登记到出站成员记录中，即使桥接是在 `mod_fifo` 之外建立，也会被计入模块的手动呼叫统计。呼叫加入内部 `manual_calls` 队列，成员使用计数增加；通道挂机后自动递减。
+
+**语法：**
+
+```
+fifo_track_call <fifo_outbound_uuid>
+```
+
+唯一参数是出站成员的 UUID（`fifo_outbound_uuid` 值，与静态成员和动态添加成员返回的标识相同）。出站通道会增加 `manual_calls_in_count`；入站通道会增加 `manual_calls_out_count`。在同一通道上调用两次不会重复生效，只会记录警告。
+
+```xml
+<action application="fifo_track_call" data="$${outbound_member_uuid}"/>
+```
+
+---
+
+### mod_fifo API 命令 {#mod_fifo-api-commands}
+
+`mod_fifo` 注册四条 API 命令，可通过 `fs_cli`、事件套接字以及 `api`/`bgapi` 拨号计划应用调用。
+
+**`fifo`** —— 查看 FIFO 节点状态。
+
+**语法：**
+
+```
+fifo list|list_verbose|count|debug|status|has_outbound|importance [<fifo name>]|reparse [del_all]
+```
+
+| 子命令 | 用途 |
+|---|---|
+| `list [<fifo name>]` | 生成某节点的 XML 报告；未指定名称时报告全部节点。 |
+| `list_verbose [<fifo name>]` | 与 `list` 相同，但包含每位来电者和消费端的详细信息。 |
+| `count [<fifo name>]` | 报告一个或全部节点的计数，格式为 `name:consumer_count:caller_count:member_count:ring_consumer_count:idle_consumers`。 |
+| `debug [<level>]` | 查看或设置模块调试级别；负数会限制为 `0`。 |
+| `status` | 输出完整模块状态，包括来电者 originate、消费端 originate 和桥接哈希表。 |
+| `has_outbound [<fifo name>]` | 报告一个或全部节点是否存在出站成员，格式为 `name:0\|1`。 |
+| `importance <fifo name> [<value>]` | 查看或设置节点的 importance；负值限制为 `0`。 |
+| `reparse [del_all]` | 重新加载配置；带 `del_all` 时先删除所有出站成员记录。 |
+
+**`fifo_member`** —— 运行时添加或移除动态出站成员。
+
+**语法：**
+
+```
+fifo_member add <fifo_name> <originate_string> [<simo_count>] [<timeout>] [<lag>] [<expires>] [<taking_calls>]
+fifo_member del <fifo_name> <originate_string>
+```
+
+| 参数 | 用途 | 默认值 |
+|---|---|---|
+| `<fifo_name>` | 目标 FIFO 节点。 | 必填 |
+| `<originate_string>` | 成员拨号字符串。 | 必填 |
+| `<simo_count>` | 最大并发呼叫数；小于 `0` 时重置为 `1`。 | `1` |
+| `<timeout>` | 振铃超时（秒）；小于 `0` 时重置为 `60`。 | `60` |
+| `<lag>` | 成员再次可用前的等待秒数；小于 `0` 时重置为 `5`。 | `5` |
+| `<expires>` | 从现在起到动态成员记录过期的秒数。 | `0`（不过期） |
+| `<taking_calls>` | 成员是否接收呼叫；小于 `1` 会限制为 `1`。 | `1` |
+
+**`fifo_add_outbound`** —— 在给定优先级槽位向节点压入一次性出站呼叫请求。
+
+**语法：**
+
+```
+fifo_add_outbound <node> <url> [<priority>]
+```
+
+`<url>` 将作为 `dial-url` 出站请求被呼叫。`<priority>` 是槽位号；超过或达到最大值时被限制在最高有效槽位，未指定或不大于 0 则使用槽位 `0`。命令返回该优先级槽位操作后的队列深度（失败时为 `0`）。
+
+**`fifo_check_bridge`** —— 测试指定 UUID 或出站成员 ID 是否正在 FIFO 桥接中。
+
+**语法：**
+
+```
+fifo_check_bridge <uuid>|<outbound_id>
+```
+
+若指定通道 UUID 或出站成员 ID 属于活动桥接，则返回 `true`，否则返回 `false`。
+
+---
+
+## mod_callcenter：概念与加载 {#mod_callcenter-concepts-and-loading}
+
+`mod_callcenter` **默认不加载**。要启用，请在 `autoload_configs/modules.conf.xml` 中取消对应行的注释：
+
+```xml
+<load module="mod_callcenter"/>
+```
+
+该模块引入三种对象类型：
+
+- **队列（Queue）**：用于保存入站等待呼叫的命名队列。每个队列都有路由策略、等待音乐及等待时间限制。
+- **坐席（Agent）**：能从队列接收呼叫的具名端点（人员或设备），具有 `Available`、`On Break`、`Logged Out`、`Available (On Demand)` 等状态和由模块维护的运行状态。
+- **层级（Tier）**：连接一个坐席与一个队列的分配关系，包含 `level`（优先级组）和 `position`（组内顺序）。
+
+默认使用 SQLite 数据库存储状态，也可配置 ODBC 数据源以便共享访问。
+
+XML 配置文件 `callcenter.conf.xml` 定义队列、坐席及层级，并在启动时同步到数据库。
+
+> **重要：** 每次重启都会重新将 XML 中的坐席和层级配置应用到数据库。只要 XML 中提供了 `level` 和 `position`，就会将其重置为配置值。因此这种行为不适合多个 FreeSWITCH 实例共享数据库的部署。
+
+---
+
+## 呼叫中心队列配置 {#call-center-queue-configuration}
+
+队列定义在 `callcenter.conf.xml` 的 `<queues>` 元素下。
+
+```xml
+<queues>
+  <queue name="support@default">
+    <param name="strategy" value="longest-idle-agent"/>
+    <param name="moh-sound" value="$${hold_music}"/>
+    <param name="time-base-score" value="system"/>
+    <param name="max-wait-time" value="0"/>
+    <param name="max-wait-time-with-no-agent" value="0"/>
+    <param name="max-wait-time-with-no-agent-time-reached" value="5"/>
+    <param name="tier-rules-apply" value="false"/>
+    <param name="tier-rule-wait-second" value="300"/>
+    <param name="tier-rule-wait-multiply-level" value="true"/>
+    <param name="tier-rule-no-agent-no-wait" value="false"/>
+    <param name="discard-abandoned-after" value="60"/>
+    <param name="abandoned-resume-allowed" value="false"/>
+  </queue>
+</queues>
+```
+
+`<queue>` 的 `name` 属性必填，惯例格式为 `name@context`（如 `support@default`），与坐席命名格式一致。
+
+### 队列参数参考 {#queue-parameter-reference}
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `strategy` | 坐席选择算法。 | 见下表 | `longest-idle-agent` |
+| `moh-sound` | 等待时向来电者播放的音乐。 | 文件路径或流 | 无 |
+| `announce-sound` | 等待期间周期性播放给来电者的提示音文件。 | 文件路径 | 无 |
+| `announce-frequency` | 两次 `announce-sound` 播放之间的秒数；`0` 表示禁用。 | 整数 `0`–`86400` | `0` |
+| `record-template` | 桥接呼叫录音的路径模板，支持通道变量和 `strftime` 格式符。 | 字符串 | 无 |
+| `time-base-score` | 计算来电者等待得分（用于坐席分配）的起始时间：`queue` 从入队时开始；`system` 从呼叫发起时开始。 | `queue`、`system` | `queue` |
+| `max-wait-time` | 来电者被放弃前最多等待的秒数，`0` 表示无限制。 | 整数 `0`–`86400` | `0` |
+| `max-wait-time-with-no-agent` | 没有坐席登录时来电者最多等待的秒数，`0` 表示无限制。 | 整数 `0`–`86400` | `0` |
+| `max-wait-time-with-no-agent-time-reached` | 达到 `max-wait-time-with-no-agent` 后到移除来电者前的宽限秒数。 | 整数 `0`–`86400` | `5` |
+| `tier-rules-apply` | 启用基于层级的等待时间规则（见下文）。 | `true`、`false` | `false` |
+| `tier-rule-wait-second` | 来电者升级到下一层级前必须等待的秒数。 | 整数 `0`–`86400` | `0` |
+| `tier-rule-wait-multiply-level` | 为 `true` 时，到达第 N 级所需等待时间为 `N * tier-rule-wait-second`；为 `false` 时经过一次该间隔，所有更高层级均可选择。 | `true`、`false` | `false` |
+| `tier-rule-no-agent-no-wait` | 为 `true` 时，若当前层级没有可用坐席，则跳过该层级的等待时间。 | `true`、`false` | `true` |
+| `discard-abandoned-after` | 被放弃呼叫记录在多少秒后从数据库删除，防止恢复队列位置；`0` 表示永久保留。 | 整数 `0`–`86400` | `60` |
+| `abandoned-resume-allowed` | 为 `true` 时，挂机的来电者在 `discard-abandoned-after` 秒内重新拨入可恢复原队列位置。 | `true`、`false` | `false` |
+| `agent-no-answer-status` | 坐席在振铃超时前未应答时被设置的状态。 | `Available`、`Available (On Demand)`、`On Break`、`Logged Out` | `On Break` |
+| `ring-progressively-delay` | 对 `ring-progressively` 策略，每次新增一个坐席加入振铃组之间的秒数。 | 整数 `0`–`86400` | `10` |
+| `skip-agents-with-external-calls` | 为 `true` 时，正在进行呼叫中心之外通话的坐席不会收到队列来电。 | `true`、`false` | `true` |
+
+**策略取值：**
+
+| 值 | 行为 |
+|---|---|
+| `longest-idle-agent` | 优先分配给空闲时间最长的坐席。 |
+| `round-robin` | 按轮询方式提供呼叫，从上次结束的位置继续。 |
+| `top-down` | 每次都从层级顺序的开头尝试；由优先级最高的可用坐席接听。 |
+| `agent-with-least-talk-time` | 优先分配给总通话秒数最少的坐席。 |
+| `agent-with-fewest-calls` | 优先分配给已应答呼叫数最少的坐席。 |
+| `sequentially-by-agent-order` | 先按层级及组内位置选择坐席，再按 `last_offered_call` 时间戳排序。 |
+| `ring-all` | 合格层级中的全部可用坐席同时振铃。 |
+| `ring-progressively` | 以 `ring-progressively-delay` 指定的间隔逐个增加振铃坐席，直到有人接听。 |
+
+---
+
+## 坐席配置 {#agent-configuration}
+
+坐席在 `callcenter.conf.xml` 的 `<agents>` 元素下定义。重启时 XML 坐席配置会重新应用到数据库，因此通过 API 在运行时作出的更改会被覆盖。
+
+```xml
+<agents>
+  <agent name="1000@default"
+         type="callback"
+         contact="[leg_timeout=10]user/1000@default"
+         status="Available"
+         max-no-answer="3"
+         wrap-up-time="10"
+         reject-delay-time="10"
+         busy-delay-time="60" />
+</agents>
+```
+
+`name` 属性必填，通常采用 `extension@context` 格式。
+
+### 坐席参数参考 {#agent-parameter-reference}
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `type` | 模块如何连接坐席：`Callback` 对 `contact` 发起出站呼叫；`uuid-standby` 桥接到 `contact` 指定的现有通道 UUID。 | `Callback`、`uuid-standby` | 必填 |
+| `contact` | 坐席腿的 originate 字符串（`Callback`）或通道 UUID（`uuid-standby`）。可在方括号中设置通道变量。 | 字符串 | 必填 |
+| `status` | XML 配置加载后应用的初始坐席状态；决定是否向该坐席提供呼叫。 | `Available`、`Available (On Demand)`、`On Break`、`Logged Out` | `Logged Out` |
+| `max-no-answer` | 在状态改为 `agent-no-answer-status` 前允许连续未接听的呼叫次数；`0` 禁用限制。 | 大于等于 0 的整数 | `0` |
+| `wrap-up-time` | 通话结束后到重新恢复 `Available` 前坐席不可用的秒数。 | 大于等于 0 的整数（秒） | `0` |
+| `reject-delay-time` | 坐席拒绝上一次呼叫后，重新向其提供呼叫前的秒数。 | 大于等于 0 的整数（秒） | `0` |
+| `busy-delay-time` | 坐席线路返回忙线后，重新提供呼叫前等待的秒数。 | 大于等于 0 的整数（秒） | `0` |
+| `no-answer-delay-time` | 坐席未应答后，重新提供呼叫前等待的秒数。 | 大于等于 0 的整数（秒） | `0` |
+| `ready_time` | Unix 时间戳；在此时间前不向该坐席提供呼叫。未应答后由模块自动设置，也可以通过 `callcenter_config agent set ready_time` API 命令设置。 | 整数（Unix 秒） | `0`（立即可用） |
+
+**状态值：**
+
+| 状态 | 行为 |
+|---|---|
+| `Available` | 正常向坐席提供呼叫。 |
+| `Available (On Demand)` | 仅在显式请求时才向坐席提供呼叫（与部分外部系统配合使用）。 |
+| `On Break` | 坐席已登录，但暂不接收呼叫。 |
+| `Logged Out` | 坐席不接收呼叫，也不计为可用坐席。 |
+
+---
+
+## 层级分配 {#tier-assignment}
+
+Tier 将坐席关联到队列，并定义坐席在该队列中的优先级。`level` 数字较小的坐席优先于数字较大的坐席获得呼叫；相同层级内由 `position` 决定顺序。
+
+Tier 定义在 `callcenter.conf.xml` 的 `<tiers>` 元素下。
+
+```xml
+<tiers>
+  <tier agent="1000@default" queue="support@default" level="1" position="1"/>
+  <tier agent="1001@default" queue="support@default" level="2" position="1"/>
+</tiers>
+```
+
+省略 `level` 或 `position` 时，默认值为 `1`。重启时重新应用 Tier 配置，会以 XML 中显式给出的值覆盖运行时对 `level` 和 `position` 的更改；同时省略这两个属性则保留数据库中的已有值。
+
+### 层级参数参考 {#tier-parameter-reference}
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `agent` | 与 `<agents>` 中条目匹配的坐席名称。 | 字符串 | 必填 |
+| `queue` | 与 `<queues>` 中条目匹配的队列名称。 | 字符串 | 必填 |
+| `level` | 优先级组。按规则应先耗尽低编号组再尝试较高编号组（受 `tier-rules-apply` 影响）。 | 大于等于 1 的整数 | `1` |
+| `position` | 启用使用位置的策略（如 `top-down`、`sequentially-by-agent-order`）时，坐席在层级中的顺序。 | 大于等于 1 的整数 | `1` |
+
+**层级规则与升级：** `tier-rules-apply` 为 `false`（默认）时，来电者不经延迟就能同时分配到全部层级。为 `true` 时，来电者从第 1 级开始，仅在等待 `tier-rule-wait-second` 秒后进入下一层级（若 `tier-rule-wait-multiply-level` 为 `true`，等待时间还要乘以层级编号）。若当前层级没有坐席，且 `tier-rule-no-agent-no-wait` 为 `true`，则立即向下一层级升级。
+
+---
+
+## callcenter 拨号计划应用 {#the-callcenter-dialplan-application}
+
+`callcenter` 拨号计划应用把入站呼叫放入指定队列。呼叫等待，直到找到可用坐席并桥接其呼叫腿。
+
+**语法：**
+
+```
+callcenter <queue_name>
+```
+
+**示例：**
+
+```xml
+<extension name="inbound-support">
+  <condition field="destination_number" expression="^5000$">
+    <action application="answer"/>
+    <action application="callcenter" data="support@default"/>
+  </condition>
+</extension>
+```
+
+调用 `callcenter` 前必须先应答呼叫。应用会阻塞执行，直到与坐席桥接或来电者放弃等待。队列等待时间限制（`max-wait-time`、`max-wait-time-with-no-agent`）会使应用返回，此后拨号计划可以将呼叫路由到其他位置。
+
+配套的 `callcenter_track` 应用可以将外部发起的呼叫注册为呼叫中心成员以供追踪，但不实际入队。它支持在 `mod_callcenter` 之外已完成桥接、但仍需反映在坐席状态中的场景。
+
+---
+
+## mod_callcenter 的全局设置 {#global-settings-for-mod_callcenter}
+
+`callcenter.conf.xml` 中的 `<settings>` 块配置模块级选项。
+
+```xml
+<settings>
+  <!--<param name="odbc-dsn" value="dsn:user:pass"/>-->
+  <!--<param name="dbname" value="/dev/shm/callcenter.db"/>-->
+  <!--<param name="cc-instance-id" value="single_box"/>-->
+</settings>
+```
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `odbc-dsn` | 外部数据库存储使用的 ODBC 连接字符串；设置后使用 ODBC 替代内部 SQLite。格式为 `dsn:user:pass`。 | 字符串 | 无（使用 SQLite） |
+| `dbname` | SQLite 数据库文件路径或名称。 | 文件路径 | `callcenter` |
+| `cc-instance-id` | 数据库记录使用的实例标识，用于命名空间隔离；多个 FreeSWITCH 实例共享数据库时相关。 | 字符串 | `single_box` |
+| `debug` | 调试日志详细级别，数值越高越详细。 | 整数 | `0` |
+| `reserve-agents` | 为 `true` 时，在向坐席提供呼叫前将其状态设置为 `Reserved`，防止同时分配给两个来电者。 | `true`、`false` | `false` |
+| `truncate-tiers-on-load` | 为 `true` 时，模块加载时先清空 `tiers` 表，再应用 XML 层级配置。 | `true`、`false` | `false` |
+| `truncate-agents-on-load` | 为 `true` 时，模块加载时先清空 `agents` 表，再应用 XML 坐席配置。 | `true`、`false` | `false` |
+| `global-database-lock` | 为 `true` 时，模块通过全局锁串行化数据库访问；设为 `false` 可使用更细粒度的锁。 | `true`、`false` | `true` |
+| `agent-originate-timeout` | 对 `Callback` 类型坐席发起呼叫后，等待接听的秒数；`0` 回退到默认值。 | 整数（秒） | `60` |
+
+---
+
+## mod_callcenter API 命令 {#mod_callcenter-api-commands}
+
+`mod_callcenter` 通过 `callcenter_config` API 和独立的 `callcenter_break` API 提供运行时管理接口。两者都可从 `fs_cli`、事件套接字和 `api`/`bgapi` 拨号计划应用使用。`callcenter_config` 还注册为 JSON API。命令成功返回 `+OK`，失败返回一行 `-ERR <reason>`；`get`、`list`、`count` 则返回数据。
+
+通用格式如下：
+
+```
+callcenter_config <section> <action> <args>
+```
+
+子命令区段包括 `agent`、`tier` 和 `queue`。
+
+### callcenter_config agent {#callcenter_config-agent}
+
+| 命令 | 用途 |
+|---|---|
+| `agent add <name> <type>` | 创建坐席。`type` 为 `callback` 或 `uuid-standby`。 |
+| `agent del <name>` | 删除坐席。 |
+| `agent reload <name>` | 从 XML 重新加载坐席定义。 |
+| `agent set status <agent_name> <status>` | 设置坐席状态（`Logged Out`、`Available`、`Available (On Demand)`、`On Break`）。设为 `Available` 会重置通话时间、已应答呼叫数及未应答次数。 |
+| `agent set state <agent_name> <state>` | 设置坐席运行状态（`Waiting`、`Receiving`、`In a queue call`、`Idle`、`Reserved`）。 |
+| `agent set contact <agent_name> <contact>` | 设置坐席 originate 字符串或备用通道 UUID。 |
+| `agent set ready_time <agent_name> <epoch>` | 在指定 Unix 时间之前保持坐席不可用。 |
+| `agent set reject_delay_time <agent_name> <seconds>` | 设置呼叫被拒后再次提供呼叫前的延迟。 |
+| `agent set busy_delay_time <agent_name> <seconds>` | 设置忙线后再次提供呼叫前的延迟。 |
+| `agent set no_answer_delay_time <agent_name> <seconds>` | 设置未应答后再次提供呼叫前的延迟。 |
+| `agent get status <agent_name>` | 返回坐席当前状态。 |
+| `agent get state <agent_name>` | 返回坐席当前运行状态。 |
+| `agent get uuid <agent_name>` | 返回坐席当前通道 UUID。 |
+| `agent list [<agent_name>]` | 以管道符分隔的行列出全部或指定坐席。 |
+
+### callcenter_config tier {#callcenter_config-tier}
+
+| 命令 | 用途 |
+|---|---|
+| `tier add <queue_name> <agent_name> [<level>] [<position>]` | 将坐席关联到队列；`level` 和 `position` 默认 `1`。 |
+| `tier set state <queue_name> <agent_name> <state>` | 设置层级状态（`Ready`、`No Answer`、`Offering`、`Active Inbound`、`Standby`）。 |
+| `tier set level <queue_name> <agent_name> <level>` | 设置层级的优先级编号。 |
+| `tier set position <queue_name> <agent_name> <position>` | 设置坐席在层级中的位置。 |
+| `tier del <queue_name> <agent_name>` | 从队列中移除坐席。 |
+| `tier reload <queue_name> <agent_name>` | 从 XML 重新加载层级；队列名为 `all` 时重新加载全部层级。 |
+| `tier list` | 按层级编号、位置顺序列出全部层级。 |
+
+### callcenter_config queue {#callcenter_config-queue}
+
+| 命令 | 用途 |
+|---|---|
+| `queue load <queue_name>` | 将队列定义加载到内存。 |
+| `queue unload <queue_name>` | 从内存移除队列。 |
+| `queue reload <queue_name>` | 卸载后重新加载队列。 |
+| `queue list` | 以管道符分隔的行列出已加载队列。 |
+| `queue list agents <queue_name> [<status>] [<state>]` | 列出队列坐席，可按状态及运行状态依次筛选。 |
+| `queue list members <queue_name>` | 按分数顺序（等待最久的在前）列出队列中的来电者。 |
+| `queue list tiers <queue_name>` | 列出队列中配置的层级。 |
+| `queue count` | 返回已加载队列数。 |
+| `queue count agents <queue_name> [<status>] [<state>]` | 统计队列坐席数，可按状态及运行状态筛选。 |
+| `queue count members <queue_name>` | 统计队列中的等待来电者数。 |
+| `queue count tiers <queue_name>` | 统计队列层级数。 |
+
+### callcenter_break {#callcenter_break}
+
+`callcenter_break` 让模块停止监控指定通道 UUID，并释放关联坐席。可用于将坐席从模块正在追踪的通话中解除。
+
+**语法：**
+
+```
+callcenter_break agent <uuid>
+```
+
+`<uuid>` 为需要停止监控的通道 UUID。该命令在通道上设置标志，使 `mod_callcenter` 在下一轮检查时终止监管并释放坐席。

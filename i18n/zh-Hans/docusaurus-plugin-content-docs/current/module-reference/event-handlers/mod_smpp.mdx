@@ -1,0 +1,125 @@
+---
+sidebar_position: 15
+id: mod_smpp
+slug: /module-reference/event-handlers/mod_smpp
+title: "mod_smpp——SMPP 短信网关"
+description: "配置 mod_smpp 短信网关的收发、SMPP 连接、聊天接口及命令。"
+sidebar_label: "mod_smpp"
+---
+# mod_smpp——SMPP 短信网关 {#mod_smpp-—-smpp-sms-gateway}
+
+`mod_smpp` 实现一个 SMPP（Short Message Peer-to-Peer，短消息点对点）客户端，将 FreeSWITCH 连接到外部 SMPP 服务器（短信中心 SMSC 或聚合服务商）。它使用 SMPP `bind_transceiver` 命令进行认证，使每个网关能够通过一个持久 TCP 连接同时收发短信。
+
+入站 `DELIVER_SM` PDU 会被解码为 FreeSWITCH 聊天事件，再通过聊天计划（chatplan）分发。出站短信可以从拨号计划、聊天计划或 `fs_cli` 中通过 `smpp_send` API 命令触发。
+
+## 加载模块 {#loading-the-module}
+
+模块名称为 `mod_smpp`。它**默认不加载**；`conf/vanilla/autoload_configs/modules.conf.xml` 中的两处条目都已被注释。要启用，请取消相应加载行的注释（或添加）：
+
+```xml
+<load module="mod_smpp"/>
+```
+
+编译时需要 `libsmpp34`（详见[依赖项](#dependencies)）。
+
+## 配置：`smpp.conf.xml` {#configuration-smppconfxml}
+
+`smpp.conf.xml` 定义一个或多个具名网关。每个网关对应一条到 SMPP 服务器的 TCP 连接。模块在启动时读取此文件；没有重新加载命令，修改后需要重启 FreeSWITCH。
+
+### 网关参数 {#gateway-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `host` | SMPP 服务器主机名或 IP 地址 | 任意可解析主机名或 IP | `localhost` |
+| `port` | SMPP 服务器的 TCP 端口 | 整数 | `8000` |
+| `system_id` | 绑定请求中发送的 SMPP 用户名 | 字符串（最长 16 字符） | `username` |
+| `password` | 绑定请求中发送的 SMPP 密码 | 字符串（最长 9 字符） | `password` |
+| `system_type` | 绑定请求的 SMPP `system_type` 字段 | 字符串（最长 13 字符） | `freeswitch_smpp` |
+| `profile` | 与该网关关联的 FreeSWITCH SIP 配置实例名称 | 字符串 | `default` |
+| `debug` | 网关级 PDU 调试日志 | `0` 或 `1` | `0` |
+
+网关的 `name` 属性是在 API 调用和通道变量（如 `smpp_gateway`）中引用该网关的句柄。
+
+### 配置示例 {#example-configuration}
+
+```xml
+<configuration name="smpp.conf" description="SMPP client and server Gateway">
+  <gateways>
+    <gateway name="example.com">
+      <params>
+        <param name="host" value="example.com"/>
+        <param name="port" value="2775"/>
+        <param name="debug" value="1"/>
+        <param name="profile" value="default"/>
+        <param name="system_id" value="username"/>
+        <param name="password" value="password"/>
+        <param name="system_type" value="remote_smpp"/>
+      </params>
+    </gateway>
+  </gateways>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `smpp_send` | 使用通道变量通过具名网关发送短信 | 网关名称 |
+
+应用读取所有带 `smpp_` 前缀的通道变量，移除前缀后填入出站 SMPP 消息。`from_user` 和 `to_user` 事件头（以及消息正文）必须在调用应用前设置为 `smpp_from_user`、`smpp_to_user` 等，或者设置为普通通道变量。
+
+```xml
+<action application="smpp_send" data="example.com"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `smpp_send` | 从 `fs_cli` 通过具名网关发送短信 | `smpp_send gateway\|destination\|source\|message` |
+| `smpp_debug` | 开启或关闭全局 PDU 调试日志 | `smpp_debug [true\|false]` |
+
+`fs_cli` 示例：
+
+```
+smpp_send example.com|15551234567|15559876543|Hello from FreeSWITCH
+smpp_debug true
+smpp_debug false
+```
+
+`smpp_send` 中各字段使用竖线分隔，依次是网关名称、目标号码（`to_user`）、来源号码（`from_user`）及消息正文。
+
+## 聊天接口 {#chat-interface}
+
+除了拨号计划应用和 API 命令，该模块还注册一个 `smpp` 聊天接口和一个 `smpp_send` 聊天应用，可供聊天计划使用。
+
+| 接口 | 类型 | 用途 |
+|---|---|---|
+| `smpp` | CHAT（`proto=smpp`） | 将入站 `DELIVER_SM` PDU 通过聊天计划路由，同时作为出站聊天消息投递时使用的协议。发送时从 `smpp_gateway` 事件头选择网关；若不存在则回退到 `default`。 |
+| `smpp_send` | CHAT-APP | 在聊天计划中直接通过具名网关发送消息。 |
+
+`smpp_send` 聊天应用以网关名称作为其 `data` 参数：
+
+```xml
+<action application="smpp_send" data="example.com"/>
+```
+
+模块随附一个 `chatplan.conf.xml` 示例，演示入站路由与通过 `smpp_send` 进行出站投递。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `smpp_gateway` | 读写 | 入站 `DELIVER_SM` PDU 中设置为接收网关名称；通过聊天接口路由出站消息时，用来选择已配置网关，缺失时默认为 `default`。 |
+| `smpp_from_user` | 读取 | `smpp_send` 拨号计划应用移除 `smpp_` 前缀，并将其映射为出站 SMPP PDU 的 `from_user`。 |
+| `smpp_to_user` | 读取 | `smpp_send` 拨号计划应用移除 `smpp_` 前缀，并将其映射为出站 SMPP PDU 的 `to_user`。 |
+
+所有带 `smpp_` 前缀的通道变量都会在移除前缀后复制到出站消息事件中。其他通道变量则原样复制。
+
+收到入站 `DELIVER_SM` 时，解码后的聊天事件除 `smpp_gateway` 外，还包含可在聊天计划中匹配的额外事件头：`proto`（`smpp`）、`endpoint`（`mod_smpp`）、`sequence_number`、`command_status`、`command_id`、`source_addr_ton`、`source_addr_npi`、`dest_addr_ton`、`dest_addr_npi`、`data_coding` 和 `profile`（此外还有 `from_user`、`to_user` 及消息正文）。
+
+## 依赖项 {#dependencies}
+
+构建 `mod_smpp` 需要 **libsmpp34**（Osmocom SMPP 库）。必须提供 `smpp34.h`、`smpp34_structs.h` 和 `smpp34_params.h` 头文件。该库不随 FreeSWITCH 提供，编译前需要单独安装。
+
+**源码：** `src/mod/event_handlers/mod_smpp`、`conf/vanilla/autoload_configs/smpp.conf.xml`

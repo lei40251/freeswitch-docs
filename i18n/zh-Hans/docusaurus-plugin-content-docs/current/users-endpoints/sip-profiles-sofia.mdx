@@ -1,0 +1,810 @@
+---
+sidebar_position: 2
+id: sip-profiles-sofia
+slug: /users-and-endpoints/sip-profiles
+title: "第 7 章：使用 Sofia 的 SIP 配置实例"
+description: "通过 mod_sofia 配置 SIP 配置实例：每个实例都是独立的 SIP 用户代理，拥有自己的传输、编解码器、认证和路由设置。"
+sidebar_label: "7. 使用 Sofia 的 SIP 配置实例"
+---
+
+# 第 7 章：使用 Sofia 的 SIP 配置实例 {#chapter-7-sip-profiles-with-sofia}
+
+`mod_sofia` 是 FreeSWITCH 基于 Sofia-SIP 协议栈构建的 SIP 端点模块。SIP 配置实例（Profile）定义一个绑定到指定 IP 地址和端口的独立 SIP 用户代理；FreeSWITCH 中每个 SIP 用户代理都是独立的配置实例，有自己的传输方式、编解码器偏好、认证策略和拨号计划路由目标。
+
+<SignalWireCallout
+  title="无需编写配置实例 XML 的 SIP 服务"
+  href="https://signalwire.com/docs/platform/voice/sip/bring-your-own-carrier"
+  page="sip-profiles"
+  linkText="查看托管 SIP 和自带运营商（BYOC）">
+
+在托管式 SignalWire 平台上，SIP 端点、域名和运营商对接都是通过 API 或控制台创建的资源。注册、NAT 处理和 TLS 由平台负责，同时仍支持接入自己的运营商。
+
+</SignalWireCallout>
+
+## Sofia 配置实例模型 {#the-sofia-profile-model}
+
+每个 Sofia SIP 配置实例只服务一个 IP 地址与端口组合。通过运行多个配置实例，FreeSWITCH 可以在同一主机上提供彼此分离的 SIP 用户代理，例如一个用于内部已注册话机，另一个用于出站运营商中继。配置实例互相独立：每个都有自己的传输套接字、[ACL 规则](../integration/access-control-lists.mdx)、[编解码器偏好](../media/codecs-and-negotiation.mdx)、认证要求及拨号计划上下文。
+
+所有配置实例 XML 文件都位于 `conf/sip_profiles/`。模块级配置文件 `conf/autoload_configs/sofia.conf.xml` 使用 `X-PRE-PROCESS` include 指令加载该目录下所有 `*.xml` 文件：
+
+```xml
+<profiles>
+  <X-PRE-PROCESS cmd="include" data="../sip_profiles/*.xml"/>
+</profiles>
+```
+
+要增加一个配置实例，请将新 XML 文件放进 `conf/sip_profiles/`，在 FreeSWITCH 控制台运行 `sofia profile <name> start`，或者重启模块。
+
+---
+
+## Sofia 全局设置 {#global-sofia-settings}
+
+`sofia.conf.xml` 还包含一个应用于所有配置实例的 `global_settings` 块。
+
+```xml
+<global_settings>
+  <param name="log-level" value="0"/>
+  <param name="debug-presence" value="0"/>
+  <!-- <param name="auto-restart" value="false"/> -->
+  <!-- <param name="abort-on-empty-external-ip" value="true"/> -->
+  <!-- <param name="capture-server" value="udp:homer.domain.com:5060"/> -->
+</global_settings>
+```
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `log-level` | Sofia-SIP 协议栈日志详细程度 | `0`–`9` | `0` |
+| `debug-presence` | 呈现状态子系统调试日志详细程度 | `0`–`9` | `0` |
+| `auto-restart` | 配置变更后自动重新加载配置实例 | `true`、`false` | `true` |
+| `abort-on-empty-external-ip` | `ext-rtp-ip` 或 `ext-sip-ip` 解析为空时中止加载配置实例 | `true`、`false` | `false` |
+| `capture-server` | 用于镜像 SIP 消息的 HEP 抓包服务器 | `udp:host:port` 或 `udp:host:port;hep=3;capture_id=N` | 无 |
+
+---
+
+## 配置实例文件结构 {#profile-file-structure}
+
+配置实例 XML 文件具有如下基本结构：
+
+```xml
+<profile name="internal">
+  <aliases>
+    <!-- <alias name="default"/> -->
+  </aliases>
+
+  <gateways>
+    <!-- outbound provider registrations -->
+  </gateways>
+
+  <domains>
+    <domain name="all" alias="true" parse="false"/>
+  </domains>
+
+  <settings>
+    <param name="sip-port" value="5060"/>
+    <!-- ... additional parameters ... -->
+  </settings>
+</profile>
+```
+
+### `gateways` 块 {#the-gateways-block}
+
+向上游运营商或 SIP 中继发起的出站 SIP 注册定义在 `<gateways>` 中。`external` 配置实例通过 include 加载各个网关文件：
+
+```xml
+<gateways>
+  <X-PRE-PROCESS cmd="include" data="external/*.xml"/>
+</gateways>
+```
+
+每个网关 XML 文件定义一个出站注册。有关网关的说明参见[第 8 章：网关与中继注册](../users-endpoints/gateways.mdx)。
+
+### `aliases` 块 {#the-aliases-block}
+
+别名是配置实例在拨号计划字符串及 API 调用中可使用的替代名称。每个配置实例可以拥有多个别名。
+
+```xml
+<aliases>
+  <alias name="default"/>
+  <alias name="outbound"/>
+</aliases>
+```
+
+别名让 `sofia/default/1000@domain.com` 这样的拨号计划桥接字符串能够解析到 `internal` 配置实例，即使实例本身的名称是 `internal`。
+
+### `domains` 块 {#the-domains-block}
+
+`domains` 块控制两种相互独立的行为：配置实例是否解析用户目录中的域级网关定义，以及是否把列出的各域名用作该实例的路由别名。
+
+```xml
+<domains>
+  <domain name="all" alias="true" parse="false"/>
+</domains>
+```
+
+| 属性 | 用途 | 可用值 |
+|---|---|---|
+| `name` | 要作用的域名，或使用特殊值 `all` 匹配全部已配置域名 | FQDN 或 `all` |
+| `alias` | 将此域名别名映射到配置实例，使发往该域名的 SIP URI 在此解析 | `true`、`false` |
+| `parse` | 解析该域名的 FreeSWITCH 用户目录并加载其中定义的全部网关 | `true`、`false` |
+
+设置 `alias="true"` 且 `name="all"`，会使目录中的每个域名都成为该配置实例的别名。这是 `internal` 配置实例的默认值，支持已注册端点的多域名路由。
+
+设置 `parse="true"` 会指示配置实例读取指定域名的 XML 用户目录，并加载其中找到的 `<gateway>` 配置段。`external` 配置实例默认使用 `parse="true"` 和 `alias="false"`，因此会加载目录中的网关，但不会把所有域名的 SIP URI 路由到自己。
+
+### `settings` 块 {#the-settings-block}
+
+每个配置实例的运行参数都以 `<settings>` 内的 `<param name="..." value="..."/>` 元素声明。完整参考见第 5 节。
+
+---
+
+## 随附的配置实例 {#bundled-profiles}
+
+默认配置提供两个实例：`internal` 和 `external`。它们覆盖两类主要使用场景，并作为自定义实例的模板。
+
+### `internal` 配置实例 {#the-internal-profile}
+
+**文件：** `conf/sip_profiles/internal.xml`
+
+`internal` 配置实例面向桌面电话、软电话及 WebRTC 客户端等需要注册的 SIP 端点。它监听端口 `5060`（变量 `$${internal_sip_port}`），并默认强制摘要认证（`auth-calls` 经 `$${internal_auth_calls}` 解析为 `true`）。
+
+默认 `internal` 配置实例的主要特点：
+
+- 将 `sip-ip` 和 `rtp-ip` 绑定到 `$${local_ip_v4}`（系统检测到的本地 IPv4 地址）。
+- 将入站呼叫路由到 `public` 上下文。
+- 使用 `domains` ACL 对入站呼叫授权（`apply-inbound-acl` = `domains`）。
+- 启用呈现状态（`manage-presence` = `true`）。
+- 为 WebRTC 客户端启用 WebSocket（`ws-binding` = `:5066`）和安全 WebSocket（`wss-binding` = `:7443`）。
+- 通过 `force-register-domain` 将所有注册强制归入 `$${domain}` 定义的单一域名。
+- 将 `challenge-realm` 设为 `auto_from`，即摘要认证挑战中的 SIP realm 取自 `From` 头。
+- 启用 `inbound-late-negotiation`，使拨号计划可以选择编解码器。
+
+```xml
+<profile name="internal">
+  <aliases></aliases>
+  <gateways></gateways>
+  <domains>
+    <domain name="all" alias="true" parse="false"/>
+  </domains>
+  <settings>
+    <param name="context" value="public"/>
+    <param name="sip-port" value="$${internal_sip_port}"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+    <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+    <param name="dialplan" value="XML"/>
+    <param name="auth-calls" value="$${internal_auth_calls}"/>
+    <param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+    <param name="outbound-codec-prefs" value="$${global_codec_prefs}"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="inbound-late-negotiation" value="true"/>
+    <param name="manage-presence" value="true"/>
+    <param name="presence-hosts" value="$${domain},$${local_ip_v4}"/>
+    <param name="apply-inbound-acl" value="domains"/>
+    <param name="apply-nat-acl" value="nat.auto"/>
+    <param name="nonce-ttl" value="60"/>
+    <param name="auth-calls" value="$${internal_auth_calls}"/>
+    <param name="auth-all-packets" value="false"/>
+    <param name="auth-subscriptions" value="true"/>
+    <param name="inbound-reg-force-matching-username" value="true"/>
+    <param name="challenge-realm" value="auto_from"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rtp-hold-timeout-sec" value="1800"/>
+    <param name="hold-music" value="$${hold_music}"/>
+    <param name="record-path" value="$${recordings_dir}"/>
+    <param name="record-template" value="${caller_id_number}.${target_domain}.${strftime(%Y-%m-%d-%H-%M-%S)}.wav"/>
+    <param name="tls" value="$${internal_ssl_enable}"/>
+    <param name="tls-bind-params" value="transport=tls"/>
+    <param name="tls-sip-port" value="$${internal_tls_port}"/>
+    <param name="tls-version" value="$${sip_tls_version}"/>
+    <param name="ws-binding"  value=":5066"/>
+    <param name="wss-binding" value=":7443"/>
+    <param name="force-register-domain" value="$${domain}"/>
+    <param name="force-subscription-domain" value="$${domain}"/>
+    <param name="force-register-db-domain" value="$${domain}"/>
+  </settings>
+</profile>
+```
+
+### `external` 配置实例 {#the-external-profile}
+
+**文件：** `conf/sip_profiles/external.xml`
+
+`external` 配置实例用于向 SIP 运营商及上游中继发起出站注册。它监听端口 `5080`（变量 `$${external_sip_port}`），并禁用入站呼叫认证（`auth-calls` = `false`），因为运营商并非以用户身份注册，而是在网络或 IP 层进行认证。
+
+默认 `external` 配置实例的主要特点：
+
+- 监听端口 `5080`。
+- 将 `auth-calls` 设为 `false`；通常按 IP 信任运营商流量。
+- 将 `manage-presence` 设为 `false`；中继流量无需呈现状态。
+- 通过 `gateways` include 从 `conf/sip_profiles/external/*.xml` 加载网关定义。
+- 在 `domains` 块中使用 `parse="true"` 加载用户目录中定义的网关；使用 `alias="false"` 避免将域名的 SIP URI 自动路由到此实例。
+
+```xml
+<profile name="external">
+  <gateways>
+    <X-PRE-PROCESS cmd="include" data="external/*.xml"/>
+  </gateways>
+  <aliases></aliases>
+  <domains>
+    <domain name="all" alias="false" parse="true"/>
+  </domains>
+  <settings>
+    <param name="context" value="public"/>
+    <param name="sip-port" value="$${external_sip_port}"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+    <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+    <param name="dialplan" value="XML"/>
+    <param name="auth-calls" value="false"/>
+    <param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+    <param name="outbound-codec-prefs" value="$${outbound_codec_prefs}"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="inbound-late-negotiation" value="true"/>
+    <param name="manage-presence" value="false"/>
+    <param name="nonce-ttl" value="60"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rtp-hold-timeout-sec" value="1800"/>
+    <param name="hold-music" value="$${hold_music}"/>
+    <param name="tls" value="$${external_ssl_enable}"/>
+    <param name="tls-bind-params" value="transport=tls"/>
+    <param name="tls-sip-port" value="$${external_tls_port}"/>
+    <param name="tls-version" value="$${sip_tls_version}"/>
+  </settings>
+</profile>
+```
+
+---
+
+## 设置参数参考 {#settings-parameter-reference}
+
+### 身份与监听绑定 {#identity-and-binding}
+
+以下参数定义配置实例绑定的地址和端口，以及如何分派入站呼叫。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `sip-ip` | SIP 传输套接字的本地 IP 地址。只能使用 IP 地址，不能使用主机名。支持 `auto`（系统推测的 IP）、`interface:NAME`（按网卡名称解析）或显式点分十进制地址。 | IP 地址、`auto`、`interface:[auto\|ipv4\|ipv6]/IFNAME` | 系统推测的本地 IPv4 |
+| `sip-port` | SIP 传输监听的 UDP/TCP 端口。支持 `auto`，让操作系统分配端口。 | 端口号或 `auto` | `5060` |
+| `rtp-ip` | SDP 中用作 RTP 源/目的的本地 IP 地址。接受与 `sip-ip` 相同的形式。支持多个 `rtp-ip` 条目，配置实例会为每个呼叫选择合适的地址。 | IP 地址、`auto`、`interface:[auto\|ipv4\|ipv6]/IFNAME` | 系统推测的本地 IPv4 |
+| `context` | 入站呼叫交付到的拨号计划上下文。可由每呼叫 `user_context` 通道变量或 ACL 通过/失败上下文覆盖。 | 任意已定义拨号计划上下文名称 | `default` |
+| `dialplan` | 处理入站呼叫的拨号计划模块。 | `XML`、`inline` 或任意已加载的拨号计划模块名 | `XML` |
+| `bind-params` | 附加到 SIP 监听 URI 的传输参数，例如限制传输协议。 | 传输参数字符串，如 `transport=udp` | 无 |
+| `user-agent-string` | 覆盖此配置实例发送的 SIP `User-Agent` 头。设为 `_undef_` 可完全省略该头。 | 任意字符串或 `_undef_` | `FreeSWITCH-mod_sofia/<version>` |
+| `contact-user` | 此配置实例构造的 SIP Contact URI 中的用户部分。 | 字符串 | `mod_sofia` |
+| `sip-domain` | 覆盖此配置实例报告的 SIP 域名。未设置时默认使用 `sip-ip`。 | FQDN 或 IP 地址 | `sip-ip` 的值 |
+| `outbound-proxy` | 强制所有出站 SIP 请求通过此代理 URI；缺少 `sip:` scheme 时自动添加。 | SIP URI，如 `sip:proxy.example.com` | 无 |
+| `max-calls` | 此配置实例允许的最大并发呼叫数。`0` 表示不限制。 | 整数 | `0` |
+
+### 认证与注册 {#authentication-and-registration}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `auth-calls` | 要求入站 INVITE 请求使用摘要认证。 | `true`、`false` | `false` |
+| `auth-all-packets` | 启用认证时，对每种 SIP 请求方法都进行挑战，而不仅是 INVITE。 | `true`、`false` | `false` |
+| `auth-messages` | 要求入站 MESSAGE 请求使用摘要认证。 | `true`、`false` | `true` |
+| `auth-subscriptions` | 要求 SUBSCRIBE 请求使用摘要认证。 | `true`、`false` | `true` |
+| `accept-blind-reg` | 接受任何 REGISTER 请求，不向用户目录验证凭据。仅适用于测试环境。 | `true`、`false` | `false` |
+| `accept-blind-auth` | 接受任何摘要认证响应，不验证密码。仅适用于测试环境。 | `true`、`false` | `false` |
+| `apply-inbound-acl` | 对入站呼叫来源 IP 应用的 ACL 名称。通过 ACL 的呼叫可通过 `acl-name:pass-context:fail-context` 语法交付到可选上下文。支持多个同名参数。使用 `none` 清除。 | ACL 名称、`none` 或 `acl:pass-ctx:fail-ctx` | 无 |
+| `apply-register-acl` | 对 REGISTER 来源 IP 应用的 ACL 名称。IP 不在 ACL 中时拒绝注册。支持多个实例；使用 `none` 清除。 | ACL 名称或 `none` | 无 |
+| `apply-proxy-acl` | 对经由代理到达的请求应用的 ACL 名称（根据 `Via` 头判断）。支持多个实例；使用 `none` 清除。 | ACL 名称或 `none` | 无 |
+| `nonce-ttl` | 摘要认证 nonce 的有效期（秒）。启动时，小于 `60` 的值会强制调整为 `60`。 | 整数秒 | `60` |
+| `max-auth-validity` | 允许重用 nonce 的最大次数，超过后需要新的挑战。`0` 表示在 `nonce-ttl` 内无限次重用。 | 整数 | `0` |
+| `challenge-realm` | 摘要认证挑战中 `realm` 字段的值。`auto_from` 从 SIP `From` 头主机部分获取，`auto_to` 从 `To` 头获取，其他字符串按字面值使用。固定字符串会禁用多域名认证。 | `auto_from`、`auto_to` 或任意字面字符串 | `auto_to` |
+| `inbound-reg-force-matching-username` | 如果 `Authorization` 头的 `username` 字段不等于 `From` URI 的用户部分，则拒绝注册。 | `true`、`false` | `false` |
+| `multiple-registrations` | 允许同一用户同时从多个设备注册。`call-id` 以 Call-ID 跟踪注册，`contact` 按 Contact URI 跟踪。`true` 视为 `contact`。 | `false`、`call-id`、`contact`、`true` | `false` |
+
+### 呈现状态与注册域名 {#presence-and-registration-domain}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `manage-presence` | 启用配置实例的呈现状态引擎。`true` 启用完整状态服务；`passive` 采用只读/中继模式（用于共享 `internal` 的状态）；`pnp` 启用即插即用配置下发状态；`false` 禁用状态功能。 | `true`、`false`、`passive`、`pnp` | `false` |
+| `presence-hosts` | 此配置实例负责状态服务的主机名或 IP 列表（逗号分隔），用于把状态订阅匹配到正确实例。 | 逗号分隔的主机列表 | 无 |
+| `force-register-domain` | 覆盖所有入站注册存入用户目录时采用的域名。适用于单域服务器，避免因请求中的不同域名导致注册分散存储。 | 域名 | 无（使用请求中的域名） |
+| `force-register-db-domain` | 覆盖存储注册时使用的数据库键域名。通常与 `force-register-domain` 设为相同值。 | 域名 | 无（使用请求中的域名） |
+| `force-subscription-domain` | 覆盖路由 SUBSCRIBE 请求时使用的域名。 | 域名 | 无（使用请求中的域名） |
+| `record-path` | 此配置实例发起的通话录音的默认存储目录。 | 绝对路径 | `$${recordings_dir}` 的值 |
+| `record-template` | 自动录音的文件名模板。支持 FreeSWITCH 通道变量展开和 `${strftime(...)}`。 | 含变量引用的字符串 | 无 |
+
+### 媒体 {#media}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `inbound-codec-prefs` | SDP answer 中向入站主叫提供的按优先级排序的编解码器列表。 | 逗号分隔的编解码器名称，如 `OPUS,G722,PCMU,PCMA` | 无（使用全局编解码器列表） |
+| `outbound-codec-prefs` | 出站呼叫 SDP offer 中提供的按优先级排序的编解码器列表。 | 逗号分隔的编解码器名称 | 无（使用全局编解码器列表） |
+| `codec-prefs` | 用单个参数将 `inbound-codec-prefs` 和 `outbound-codec-prefs` 设置为相同值。 | 逗号分隔的编解码器名称 | 无 |
+| `inbound-codec-negotiation` | 控制如何将实例的编解码器列表与远端 SDP offer 协调。`generous` 选择远端 offer 中第一个本实例也支持的编解码器；`greedy` 根据实例自己的优先级列表对远端 offer 重新排序；`scrooge` 类似 `greedy`，并且拒绝任何不在实例列表中的编解码器。 | `generous`、`greedy`、`scrooge` | `generous` |
+| `disable-transcoding` | 桥接时限制出站呼叫腿只提供入站腿正在使用的编解码器，以阻止转码。 | `true`、`false` | `false` |
+| `media-option` | 修改媒体旁路（bypass-media）行为。`resume-media-on-hold` 在按下保持时重新将旁路呼叫媒体引入 FreeSWITCH；`bypass-media-after-att-xfer` 在咨询转接后恢复媒体旁路；`bypass-media-after-hold` 在保持结束后恢复媒体旁路（要求同时启用 `resume-media-on-hold`）；`none` 清除全部选项。此参数可以多次出现。 | `resume-media-on-hold`、`bypass-media-after-att-xfer`、`bypass-media-after-hold`、`none` | 无 |
+| `rtp-timeout-sec` | 活动（非保持）通话中 RTP 连续未活动达到该秒数后，FreeSWITCH 终止呼叫。**已弃用：**优先使用通道变量 `media_timeout`。 | 整数秒 | `0`（禁用；零初始化） |
+| `rtp-hold-timeout-sec` | 呼叫处于保持状态期间 RTP 连续未活动达到该秒数后，FreeSWITCH 终止呼叫。**已弃用：**优先使用通道变量 `media_hold_timeout`。 | 整数秒 | `0`（禁用；零初始化） |
+| `rtp-timer-name` | RTP 定时器名称。`soft` 为软件定时器；其他值取决于编译进来的定时器模块。默认配置设置为 `soft`。 | `soft` 或任意已加载定时器名 | 无（使用协议栈默认值） |
+| `hold-music` | 此实例的呼叫被保持时向被保持方播放的等待音乐来源 URI。 | 任意 FreeSWITCH 音频 URI，如 `local_stream://moh` | 无 |
+| `inbound-late-negotiation` | 允许在 FreeSWITCH 为 A 腿选择编解码器前让呼叫进入拨号计划，从而根据拨号计划逻辑选择编解码器。设置 `inbound-bypass-media` 时会自动启用。 | `true`、`false` | `false` |
+| `inbound-bypass-media` | 将所有入站呼叫立即置于媒体旁路（no-media proxy）模式。也可以使用 `inbound-no-media`。隐式启用 `inbound-late-negotiation`。 | `true`、`false` | `false` |
+| `inbound-proxy-media` | 将所有入站呼叫立即置于代理媒体模式。 | `true`、`false` | `false` |
+| `suppress-cng` | 禁止此配置实例生成舒适噪声（CNG）。也接受拼写 `supress-cng`。 | `true`、`false` | `false` |
+| `pass-rfc2833` | 直接透传 RFC 2833 telephone-event RTP 包，而不是在内部将它们转换为 DTMF 事件。适用于纯代理场景。 | `true`、`false` | `false` |
+| `rtp-rewrite-timestamps` | 从头重新生成 RTP 时间戳，而不直接透传原始时间戳。有些转码或桥接场景需要它，以防止时间戳不连续。 | `true`、`false` | `false` |
+| `disable-rtp-auto-adjust` | 禁用自动 RTP 来源地址学习。默认情况下，若实际收到的 RTP 地址不同于协商地址，会据此更新远端 RTP 目的地址。使用 `rtp-rewrite-timestamps` 或要求固定 RTP 路由时需要此项。 | `true`、`false` | `false` |
+| `rtp-autofix-timing` | 自动修正发送端抖动导致的 RTP 包时间异常。 | `true`、`false` | `true` |
+| `vad` | 在此配置实例上启用语音活动检测。`in` 作用于入站音频，`out` 作用于出站音频，`both` 作用于双向。 | `in`、`out`、`both`、`none` | `none` |
+| `bitpacking` | G.726 编解码器的比特打包模式。`aal2` 启用某些 ATM 衍生设备需要的 AAL2 式比特打包。 | `aal2`，或不设置以使用标准模式 | 标准（未设置） |
+| `rtcp-audio-interval-msec` | 音频流发送 RTCP 包的间隔（毫秒）。设为 `passthru` 可跨桥接透传 RTCP。 | 整数毫秒或 `passthru` | 无（禁用 RTCP） |
+| `rtcp-video-interval-msec` | 视频流发送 RTCP 包的间隔（毫秒）。 | 整数毫秒或 `passthru` | 无（禁用 RTCP） |
+| `auto-jitterbuffer-msec` | 在该配置实例的每个呼叫上启用指定大小（毫秒）的自动抖动缓冲区。小于 20 毫秒的值将被忽略。也可通过通道变量 `jitterbuffer_msec` 按通道设置。 | 整数毫秒 | 无（禁用抖动缓冲区） |
+
+### DTMF {#dtmf}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `dtmf-type` | 出站呼叫腿使用的 DTMF 方法。`rfc2833` 以 RFC 2833 telephone-event 包发送 DTMF；`info` 使用 SIP INFO；`none` 禁用自动 DTMF 处理。 | `rfc2833`、`info`、`none` | `rfc2833` |
+| `rfc2833-pt` | RFC 2833 telephone-event 使用的 RTP 负载类型编号，必须与远端预期一致。 | 整数负载类型 | `101` |
+| `dtmf-duration` | 生成的 RFC 2833 DTMF 数字时长，以 RTP 时间戳单位（8000 Hz 时钟）表示。有效范围为 `SWITCH_MIN_DTMF_DURATION`（400）至 `SWITCH_MAX_DTMF_DURATION`（192000），超出范围时回退到 `2000`。 | 整数 | `2000`（默认配置值；应用参数前原始配置实例默认值为 100） |
+| `liberal-dtmf` | 不要求与协商信令的方法一致，同时接受 RFC 2833 或 SIP INFO DTMF，提高与同时发送两种 DTMF 的端点的兼容性。 | `true`、`false` | `false` |
+| `rtp-digit-delay` | 发送连续 RFC 2833 DTMF 数字时插入的延迟（毫秒），可适配较慢的 DTMF 处理器。可通过通道变量 `rtp_digit_delay` 按通道覆盖。 | 整数毫秒 | `40` |
+
+### 呼叫控制与定时器 {#call-control-and-timers}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `enable-timer` | 启用 SIP 会话定时器（RFC 4028）；为 `false` 时禁用会话刷新。 | `true`、`false` | `true` |
+| `session-timeout` | SIP `Session-Expires` 头中的会话定时器间隔（秒）；`0` 禁用会话定时器。 | 整数秒 | `0` |
+| `minimum-session-expires` | 入站请求可接受的最小 Session-Expires 值（秒）。RFC 4028 要求至少 90，较小的值将强制调整为 90。 | 整数秒 | `0`（禁用） |
+| `sip-expires-max-deviation` | 在注册到期时间上添加随机秒数，以打散重新注册时间，防止故障恢复后的集中重注册。 | 整数秒 | `0` |
+| `sip-options-respond-503-on-busy` | 系统容量已满时，对 SIP OPTIONS 返回 `503 Service Unavailable` 而非 `200 OK`。 | `true`、`false` | `false` |
+| `unregister-on-options-fail` | 向已注册端点发送 OPTIONS 保活探测时，探测失败则取消注册。 | `true`、`false` | `false` |
+| `nat-options-ping` | 定期向处于 NAT 后的已注册端点发送 OPTIONS，以维持 NAT 映射。`udp-only` 限定只探测 UDP 端点。 | `true`、`false`、`udp-only` | `false` |
+| `all-reg-options-ping` | 定期向所有已注册端点发送 OPTIONS，而不仅是 NAT 后的端点。 | `true`、`false` | `false` |
+| `disable-transfer` | 在此实例上禁用 SIP REFER（盲转和咨询转接）。 | `true`、`false` | `false` |
+| `disable-register` | 在此实例上禁用 REGISTER 处理。 | `true`、`false` | `false` |
+| `caller-id-type` | 附加的主叫号码头格式。`rpid` 添加 `Remote-Party-ID`，`pid` 添加 `P-Asserted-Identity`，`none` 则不添加额外主叫身份头。 | `rpid`、`pid`、`none` | 不添加 |
+| `max-proceeding` | 处于 proceeding 状态的最大同时出站对话数；`0` 表示无限制。 | 整数 | `0` |
+| `max-recv-requests-per-second` | 每个配置实例每秒允许的入站 SIP 请求速率上限；`0` 禁用限制。 | 整数 | `1000` |
+
+### NAT 穿透 {#nat-traversal}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `ext-rtp-ip` | 在 RTP SDP 中宣告的公网 IP 地址，用于 FreeSWITCH 主机位于 NAT 后的情况。支持字面量 IP、`auto`（系统推测的外部 IP）、`auto-nat`（通过 NAT-PMP 或 UPnP 获得的 IP）、`stun:host`（STUN 查询）及 `host:hostname`（DNS 查询）。 | IP 地址、`auto`、`auto-nat`、`stun:host`、`host:hostname` | 无（使用 `rtp-ip`） |
+| `ext-sip-ip` | 在 SIP 传输的 Contact 和 Via 头中宣告的公网 IP 地址。支持与 `ext-rtp-ip` 相同的形式。 | IP 地址、`auto`、`auto-nat`、`stun:host`、`host:hostname` | 无（使用 `sip-ip`） |
+| `apply-nat-acl` | 用于识别 NAT 后端点的 ACL 名称。来源 IP 匹配该 ACL 时，视为端点位于 NAT 后，配置实例会相应调整 Contact 和 RTP 地址。支持多个实例；用 `none` 清除。 | ACL 名称或 `none` | 无 |
+| `aggressive-nat-detection` | 比较收到 SIP 包的来源 IP、端口与 Contact 头中的值。如果不一致，无论 `apply-nat-acl` 结果如何都视为端点位于 NAT 后。 | `true`、`false` | `false` |
+| `local-network-acl` | 定义本地网络的 ACL。本地网络中的端点不进行 NAT 处理。FreeSWITCH 会自动生成 `localnet.auto`。设为 `none` 可禁用。 | ACL 名称或 `none` | `localnet.auto` |
+| `NDLB-received-in-nat-reg-contact` | 在 REGISTER 响应的 Contact 中附加 `;received="ip:port"`，帮助无法检测自身公网地址的 NAT 话机。 | `true`、`false` | `false` |
+| `NDLB-force-rport` | 强制进行 NAT 的 `rport` 处理。`true` 在服务端和客户端都强制启用 rport；`safe` 仅在不影响符合规范的端点时启用；`client-only` 或 `server-only` 限定方向；`disabled` 完全关闭。 | `true`、`false`、`safe`、`client-only`、`server-only`、`disabled` | 服务端和客户端均为级别 1（标准 rport） |
+
+### TLS {#tls}
+
+TLS 默认禁用。启用时，需要将 `tls` 设为 `true`，并在 `tls-cert-dir` 中提供有效证书文件。`internal` 配置实例的默认 TLS 端口为 `5061`，`external` 为 `5081`。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `tls` | 在此配置实例启用 TLS 传输。 | `true`、`false` | `false` |
+| `tls-only` | 为 `true` 时，不绑定明文 SIP 端口（`sip-port`），只接受 TLS 端口上的连接。 | `true`、`false` | `false` |
+| `tls-bind-params` | 附加到 TLS 监听 URI 的参数。启用 TLS 时始终自动加入 `transport=tls`。 | 参数字符串 | `transport=tls` |
+| `tls-sip-port` | TLS 传输监听端口，支持 `auto`。`internal` 默认 `5061`（来自 `$${internal_tls_port}`），`external` 默认 `5081`（来自 `$${external_tls_port}`）。 | 端口号或 `auto` | `5061`（internal）/ `5081`（external） |
+| `tls-cert-dir` | 包含 TLS 证书文件 `agent.pem` 和 `cafile.pem` 的目录。TLS 服务端运行需要此目录；默认是 FreeSWITCH 全局 `certs_dir`。 | 目录绝对路径 | `$${certs_dir}` |
+| `tls-passphrase` | OpenSSL 用来解密受密码保护的私钥文件的口令。私钥未加密时留空。 | 字符串 | 空 |
+| `tls-version` | 要启用的 TLS/SSL 协议版本列表，以逗号分隔。接受 `sslv2`、`sslv3`、`sslv23`、`tlsv1`、`tlsv1.1`、`tlsv1.2`、`tlsv1.3`。编译默认启用 TLSv1 至 TLSv1.3；默认配置变量 `$${sip_tls_version}` 设为 `tlsv1,tlsv1.1,tlsv1.2`。 | 逗号分隔的版本标识 | `tlsv1,tlsv1.1,tlsv1.2,tlsv1.3`（编译默认值） |
+| `tls-ciphers` | 控制允许的密码套件的 OpenSSL 字符串。 | OpenSSL 密码套件字符串 | `ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH` |
+| `tls-verify-policy` | 控制入站与出站 TLS 连接的证书校验。`none` 禁用；`in` 验证入站；`out` 验证出站；`all` 两者都验证。添加 `subjects_` 前缀还会验证证书 Subject。多个策略可用 `\|` 组合。 | `none`、`in`、`out`、`all`、`subjects_in`、`subjects_out`、`subjects_all` | `none` |
+| `tls-verify-depth` | `tls-verify-policy` 非 `none` 时，对端证书校验允许的最大证书链深度。 | 整数 | `2` |
+| `tls-verify-date` | 验证对端证书是否仍在有效期内。 | `true`、`false` | `true` |
+| `tls-verify-in-subjects` | 采用 `subjects_*` 验证策略时允许的证书主体列表，以竖线（`\|`）分隔。 | 以竖线分隔的主体字符串 | 空 |
+| `tls-timeout` | 非活动 TLS 连接被关闭前的超时时间（秒）。 | 整数秒 | `300` |
+| `tls-orq-connect-timeout` | 出站 TLS 连接尝试的超时毫秒数。超时后 FreeSWITCH 会重试，也可能使用另一个 DNS 解析地址。`0` 禁用超时。 | 整数毫秒 | `0` |
+
+### WebSocket 监听绑定 {#websocket-bindings}
+
+这些参数为配置实例增加 WebSocket 和安全 WebSocket 监听器，使 WebRTC 客户端可通过 WebSocket 使用 SIP。它们独立于 TLS 设置。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `ws-binding` | WebSocket（WS）监听器的 IP 地址和端口，格式为 `[ip]:port`；省略 IP 时绑定全部接口。 | `[ip]:port`，如 `:5066` | 无 |
+| `wss-binding` | 安全 WebSocket（WSS）监听器的 IP 地址和端口。需要 `$${certs_dir}` 中的 `wss.pem` 证书，缺少时会自动生成。设置 `tls-cert-dir` 时，FreeSWITCH 还会在该目录查找 `wss.key` 和 `wss.crt`。 | `[ip]:port`，如 `:7443` | 无 |
+
+### 高级设置 {#advanced-settings}
+
+下面的参数可被解析器识别，但运维人员较少配置。为完整起见列于此，使用前请对照 `sofia.c` 确认当前行为。
+
+| 参数 | 用途 | 默认值 |
+|---|---|---|
+| `debug` | 此配置实例的 Sofia 模块调试级别。 | `0` |
+| `sip-trace` | 将此配置实例的原始 SIP 消息记录到 FreeSWITCH 日志。 | `false` |
+| `sip-capture` | 向 `global_settings` 配置的 HEP 抓包服务器发送 SIP 消息。 | `false` |
+| `odbc-dsn` | 使用外部数据库（而非 SQLite）保存注册信息的 ODBC 数据源名称，格式为 `dsn:user:pass`。 | 无（使用 SQLite） |
+| `dbname` | 覆盖此配置实例的 SQLite 数据库文件名。 | `sofia_reg_<profilename>` |
+| `db-spin-up-wait-ms` | 加载配置实例时，等待数据库可用的毫秒数。 | `1000` |
+| `inbound-use-callid-as-uuid` | 将入站呼叫的 SIP Call-ID 用作 FreeSWITCH 通道 UUID。 | `false` |
+| `outbound-use-uuid-as-callid` | 将 FreeSWITCH 通道 UUID 用作出站呼叫的 SIP Call-ID。 | `false` |
+| `enable-100rel` | 启用 RFC 3262 可靠临时响应（100rel / PRACK）。 | `false` |
+| `enable-compact-headers` | 发送使用紧凑头字段形式的 SIP 消息。 | `false` |
+| `enable-3pcc` | 启用第三方呼叫控制。`true` 表示立即接受，`proxy` 表示等待应答。 | `false` |
+| `enable-rfc-5626` | 在 REGISTER 请求中包含 `reg-id` 和 `sip.instance` 参数（RFC 5626 outbound）。 | `false` |
+| `rtp-autoflush-during-bridge` | 桥接时如果套接字已经积压数据，则刷新 RTP 缓冲区，以减少丢包链路上的延迟。不可配置：`mod_sofia` 不将它解析为配置实例参数，而是始终启用的硬编码默认行为。 | `true`（硬编码） |
+| `manage-shared-appearance` | 根据 BroadSoft 规范启用 Bridged Line Appearance（BLA/SCA），用于共享线路管理。 | `false` |
+| `parse-all-invite-headers` | 将入站 INVITE 的全部 SIP 头解析并暴露为通道变量。 | `false` |
+| `pass-callee-id` | 通过 `X-` 头向远端传递被叫身份信息。 | `true` |
+| `allow-update` | 允许处理 SIP UPDATE 方法。 | `true` |
+| `send-display-update` | 远端显示名称变化时发送 re-INVITE 以更新显示名称。要求 `allow-update` 为 `true`。 | `true` |
+| `disable-hold` | 禁用 SIP 保持（使用 `sendonly`/`inactive` 的 re-INVITE）。 | `false` |
+| `proxy-refer-replaces` | 将携带 Replaces 头的 SIP REFER 传递给拨号计划，而不是内部处理。也接受 `proxy-refer` 名称。 | `false` |
+| `t38-passthru` | 启用 T.38 传真透传模式。 | `false` |
+| `manual-redirect` | 将 SIP 302 重定向响应传递给拨号计划，而不自动跟随重定向。 | `false` |
+| `presence-probe-on-register` | 每次 REGISTER 时对已注册端点发送呈现状态探测，强制其重新发布状态。 | `false` |
+| `send-presence-on-register` | 每次注册时向订阅者推送状态信息。`true` 或 `all` 在每次 REGISTER 时推送，`first-only` 仅首次 REGISTER 推送。 | `false` |
+| `NDLB-broken-auth-hash` | 兼容某些端点在计算被挑战 ACK 的摘要哈希时错误地使用 `INVITE` 而非正确方法名的行为。 | `false` |
+| `NDLB-sendrecv-in-session` | 除媒体级别外，也在 SDP 会话级别发送 `a=sendrecv`，以兼容某些设备。 | `false` |
+| `NDLB-allow-bad-iananame` | 允许 SDP 中出现不符合 IANA 命名规则的编解码器名称。 | `false` |
+| `NDLB-expires-in-register-response` | 在 REGISTER 的 200 响应中包含 `Expires` 头（部分话机要求）。 | `false` |
+| `NDLB-allow-crypto-in-avp` | 允许 AVP（非 SAVP）SDP 中出现 SDES crypto 行，以兼容某些 SBC 和网关设备。 | `false` |
+| `NDLB-allow-nondup-sdp` | 允许 re-INVITE 包含重复或不唯一的 SDP 消息体。 | `true` |
+| `NDLB-proxy-never-patch-reinvites` | 在代理模式下永不重写 re-INVITE 中的 SDP。 | `false` |
+| `disable-srv` | 禁止对出站 SIP 目的地进行 SRV DNS 查询。 | `false` |
+| `disable-naptr` | 禁止对出站 SIP 目的地进行 NAPTR DNS 查询。 | `false` |
+| `disable-srv503` | 收到 `503` 时不尝试下一个 SRV 目的地（禁用 RFC 3263 第 4.3 节的故障切换）。 | `false` |
+| `auto-rtp-bugs` | 自动启用的 RTP 缺陷兼容规避项列表，以逗号分隔。支持 `CISCO_SKIP_MARK_BIT_2833`、`SONUS_SEND_INVALID_TIMESTAMP_2833` 等标记。`clear` 表示全部禁用。 | `CISCO_SKIP_MARK_BIT_2833` |
+| `timer-T1` | SIP 事务 T1 重传间隔（毫秒）。 | `500` |
+| `timer-T1X64` | SIP 事务超时时间（T1 × 64），单位毫秒。 | `32000` |
+| `timer-T2` | SIP 最大重传间隔（毫秒）。 | `4000` |
+| `timer-T4` | 已完成 SIP 事务的生存时间（毫秒）。 | `4000` |
+| `registration-thread-frequency` | 配置实例重新检查活动注册状态的间隔（秒）。 | `30` |
+| `bind-attempts` | 启动时 SIP 端口不可用时重试绑定的次数。 | `2` |
+| `bind-attempt-interval` | 两次绑定重试之间等待的秒数。 | `5` |
+| `watchdog-enabled` | 启用看门狗：如果 Sofia 协议栈停止处理事件，则使 FreeSWITCH 崩溃。空闲系统不要启用。 | `false` |
+| `watchdog-step-timeout` | Sofia 协议栈没有执行 step 达到该毫秒数后触发看门狗。 | `30000` |
+| `watchdog-event-timeout` | Sofia 协议栈没有事件达到该毫秒数后触发看门狗。 | `30000` |
+| `log-auth-failures` | 以 INFO 级别记录认证失败的尝试。 | `false` |
+| `shutdown-on-fail` | 此配置实例启动失败时关闭 FreeSWITCH。 | `false` |
+| `profile-standby` | 将此实例设为待机模式（不接受呼叫）。 | `false` |
+| `reuse-connections` | 复用已有 TCP/TLS 连接发送出站请求，而不是每次重新建立连接。 | `true` |
+| `sip-expires-late-margin` | 注册到期前，FreeSWITCH 将其视为过期并允许重新注册的提前秒数。 | `60` |
+| `sip-force-expires` | 强制所有注册使用此秒数作为有效期；`0` 不强制。 | `0` |
+| `sip-force-expires-min` | 强制注册有效期时应用的最小值。 | `0` |
+| `sip-force-expires-max` | 强制注册有效期时应用的最大值。 | `0` |
+| `sip-subscription-max-deviation` | 在 `202 Accepted` 响应的订阅有效期上增加随机偏差秒数。 | `0` |
+| `force-subscription-expires` | 强制所有订阅有效期为该秒数。 | 无 |
+| `force-publish-expires` | 强制所有 PUBLISH 有效期为该秒数。 | 无 |
+| `require-secure-rtp` | 要求此配置实例的所有呼叫都使用 SRTP。 | `false` |
+| `p-asserted-id-parse` | 控制入站呼叫的 `P-Asserted-Identity` 头解析方式。`default` 使用显示名和 URI，`user-only` 只提取用户部分，`user-domain` 提取用户和域名，`verbatim` 原样透传头值。 | `default` |
+| `user-agent-filter` | 正则表达式或字符串；仅处理 `User-Agent` 头匹配的请求。 | 无 |
+| `max-registrations-per-extension` | 限制每个分机号同时注册的数量；`0` 表示无限制。 | `0` |
+
+### 代理与中继转发 {#proxy-and-relay}
+
+这些参数使配置实例将选定的 SIP 请求传递给拨号计划（或桥接腿），而不是内部处理。每项都可用对应的 `sip_proxy_*` 通道变量按呼叫切换。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `proxy-info` | 跨桥接转发入站 SIP INFO 请求，而不在本地处理。可用通道变量 `sip_proxy_info` 按呼叫覆盖。 | `true`、`false` | `false` |
+| `proxy-info-content-types` | 限定 `proxy-info` 只转发 `Content-Type` 匹配列表的 INFO 消息。为空或未设置时代理所有 INFO 内容类型。 | 逗号或空格分隔的内容类型列表 | 无（转发所有类型） |
+| `proxy-message` | 跨桥接转发入站 SIP MESSAGE，而不在本地作为聊天消息处理。可用 `sip_proxy_message` 按呼叫覆盖。 | `true`、`false` | `false` |
+| `proxy-notify-events` | 将列出的事件包的对话内 NOTIFY 请求中继到桥接腿。`all` 代理所有事件类型；否则对 NOTIFY 的 `Event` 类型进行子串匹配。 | `all` 或事件类型列表 | 无 |
+| `proxy-hold` | 在代理/媒体旁路场景中透明透传保持和解除保持（带 `sendonly`/`inactive` 的 re-INVITE），而不是在本地生成保持。 | `true`、`false` | `false` |
+| `sip-messages-respond-200-ok` | 对入站 SIP MESSAGE 返回 `200 OK` 而不是 `202 Accepted`。默认 `internal.xml` 中此项被注释。 | `true`、`false` | `false` |
+| `sip-subscribe-respond-200-ok` | 对入站 SIP SUBSCRIBE 返回 `200 OK` 而不是 `202 Accepted`。默认 `internal.xml` 中此项被注释。 | `true`、`false` | `false` |
+| `pnp-provision-url` | 传递给即插即用（PnP）端点的配置下发 URL，配合 `manage-presence` = `pnp` 使用。 | URL 字符串 | 无 |
+
+### 转接与 REFER {#transfer-and-refer}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `confirm-blind-transfer` | 完成（并确认）盲转 REFER 前等待目标应答，避免目标失败时丢失被转接方。 | `true`、`false` | `false` |
+| `make-every-transfer-a-nightmare` | 强制所有转接都走“nightmare transfer”（完整地重新通过拨号计划路由）代码路径，而不只用于跨实例转接。属于诊断/兼容选项。 | `true`、`false` | `false` |
+| `channel-xml-fetch-on-nightmare-transfer` | nightmare transfer 期间从用户目录/拨号计划获取通道 XML，以重建转接腿的主叫数据。 | `true`、`false` | `false` |
+| `fire-transfer-events` | 在此配置实例处理每个 SIP 转接（REFER）时触发 FreeSWITCH 事件。 | `true`、`false` | `false` |
+
+### 扩展认证与盲认证 {#extended-authentication-and-blind-auth}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `auth-calls-acl-only` | 启用 `auth-calls` 时，将入站 ACL 匹配成功视为充分授权并跳过摘要挑战。要求 `auth-calls` = `true`。 | `true`、`false` | `false` |
+| `auth-require-user` | 在请求认证前，要求 SIP `From` 用户（或 `Authorization` 用户名）存在且可以解析。 | `true`、`false` | `false` |
+| `accept-blind-auth` | 接受所有摘要响应，不验证密码。仅用于测试。（此处为说明上下文而重复列出，见第 5.2 节。） | `true`、`false` | `false` |
+| `enforce-blind-auth-result` | 启用 `accept-blind-auth` 时，仍遵守底层用户目录查找结果；若盲认证查找失败则拒绝，而不是无条件接受。 | `true`、`false` | `false` |
+| `blind-auth-reply-403` | `enforce-blind-auth-result` 拒绝盲认证请求时返回 `403 Forbidden`，而不是再次发起挑战。 | `true`、`false` | `false` |
+| `disable-auth-messages` | `auth-messages` 的反向开关。`true` 关闭入站 MESSAGE 的摘要认证，`false` 要求认证。同时存在时覆盖 `auth-messages`。 | `true`、`false` | `false`（要求认证） |
+| `disable-auth-subscriptions` | `auth-subscriptions` 的反向开关。`true` 关闭 SUBSCRIBE 的摘要认证，`false` 要求认证。同时存在时覆盖 `auth-subscriptions`。 | `true`、`false` | `false`（要求认证） |
+| `rfc8760-auth-algorithms` | 以逗号分隔、按优先级排序的 RFC 8760 摘要算法列表，可在 MD5 之外提供/接受其他算法。最多 6 种；未知标记会被忽略，并按编译内置的优先顺序重新排序。 | 如 `SHA-256,SHA-512-256` | 无（仅 MD5） |
+
+### 扩展 ACL {#extended-acl}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `apply-candidate-acl` | 对 ICE/媒体候选地址（WebRTC）应用的 ACL。支持重复设置，最多达到候选 ACL 上限；`none` 用于清除。 | ACL 名称或 `none` | 无 |
+| `apply-inbound-acl-x-token` | 指定某个 `X-` 头，其值提供入站 ACL 检查使用的基于令牌的来源身份，使 ACL 可以依据受信任上游提供的地址进行评估。 | 头字段名称 | 无 |
+| `apply-proxy-acl-x-token` | 指定某个 `X-` 头，其值提供代理 ACL 检查使用的基于令牌的来源身份。 | 头字段名称 | 无 |
+| `use-port-for-acl-check` | 检查 ACL 时除了 IP 还考虑来源端口（或令牌提供的端口）。 | `true`、`false` | `false` |
+
+### TCP、保活与 NAT 传输 {#tcp-keepalive-and-nat-transport}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `tcp-keepalive` | 在 SIP TCP 连接上启用并设置 TCP 保活间隔（毫秒），通过 `TPTAG_KEEPALIVE` 传给传输层。 | 整数毫秒 | 未设置则关闭 |
+| `socket-tcp-keepalive` | 启用并设置操作系统套接字级 TCP 保活（`SO_KEEPALIVE`）间隔（毫秒），即 `TPTAG_SOCKET_KEEPALIVE`。 | 整数毫秒 | 未设置则关闭 |
+| `tcp-pingpong` | 在 TCP 上启用 Sofia ping-pong 保活并设置间隔（毫秒）。 | 整数毫秒 | 未设置则关闭 |
+| `tcp-ping2pong` | 在 TCP 上启用更严格的 ping2pong 保活变体并设置间隔（毫秒）。 | 整数毫秒 | 未设置则关闭 |
+| `keepalive-method` | 端点 SIP 级保活探测使用的方法。`info` 发送 SIP INFO；其他值使用 SIP MESSAGE。 | `info`、`message` | `message` |
+| `tcp-always-nat` | 无论 ACL 检测结果如何，都将通过 TCP 连接的端点视为位于 NAT 后。 | `true`、`false` | `false` |
+| `tls-always-nat` | 无论 ACL 检测结果如何，都将通过 TLS 连接的端点视为位于 NAT 后。 | `true`、`false` | `false` |
+| `tcp-unreg-on-socket-close` | TCP/TLS 连接套接字关闭时取消对应 Contact 的注册（与 `reuse-connections` 搭配时有用）。 | `true`、`false` | `false` |
+
+### 扩展媒体与 RTP {#extended-media-and-rtp}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `cng-pt` | 舒适噪声生成（CNG）使用的 RTP 负载类型。设置 `suppress-cng` 时会被忽略（后者强制其为 `0`）。 | 整数负载类型 | `13` |
+| `manual-rtp-bugs` | 为音频手动应用的 RTP 缺陷规避项列表，以逗号分隔（标记集合与 `auto-rtp-bugs` 相同）。`clear` 表示重置。 | RTP 缺陷标记列表或 `clear` | 无 |
+| `manual-video-rtp-bugs` | 为视频手动应用的 RTP 缺陷规避项列表，以逗号分隔。 | RTP 缺陷标记列表或 `clear` | 无 |
+| `rtp-notimer-during-bridge` | 呼叫桥接时禁用 RTP 软件定时器，由桥接对端控制媒体发送节奏。 | `true`、`false` | `false` |
+| `ignore-183nosdp` | 忽略不携带 SDP 的 `183 Session Progress`，不将其视为早期媒体。也可通过 `sip_ignore_183nosdp` 按呼叫设置。 | `true`、`false` | `false` |
+| `enable-soa` | 使用 Sofia SOA（SDP offer/answer）引擎。设为 `false` 可透传原始 SDP，避免 FreeSWITCH 通过 SOA 解析/改写 SDP。 | `true`、`false` | `true` |
+| `NDLB-support-asterisk-missing-srtp-auth` | 禁用 SRTP 认证，以兼容未提供 SRTP 认证标签的 Asterisk 构建版本。 | `true`、`false` | `false` |
+
+### 呈现状态、MWI 与聊天 {#presence-mwi-and-chat}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `presence-disable-early` | 在呈现状态/BLF NOTIFY 中不报告 `early`（振铃）对话状态，只报告 confirmed 和 terminated 状态。也可按呼叫设置。 | `true`、`false` | `false` |
+| `mwi-use-reg-callid` | 使用端点 REGISTER 保存的 Call-ID 发送 MWI NOTIFY，改善依赖注册对话识别 MWI 的话机的接收情况。 | `true`、`false` | `false` |
+| `forward-unsolicited-mwi-notify` | 将未经请求的（网关发起的）MWI NOTIFY 转发给匹配订阅者。 | `true`、`false` | `false` |
+| `send-message-query-on-register` | REGISTER 时查询用户已存储的消息（SIP MESSAGE）。`true`/`all` 每次 REGISTER 都执行，`first-only` 只在首次 REGISTER 时执行。 | `true`、`all`、`first-only`、`false` | `first-only` |
+| `fire-message-events` | 此配置实例每处理一个入站 SIP MESSAGE，就触发一次 FreeSWITCH 事件。 | `true`、`false` | `false` |
+| `enable-chat` | 在此配置实例上启用 SIP 聊天（MESSAGE）处理。设为 `false` 则禁用。 | `true`、`false` | `true` |
+| `in-dialog-chat` | 允许在已建立的对话内将 SIP MESSAGE 作为通话中聊天消息交付。 | `true`、`false` | `false` |
+
+### 注册探测 {#registration-ping}
+
+这些参数用于调整在后台探测已注册用户的线程（user-ping 循环，与 `nat-options-ping` 不同）。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `sip-user-ping-min` | 用户被判定为可达/UP 前所需的最少连续成功探测次数。 | 整数 | `1` |
+| `sip-user-ping-max` | 用户被判定为不可达/DOWN 前允许的最多连续失败探测次数。 | 整数 | `3` |
+| `ping-thread-frequency` | 探测线程唤醒并处理待执行探测的周期（秒）。负值恢复为编译默认值。 | 整数秒 | `1` |
+| `ping-mean-interval` | 对某个已注册用户进行探测的平均间隔（秒）。负值恢复为编译默认值。 | 整数秒 | `30` |
+
+### 数据库事务钩子 {#database-transaction-hooks}
+
+由配置实例的注册/对话数据库线程执行的 SQL 语句。应谨慎使用，主要用于外部数据库调优（例如 PRAGMA 或会话设置）。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `db-pre-trans-execute` | 每个外层数据库事务开始前执行的 SQL。 | SQL 字符串 | 无 |
+| `db-post-trans-execute` | 每个外层数据库事务结束后执行的 SQL。 | SQL 字符串 | 无 |
+| `db-inner-pre-trans-execute` | 每个内层数据库事务开始前执行的 SQL。 | SQL 字符串 | 无 |
+| `db-inner-post-trans-execute` | 每个内层数据库事务结束后执行的 SQL。 | SQL 字符串 | 无 |
+
+### 身份标识、RFC 7989 与 RFC 8760 {#identity-rfc-7989-and-rfc-8760}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `username` | 此配置实例生成的 SDP origin（`o=`）行中使用的用户名。 | 字符串 | `FreeSWITCH` |
+| `ext-sip-port` | 位于 NAT 后时在 Contact/Via 中宣告的公网 SIP 端口，适用于它与绑定的 `sip-port` 不同的情况。`ext-sip-ip` 的 STUN 解析会自动设置，也可显式覆盖。小于或等于 `0` 的值被忽略。 | 端口号 | 无（使用 `sip-port`） |
+| `rfc-7989` | 启用 RFC 7989 SIP Session-ID 的生成与传递。 | `true`、`false` | `false` |
+| `rfc-7989-filter` | 与 `rfc-7989` 配合使用，控制哪些消息携带 Session-ID 的头名称过滤器。 | 过滤字符串 | 无 |
+| `rfc-7989-force-old` | 强制使用较旧的（最终版之前的）RFC 7989 Session-ID 格式，以兼容早期实现。 | `true`、`false` | `false` |
+| `cid-in-1xx` | 在 `1xx` 临时响应中包含主叫/被叫身份（Remote-Party-ID / P-Asserted-Identity）。默认 `internal.xml` 中此项被注释。 | `true`、`false` | `true` |
+| `full-id-in-dialplan` | 向拨号计划暴露完整 SIP `From` 身份（包括参数的 URI），而不只是用户部分。 | `true`、`false` | `false` |
+| `extended-info-parsing` | 解析并暴露入站 SIP INFO 请求的额外字段。 | `true`、`false` | `false` |
+| `parse-invite-tel-params` | 解析入站 INVITE Request-URI 中的 `tel:` URI 参数，并暴露给通道。 | `true`、`false` | `false` |
+
+### 其他参数 {#miscellaneous}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `track-calls` | 启用呼叫跟踪（将此实例的恢复状态持久化到数据库）。一旦启用，在同一次加载中设置 `false` 不会清除该状态。 | `true` | `false` |
+| `update-refresher` | 在 UPDATE 请求的 `Session-Expires` 中包含 `refresher` 参数。也可通过 `sip_update_refresher` 按呼叫设置。 | `true`、`false` | `false` |
+| `auto-invite-100` | 为入站 INVITE 自动发送 `100 Trying`。默认 `internal.xml` 中此项被注释。 | `true`、`false` | `true` |
+| `3pcc-reinvite-bridged-on-ack` | 在第三方呼叫控制（3PCC）中收到 ACK 后才发送桥接 re-INVITE，而不是提前发送，提高与某些 3PCC 流程的兼容性。 | `true`、`false` | `false` |
+| `inbound-reg-in-new-thread` | 在独立线程中处理每个入站 REGISTER。默认 `internal.xml` 中此项被注释。 | `true`、`false` | `false` |
+| `fire-bye-response-events` | 收到对出站 BYE 的响应时触发 FreeSWITCH 事件。 | `true`、`false` | `false` |
+
+---
+
+## 入门：最简可用配置实例 {#getting-started-minimal-working-profile}
+
+以下最简配置实例足以在一台处于 NAT 后的主机上接收 SIP 呼叫并进行认证。可根据部署需要加入上面参考表中的其他参数。
+
+```xml
+<profile name="myprofile">
+  <aliases></aliases>
+  <gateways></gateways>
+  <domains>
+    <domain name="all" alias="true" parse="false"/>
+  </domains>
+
+  <settings>
+    <!-- Bind to the local LAN address -->
+    <param name="sip-ip"  value="192.0.2.10"/>
+    <param name="rtp-ip"  value="192.0.2.10"/>
+    <param name="sip-port" value="5060"/>
+
+    <!-- Advertise the public IP to remote parties (NAT scenario) -->
+    <param name="ext-sip-ip"  value="203.0.113.1"/>
+    <param name="ext-rtp-ip"  value="203.0.113.1"/>
+
+    <!-- Dialplan dispatch -->
+    <param name="context"  value="default"/>
+    <param name="dialplan" value="XML"/>
+
+    <!-- Authentication -->
+    <param name="auth-calls"    value="true"/>
+    <param name="nonce-ttl"     value="60"/>
+    <param name="challenge-realm" value="auto_from"/>
+
+    <!-- ACL -->
+    <param name="apply-nat-acl"      value="nat.auto"/>
+    <param name="apply-inbound-acl"  value="domains"/>
+
+    <!-- Codec preferences -->
+    <param name="inbound-codec-prefs"       value="OPUS,G722,PCMU,PCMA"/>
+    <param name="outbound-codec-prefs"      value="OPUS,G722,PCMU,PCMA"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+
+    <!-- RTP timer -->
+    <param name="rtp-timer-name" value="soft"/>
+
+    <!-- DTMF -->
+    <param name="dtmf-type" value="rfc2833"/>
+
+    <!-- Hold music -->
+    <param name="hold-music" value="local_stream://moh"/>
+  </settings>
+</profile>
+```
+
+在 `conf/sip_profiles/myprofile.xml` 创建此文件后，使用以下命令加载：
+
+```
+sofia profile myprofile start
+```
+
+使用以下命令验证它正在运行：
+
+```
+sofia status
+```
+
+运行状态中应该出现该配置实例绑定的 SIP URI 和传输协议。
+
+---
+
+## 呈现状态、BLF 与 MWI {#presence-blf-and-mwi}
+
+呈现状态（Presence）、忙灯指示（BLF）和消息等待指示（MWI）都依赖 SIP SUBSCRIBE/NOTIFY 机制。话机发送针对某个事件包的 SUBSCRIBE，状态发生相关变化时 FreeSWITCH 就发送 NOTIFY。本节的配置实例参数决定 FreeSWITCH 是否接受这些订阅以及如何处理。
+
+### 启用呈现状态 {#enabling-presence}
+
+每个配置实例通过 `manage-presence` 参数控制呈现状态。设为 `true` 时，配置实例注册完整的状态引擎：接受 dialog（BLF）和 message-summary（MWI）事件包的 SUBSCRIBE，将订阅保存到 `sip_subscriptions` 数据库表，并在状态变化时发送 NOTIFY。
+
+```xml
+<param name="manage-presence" value="true"/>
+```
+
+将 `manage-presence` 设为 `passive`，可启用只读中继模式。被动配置实例接受主呈现状态实例生成的状态事件，并向自己的订阅者转发 NOTIFY。适用于第二个配置实例（例如 `external`）需要中继状态，却不独立驱动状态的情况。
+
+将 `manage-presence` 设为 `false`，会完全禁用该实例的呈现状态。`external` 默认使用 `false`，因为运营商中继不进行用户注册或呈现状态订阅。
+
+`presence-hosts` 参数是以逗号分隔的主机名或 IP 列表，表示此配置实例负责哪些域的呈现状态。FreeSWITCH 根据该列表把入站 SUBSCRIBE 的 Request-URI 主机与已知实例匹配，也用于查询 `sip_subscriptions` 表中的匹配订阅者。默认 `internal` 实例将其设置为主域名和本地 IP：
+
+```xml
+<param name="presence-hosts" value="$${domain},$${local_ip_v4}"/>
+```
+
+如果话机订阅 `sip:1001@pbx.example.com`，且 `pbx.example.com` 出现在 `presence-hosts` 中，则该配置实例负责提供订阅服务。
+
+`presence-privacy` 参数用于隐藏呈现状态 NOTIFY 中的主叫身份信息。设为 `true` 时，`early`、`confirmed` 和 `hold` 状态的 NOTIFY 消息体状态行不会包含远端姓名或号码，只显示 `Ring`、`On The Phone` 或 `Hold` 等通用文字，从而限制 BLF 观察者可见的信息。
+
+### BLF（忙灯指示） {#blf-busy-lamp-field}
+
+BLF 通过 SIP `dialog` 事件包（RFC 4235）实现。具有 BLF 按键的话机会发送 SUBSCRIBE，请求监控指定分机：
+
+```
+SUBSCRIBE sip:1001@pbx.example.com SIP/2.0
+Event: dialog
+Accept: application/dialog-info+xml
+```
+
+当接收实例的 `manage-presence` 为 `true` 时，FreeSWITCH 接受 SUBSCRIBE，保存到 `sip_subscriptions`，并立即发送 NOTIFY，反映分机 `1001` 当前的呼叫状态。此后，只要该分机的对话状态变化，就会继续发送 NOTIFY：呼叫进入时为 early、应答后为 confirmed、结束后为 terminated。
+
+监控话机上的 BLF 按键必须指向分机的呈现状态标识。默认的呈现状态标识（通道变量 `presence_id`）为 `user@domain`。如果配置实例设置了 `force-subscription-domain`，就使用该域名替代 SUBSCRIBE URI 中的域名，确保单域部署时能够正确解析订阅。
+
+FreeSWITCH 从 `sip_dialogs` 表查找活动对话，并与 `sip_registrations` 关联，以确定订阅对象的当前状态。NOTIFY 消息体格式为 `application/dialog-info+xml`。
+
+**共享线路外观（SLA）**
+
+`manage-shared-appearance` 参数根据 BroadSoft SCA 规范启用共享线路外观（Shared Line Appearance）。设为 `true` 还会强制将 `manage-presence` 设为完整模式并启用多重注册（`PFLAG_MULTIREG`）。SLA 允许注册到同一分机的多部电话通过呈现状态协调呼叫状态，因而所有设备都能反映共享线路是否被占用、正在通话或处于保持状态。应在为共享线路端点服务的配置实例上设置：
+
+```xml
+<param name="manage-shared-appearance" value="true"/>
+```
+
+### MWI（消息等待指示） {#mwi-message-waiting-indication}
+
+MWI 使用 SIP `message-summary` 事件包（RFC 3842）。话机会订阅自身地址对应的事件包：
+
+```
+SUBSCRIBE sip:1001@pbx.example.com SIP/2.0
+Event: message-summary
+Accept: application/simple-message-summary
+```
+
+FreeSWITCH 保存订阅，每当该语音信箱的状态变化时便发送 NOTIFY。NOTIFY 消息体使用 `application/simple-message-summary` 格式，例如：
+
+```
+Messages-Waiting: yes
+Message-Account: sip:1001@pbx.example.com
+Voice-Message: 3/1 (0/0)
+```
+
+**语音信箱如何驱动 MWI**
+
+`mod_voicemail` 每当收到、读取或删除留言时，都会触发一次 `SWITCH_EVENT_MESSAGE_WAITING` 事件。事件携带 `MWI-Messages-Waiting`、`MWI-Message-Account` 和 `MWI-Voice-Message` 头。`mod_sofia` 监听此事件，并从 `sip_subscriptions` 查询 `sub_to_user` 和 `sub_to_host` 与留言账号匹配的订阅者，为每个匹配订阅发送 NOTIFY。
+
+**用户目录中的 `mwi-account` 变量**
+
+如果用户的语音信箱与 SIP 注册地址不同，可在目录用户条目中设置 `mwi-account` 变量。话机注册时，FreeSWITCH 将 `mwi-account` 的值作为 `mwi_user` 和 `mwi_host` 保存在 `sip_registrations` 中。对应账号的语音信箱事件到达时，FreeSWITCH 按 `mwi_user` 和 `mwi_host` 匹配，即使没有显式订阅也会向已注册 Contact 发送 NOTIFY。因此，以 `1001@pbx.example.com` 注册的话机可以收到其他地址语音信箱的 MWI。
+
+```xml
+<!-- In conf/directory/default/1001.xml -->
+<user id="1001">
+  <params>
+    <param name="password" value="1234"/>
+  </params>
+  <variables>
+    <variable name="mwi-account" value="1001@voicemail.example.com"/>
+  </variables>
+</user>
+```
+
+`mwi-account` 的值是 `user@host` 字符串。缺少主机部分时，FreeSWITCH 回退到注册主机名。
+
+### presence\_map.conf.xml {#presence_mapconfxml}
+
+`presence_map.conf.xml` 将分机正则表达式模式映射到呈现状态协议标识符。当配置实例参数 `presence-proto-lookup` 为 `true`，且收到的 SUBSCRIBE 所订阅分机无法从订阅本身确定协议时，将查询该文件。FreeSWITCH 调用 `switch_ivr_check_presence_mapping()` 打开配置，遍历域名/分机条目，返回 `regex` 与订阅分机名匹配的第一个 `proto`。
+
+主要用途是根据正则表达式识别会议室分机，将其订阅路由到 `conf` 呈现状态协议，而不是默认端点的状态处理。
+
+在配置实例中启用查询：
+
+```xml
+<param name="presence-proto-lookup" value="true"/>
+```
+
+文件路径为 `conf/autoload_configs/presence_map.conf.xml`，结构如下：
+
+```xml
+<configuration name="presence_map.conf" description="PRESENCE MAP">
+  <domains>
+    <domain name="pbx.example.com">
+      <!-- Extensions matching 3xxx map to conference presence -->
+      <exten regex="3\d+" proto="conf"/>
+      <!-- Extensions matching 4xxx map to park presence -->
+      <exten regex="4\d+" proto="park"/>
+    </domain>
+  </domains>
+</configuration>
+```
+
+在 `domain` 元素上使用 `name="*"` 匹配全部域名。每个 `exten` 元素按文档顺序评估，首个匹配生效。如果没有匹配条目，FreeSWITCH 使用标准呈现状态处理。
+
+### 呈现状态参数参考 {#presence-parameter-reference}
+
+以下参数位于配置实例的 `settings` 块。第 5.3 节已介绍的参数在此再次列出，以完整呈现状态功能组。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `manage-presence` | 在此配置实例上启用或禁用呈现状态引擎。`true` 启用完整的 SUBSCRIBE/NOTIFY；`passive` 从主实例中继状态；`pnp` 启用即插即用配置下发状态；`false` 禁用状态功能。 | `true`、`false`、`passive`、`pnp` | `false` |
+| `presence-hosts` | 此实例负责状态订阅的主机名或 IP 列表，以逗号分隔；用于匹配 SUBSCRIBE Request-URI 主机以及查询 `sip_subscriptions`。 | 逗号分隔的主机列表 | 无 |
+| `presence-privacy` | 为 `true` 时，在 BLF NOTIFY 中隐藏主叫身份；状态只显示 `Ring`、`On The Phone`、`Hold` 等通用文字，不包含远端号码或姓名。 | `true`、`false` | `false` |
+| `presence-probe-on-register` | 每次 REGISTER 时对注册端点发送呈现状态探测，强制其重新发布当前状态。 | `true`、`false` | `false` |
+| `send-presence-on-register` | 注册时向该用户的全部观察者推送呈现状态。`true` 或 `all` 每次 REGISTER 都推送，`first-only` 只在某 Contact 首次 REGISTER 时推送。 | `true`、`all`、`first-only`、`false` | `false` |
+| `manage-shared-appearance` | 启用 BroadSoft 共享呼叫外观（SCA/SLA），用于管理共享线路。设为 `true` 时也启用完整状态服务与多重注册。 | `true`、`false` | `false` |
+| `presence-proto-lookup` | 为 `true` 时，如果无法从 SUBSCRIBE 判断订阅分机使用的呈现状态协议，则查询 `presence_map.conf.xml`。 | `true`、`false` | `false` |
+| `presence-hold-state` | 控制通话处于保持时 BLF NOTIFY 报告的对话状态。`confirmed` 将保持呼叫报告为 confirmed（活动）；`terminated` 报告为 terminated；默认在对话 XML 中保留原始保持状态。 | `confirmed`、`terminated` | 无 |
+| `force-subscription-domain` | 覆盖 SUBSCRIBE 路由使用的域名，确保单域部署能正确解析订阅。 | 域名 | 无（使用请求中的域名） |
+| `auth-subscriptions` | 要求 SUBSCRIBE 进行摘要认证。在为注册端点服务的实例上应设为 `true`，以阻止未经认证的状态订阅。 | `true`、`false` | `true` |

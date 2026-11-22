@@ -1,0 +1,87 @@
+---
+sidebar_position: 1
+id: mod_imagick
+slug: /module-reference/formats/mod_imagick
+title: "mod_imagick — 用于传真的文档转 TIFF 处理"
+description: "利用 ImageMagick MagickCore 库将 PDF 和 GIF 页面渲染为视频帧。"
+sidebar_label: "mod_imagick"
+---
+
+# mod_imagick — 用于传真的文档转 TIFF 处理 {#mod_imagick-—-document-to-tiff-conversion-for-fax}
+
+`mod_imagick` 位于 `src/mod/formats/`，注册 FreeSWITCH 文件接口，可以打开 PDF 和 GIF 文件，并将其中的页面作为视频帧连续输出。它通过 ImageMagick MagickCore C API 将每页解码为原始 RGB 像素数据，FreeSWITCH 再将这些数据转换为 I420 视频流。
+
+主要用途是将多页 PDF 文档或动画 GIF 当作视频源播放，例如在视频通话中展示传真内容，或通过 `conference_play` API 驱动会议幻灯片播放。文档的每一页构成一帧视频；播放时序由逐文件句柄参数控制，而不是配置文件。
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 使用的模块名是 `mod_imagick`。
+
+默认的 `autoload_configs/modules.conf.xml` **没有** `mod_imagick`，需要手动添加。其他随附配置 Profile（sbc、minimal、insideout、testing）中也没有该模块。添加以下行即可启用自动加载：
+
+```xml
+<load module="mod_imagick"/>
+```
+
+编译时需要 ImageMagick 开发头文件和库（`libmagickcore-dev`）。如果找不到对应库，构建系统会报错并中止。通过编译选项 `-DHAVE_MAGIC7` 支持 ImageMagick 7；旧版本使用 `magick/MagickCore.h` 头文件路径。
+
+## 文件接口 {#file-interface}
+
+`mod_imagick` 向 FreeSWITCH 文件接口层注册以下文件扩展名：
+
+| 扩展名 | 描述 |
+|-----------|-------------|
+| `imgk` | 通用 ImageMagick 格式别名；将路径直接传给 `ReadImages` |
+| `pdf` | 多页 PDF，每一页单独渲染为一个视频帧 |
+| `gif` | 动画 GIF，根据各帧内嵌的延迟元数据循环播放页面 |
+
+凡是 FreeSWITCH 接受文件路径的地方都可以使用这些扩展名，包括 `playback` 应用、`uuid_broadcast` API、`conference_play` 以及 `${file_string}` 组合路径。
+
+拨号计划示例：
+
+```xml
+<action application="playback" data="/tmp/slides.pdf{img_ms=5000}"/>
+```
+
+从 `fs_cli` 调用 `conference_play` 的示例：
+
+```
+conference myconf play /tmp/presentation.pdf{img_ms=3000}
+```
+
+### 逐句柄 URL 参数 {#per-handle-url-parameters}
+
+这些参数以花括号形式附加在文件路径后（`{key=value,key=value}`），由 `imagick_file_open` 从 `handle->params` 中通过 `switch_event_get_header` 读取。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `img_ms` | 最大总显示时长，单位毫秒 | 正整数 | `86400000`（24 小时） |
+| `autoplay` | 自动翻页；GIF 在帧延迟非零时使用内嵌延迟，PDF 可设置页面停留毫秒数 | 整数（ms），`0` 表示禁用 | GIF 为 `1`，PDF/imgk 为 `0` |
+| `density` | 传给 `ImageInfo->density` 的 ImageMagick 渲染密度（DPI 字符串） | 字符串，例如 `"150"` 或 `"150x150"` | ImageMagick 默认值 |
+| `quality` | JPEG/PNG 压缩质量提示 | `1`～`100` 的整数 | ImageMagick 默认值 |
+| `lazy` | 仅同步加载前 N 页，其余页面在后台线程加载 | 非负整数；设为 `1` 表示仅预加载首页 | `0`（打开前加载全部页面） |
+| `cookie` | 延迟加载完成后触发 `imagick::info` 事件时附带的任意字符串 | 任意字符串 | _无_ |
+
+## 事件 {#events}
+
+启用 `lazy` 加载时，后台页面加载线程完成后，`mod_imagick` 会触发一次自定义事件。
+
+| 事件类 | 子类 | 头字段 |
+|-------------|----------|---------|
+| `SWITCH_EVENT_CUSTOM` | `imagick::info` | `type=loaded`、`filename`、`pagecount`、`cookie`（如有设置） |
+
+脚本或 ESL 使用者可以通过 `event_bind` 捕获这个事件，以确认大型 PDF 的全部页面都已解码、可以定位。
+
+## 依赖 {#dependencies}
+
+编译及运行时都需要 **ImageMagick**（MagickCore）：
+
+- Debian/Ubuntu：`libmagickcore-dev`（构建时）、`libmagickcore-*`（运行时）。
+- `Makefile.am` 中的 `if HAVE_MAGICK` 防止在缺少该库的情况下构建。
+- 同时支持 ImageMagick 6 和 7；检测到版本 7 头文件时，构建系统设置 `-DHAVE_MAGIC7`。
+
+## 另请参阅 {#see-also}
+
+- [第 24 章：传真与 T.38](../../applications/fax-t38.mdx)
+
+**源码：** `src/mod/formats/mod_imagick`

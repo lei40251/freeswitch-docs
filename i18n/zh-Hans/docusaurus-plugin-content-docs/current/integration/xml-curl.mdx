@@ -1,0 +1,484 @@
+---
+sidebar_position: 2
+id: xml-curl
+slug: /integration/xml-curl
+title: "第 26 章：HTTP 集成：XML Curl 与 HTTAPI"
+description: "通过 mod_xml_curl 和 mod_httapi 拨号计划应用接入 HTTP 后端，实现动态配置与实时呼叫控制。"
+sidebar_label: "26. XML Curl 与 HTTAPI"
+---
+
+# 第 26 章：HTTP 集成：XML Curl 与 HTTAPI {#chapter-26-http-integration-xml-curl-and-httapi}
+
+FreeSWITCH 提供两种不同的 HTTP 集成方式。`mod_xml_curl` 将一个或多个配置段落原本使用的静态 XML 文件查询，替换为发往后端服务的 HTTP 请求，从而实现集中管理、数据库驱动的配置。`mod_httapi` 是拨号计划应用，它将正在进行的通话控制交给 HTTP 后端：呼叫的每一步，FreeSWITCH 都将当前呼叫状态 POST 到指定 URL，后端返回 XML 文档，告诉 FreeSWITCH 下一步执行什么。两者互相独立，也可以配合使用。
+
+<SignalWireCallout
+  title="这种模型你已经熟悉"
+  href="https://signalwire.com/docs/swml"
+  page="xml-curl"
+  linkText="查看按呼叫下发的 SWML">
+
+按请求提供配置与 SignalWire 托管平台的工作方式非常相似：每通呼叫都能从你的服务器获取 SWML（JSON/YAML 呼叫控制文档）。区别在于请求背后的执行引擎由平台托管，因此不需要自行维护集群来响应 `mod_xml_curl`。
+
+</SignalWireCallout>
+
+## 第一部分：XML Curl {#part-1-xml-curl}
+
+## XML Curl 的工作原理 {#how-xml-curl-works}
+
+FreeSWITCH 使用 XML 注册表作为运行时数据存储。当需要查询拨号计划、用户目录条目或模块配置时，会向注册表请求相应段落。默认情况下，注册表的数据来自磁盘上的静态 XML 文件。
+
+`mod_xml_curl` 为一个或多个段落注册获取处理器。FreeSWITCH 查询已绑定段落时，`mod_xml_curl` 会向配置的 URL 发出 HTTP 请求，并将查找上下文作为 POST 字段提交。后端必须返回对应段落的格式正确的 XML 文档。FreeSWITCH 解析响应并使用它代替原本会读取的静态文件。
+
+对已绑定段落而言，绑定关系是排他的：一旦段落绑定到某个 URL，该 URL 就是此段落的唯一数据源，不会再读取它的静态文件。
+
+---
+
+## 启用模块 {#enabling-the-module}
+
+如果 `autoload_configs/modules.conf.xml` 中尚未包含 `mod_xml_curl`，请添加：
+
+```xml
+<load module="mod_xml_curl"/>
+```
+
+如果 `mod_xml_curl` 必须为启动期间加载的其他模块提供配置，需要让它先于这些模块加载。参见[提前加载 mod_xml_curl](#loading-mod_xml_curl-early)。
+
+---
+
+## 配置文件 {#configuration-file}
+
+`mod_xml_curl` 从 `autoload_configs/xml_curl.conf.xml` 读取配置。根元素为 `<configuration>`，包含一个 `<bindings>` 子元素。每个 `<binding>` 定义一个 HTTP 网关。
+
+```xml
+<configuration name="xml_curl.conf" description="cURL XML Gateway">
+  <bindings>
+    <binding name="my-backend">
+      <param name="gateway-url" value="https://example.com/freeswitch/xml" bindings="directory"/>
+      <param name="gateway-credentials" value="fsuser:secret"/>
+      <param name="auth-scheme" value="basic"/>
+      <param name="timeout" value="10"/>
+    </binding>
+  </bindings>
+</configuration>
+```
+
+可以定义多个 `<binding>`，每个绑定相互独立，并且可服务于不同的配置段落。
+
+---
+
+## 绑定 {#bindings}
+
+### gateway-url 参数与 bindings 属性 {#the-gateway-url-parameter-and-the-bindings-attribute}
+
+`gateway-url` 参数指定绑定的 HTTP 端点。其 XML 属性 `bindings`（**不是**子级 `<param>`）声明此绑定负责哪些配置段落：
+
+```xml
+<param name="gateway-url" value="https://example.com/freeswitch/xml" bindings="directory"/>
+```
+
+`bindings` 属性接受一个或多个通过竖线分隔的段落名：
+
+```xml
+<param name="gateway-url" value="https://example.com/freeswitch/xml" bindings="directory|dialplan"/>
+```
+
+如果省略 `bindings` 属性，该绑定会处理所有段落。
+
+还可以使用 `file:` 协议从本地文件路径读取，而不是发送 HTTP 请求：
+
+```xml
+<param name="gateway-url" value="file:/etc/freeswitch/static-directory.xml" bindings="directory"/>
+```
+
+使用 `file:` URL 时，`mod_xml_curl` 直接读取指定文件。对于该协议，`gateway-credentials`、`method`、`timeout` 及全部 TLS 参数均被忽略。
+
+### 可绑定的段落名称 {#bindable-section-names}
+
+`switch_xml_parse_section_string` 识别以下名称，可以用于 `bindings` 属性：
+
+| 段落名称 | 用途 |
+|---|---|
+| `config` | 模块配置（`autoload_configs/*.conf.xml`）。 |
+| `directory` | 用户目录和 SIP 身份认证。 |
+| `dialplan` | 拨号计划上下文和分机。 |
+| `languages` | Phrase 宏的语言定义。 |
+| `chatplan` | 聊天消息路由计划。 |
+| `channels` | 通道变量查询。 |
+
+### 绑定参数参考 {#binding-parameter-reference}
+
+以下参数均作为 `<binding>` 元素下的 `<param>` 子元素配置。
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `gateway-url` | 获取 XML 的目标端点。携带 `bindings` XML 属性，用于声明此绑定服务的段落。也支持 `file:` 协议读取本地文件。启用 `use-dynamic-url` 后可在 URL 中替换变量。 | HTTP、HTTPS URL，或 `file:/path/to/file` | 无（必填） |
+| `gateway-credentials` | HTTP 身份认证凭据。 | `username:password` 字符串 | 无 |
+| `auth-scheme` | 配置 `gateway-credentials` 时使用的认证方案。增加 `=` 前缀可强制只使用指定方案，而不允许 libcurl 协商。 | `basic`、`digest`、`NTLM`、`GSS-NEGOTIATE`、`any` | `basic` |
+| `method` | HTTP 请求方法。省略或设为 `post` 时，字段作为 POST 正文发送。设置为其他值时，字段追加到 URL 查询字符串，并使用指定的方法发出请求。 | `post` 或任意 HTTP 方法字符串 | 省略（采用 POST 行为） |
+| `disable-100-continue` | 控制是否抑制 `Expect: 100-continue` 头。设为 `false` 时发送此头；省略或设为 `true` 时抑制。 | `true`、`false` | `true`（抑制该头） |
+| `timeout` | 等待后端响应的最大秒数；`0` 表示无超时。 | 非负整数 | `0`（无超时） |
+| `enable-cacert-check` | 启用 libcurl 根 CA 证书验证，仅对 HTTPS 有意义。 | `true`、`false` | `false` |
+| `enable-ssl-verifyhost` | 验证服务器主机名与证书 CN 或 SAN 一致。 | `true`、`false` | `false` |
+| `ssl-cert-path` | 双向 TLS 使用的 PEM 格式客户端公钥证书路径，应与 `ssl-key-path` 一起使用。 | 绝对文件路径 | 无 |
+| `ssl-key-path` | 双向 TLS 使用的 PEM 格式客户端私钥路径，应与 `ssl-cert-path` 一起使用。 | 绝对文件路径 | 无 |
+| `ssl-key-password` | `ssl-key-path` 中私钥的口令。 | 字符串 | 无 |
+| `ssl-version` | 强制指定 TLS/SSL 协议版本。 | `SSLv3`、`TLSv1` | libcurl 自动协商 |
+| `ssl-cacert-file` | 用于验证对端的 PEM CA 证书路径，要求 `enable-cacert-check` 为 `true`。 | 绝对文件路径 | 无 |
+| `cookie-file` | 跨请求保存和发送 HTTP Cookie 的文件路径。 | 绝对文件路径 | 无 |
+| `bind-local` | 发出 HTTP 请求时使用的来源 IP 或网络接口。 | IP 地址字符串 | 系统默认值 |
+| `use-dynamic-url` | 在请求时允许展开 `gateway-url` 中的 FreeSWITCH 通道变量。启用后，可用于展开的变量集合还会加入五个核心请求字段：`hostname`、`section`、`tag_name`、`key_name`、`key_value`。 | `true`、`false` | `false` |
+| `enable-post-var` | 限制发送哪些 POST 字段。每个条目列出一个需要包含的变量；没有任何 `enable-post-var` 时发送全部可用字段。 | 变量名字符串 | 发送全部字段 |
+| `response-max-bytes` | FreeSWITCH 接受的 HTTP 响应正文最大字节数。超过限制的响应会被丢弃。 | 非负整数 | `1048576`（1 MB） |
+
+---
+
+## HTTP 请求 {#the-http-request}
+
+`mod_xml_curl` 使用 libcurl 访问指定的 `gateway-url`。默认采用 HTTP POST，请求头为 `Content-Type: application/x-www-form-urlencoded`，`User-Agent` 为 `freeswitch-xml/1.0`。
+
+请求正文（使用非 POST 方法时则为 URL 查询字符串）包含下列字段，以及查找时在作用域中的其他 FreeSWITCH 通道变量或事件变量：
+
+| 字段 | 说明 |
+|---|---|
+| `hostname` | FreeSWITCH 交换机名称（`switch.conf.xml` 中的 `switch_name`，未配置时为系统主机名）。 |
+| `section` | 请求的段落名称，例如 `directory`、`dialplan`。 |
+| `tag_name` | 查找的 XML 标签，例如 `domain`、`context`。 |
+| `key_name` | 查询使用的属性名称，例如 `name`。 |
+| `key_value` | 查找的属性值，例如域名或上下文名称。 |
+
+存在 `enable-post-var` 参数时，只会发送这些参数指定的变量以及上述五个核心字段。
+
+`method` 不是 `post` 时，所有字段均追加到 URL 的查询字符串，并使用指定 HTTP 方法发起请求。
+
+FreeSWITCH 最多跟随 10 次 HTTP 重定向。
+
+---
+
+## HTTP 响应 {#the-http-response}
+
+### 找到结果时的响应 {#found-response}
+
+后端必须返回 HTTP `200`，正文为有效的 FreeSWITCH XML 段落文档。文档以 `<document>` 为根元素，其中包含 `<section>` 元素，其 `name` 属性必须与请求的段落相匹配。
+
+例如，`directory` 查询的响应：
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<document type="freeswitch/xml">
+  <section name="directory">
+    <domain name="example.com">
+      <users>
+        <user id="1000">
+          <params>
+            <param name="password" value="correcthorsebatterystaple"/>
+          </params>
+          <variables>
+            <variable name="toll_allow" value="domestic"/>
+          </variables>
+        </user>
+      </users>
+    </domain>
+  </section>
+</document>
+```
+
+除 `200` 之外的任何 HTTP 状态码，都会使 FreeSWITCH 丢弃响应并记录错误。
+
+### 未找到时的响应 {#not-found-response}
+
+后端无法找到请求条目时，必须返回 HTTP `200`，并在正文中提供“未找到”结果文档。FreeSWITCH 会识别该结构，将其视为一次查询未命中，允许继续执行相应的回退流程：
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<document type="freeswitch/xml">
+  <section name="result">
+    <result status="not found"/>
+  </section>
+</document>
+```
+
+返回空正文或非 200 状态码，并不等同于规范的未找到结果，而且会产生错误日志。
+
+---
+
+## 提前加载 mod_xml_curl {#loading-mod_xml_curl-early}
+
+`mod_xml_curl` 通常按照 `autoload_configs/modules.conf.xml` 中定义的模块加载顺序启动。如果它负责 `config` 段落，而其他启动时加载的模块又需要从该段落读取配置，就可能出现时序问题：其他模块加载时，`mod_xml_curl` 尚未准备好提供配置。
+
+要让 `mod_xml_curl` 先于其他模块加载，请将它添加到 `autoload_configs/pre_load_modules.conf.xml`：
+
+```xml
+<configuration name="pre_load_modules.conf" description="Modules">
+  <modules>
+    <load module="mod_xml_curl"/>
+  </modules>
+</configuration>
+```
+
+`pre_load_modules.conf.xml` 中列出的模块会在主模块列表处理前加载。不要在 `modules.conf.xml` 中重复添加同一项，只在一个文件中列出 `mod_xml_curl`。
+
+---
+
+## 与静态文件的关系 {#behavior-with-static-files}
+
+将段落绑定到某个端点后，会完全替代该段落的静态文件查询。即使 `mod_xml_curl` 返回有效的“未找到”文档，FreeSWITCH 也不会回退读取磁盘文件。后端是已绑定段落每次查询的唯一权威数据源。
+
+没有在任何绑定的 `bindings` 属性中出现的段落，则仍照常从静态文件读取。
+
+---
+
+## 调试模式 {#debug-mode}
+
+`mod_xml_curl` 提供一个 API 命令，可在获取 XML 后将临时响应文件保留在磁盘上供检查，而不是立即删除：
+
+```
+freeswitch> xml_curl debug_on
+freeswitch> xml_curl debug_off
+```
+
+启用调试模式后，每个响应都写为 FreeSWITCH `temp` 目录中的 `.tmp.xml` 文件，文件路径同时打印到控制台日志。使用 `debug_off` 可以恢复正常清理行为。
+
+---
+
+## 第二部分：HTTAPI {#part-2-httapi}
+
+## HTTAPI 概览 {#httapi-overview}
+
+`mod_httapi` 是拨号计划应用。管理员无需在拨号计划中静态编写全部通话流程，而是将呼叫通过 URL 指向 `httapi` 应用。呼叫进行的每一步，FreeSWITCH 都把当前会话状态 POST 到该 URL，并期待后端返回 XML 文档。文档包含一个 `<work>` 元素，其子元素是指导 FreeSWITCH 下一步动作的指令（verb），例如播放文件、收集按键、转接、挂机等。动作执行完毕后，FreeSWITCH 再次发送 POST，形成请求/应答循环，直到呼叫结束。
+
+这与 XML Curl 不同。XML Curl 只在查询时向 FreeSWITCH 提供静态配置与目录数据，不参与实时呼叫控制；HTTAPI 则在活动会话期间，通过 HTTP 逐步驱动呼叫控制。
+
+`mod_httapi` 包含在默认 FreeSWITCH 构建中，列于 `autoload_configs/modules.conf.xml` 时会自动加载。
+
+---
+
+## 启用 mod_httapi {#enabling-mod_httapi}
+
+确认 `autoload_configs/modules.conf.xml` 中包含 `mod_httapi`：
+
+```xml
+<load module="mod_httapi"/>
+```
+
+模块加载时从 `autoload_configs/httapi.conf.xml` 读取配置。
+
+---
+
+## httapi.conf.xml {#httapiconfxml}
+
+配置文件的 `<configuration>` 根元素下有三个顶层区域：`<settings>`（全局参数）；`<profiles>`（一个或多个 `<profile>`）；每个 Profile 内再包含用于 HTTP 连接设置的 `<params>`、用于控制后端权限的 `<permissions>`，以及可选的 `<conference>`、`<dial>`，为对应指令提供默认值。
+
+```xml
+<configuration name="httapi.conf" description="HT-TAPI Hypertext Telephony API">
+  <settings>
+    <param name="debug" value="false"/>
+    <param name="file-cache-ttl" value="300"/>
+    <param name="file-not-found-expires" value="300"/>
+  </settings>
+  <profiles>
+    <profile name="default">
+      <conference>
+        <param name="default-profile" value="default"/>
+      </conference>
+      <dial>
+        <param name="context" value="default"/>
+        <param name="dialplan" value="XML"/>
+      </dial>
+      <permissions>
+        <permission name="set-params" value="true"/>
+        <permission name="execute-apps" value="true">
+          <application-list default="deny">
+            <application name="info"/>
+            <application name="hangup"/>
+          </application-list>
+        </permission>
+        <permission name="dial" value="true"/>
+        <permission name="conference" value="true"/>
+      </permissions>
+      <params>
+        <param name="gateway-url" value="http://example.com/httapi"/>
+      </params>
+    </profile>
+  </profiles>
+</configuration>
+```
+
+### 全局设置 {#global-settings}
+
+以下参数放在 `<settings>` 中，并适用于所有 Profile。
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `debug` | 每次请求都把完整 XML 响应打印到控制台。 | `true`、`false` | `true`（示例配置；生产环境建议 `false`） |
+| `file-cache-ttl` | 重新检查 HTTP 服务器上的远程音频文件是否变化之前的间隔秒数。 | 非负整数 | `300` |
+| `abs-file-cache-ttl` | 不考虑服务器响应头，缓存文件能够保留的绝对最大秒数。 | 非负整数 | `0`（禁用） |
+| `file-not-found-expires` | 对远程音频文件的 404 响应缓存多久后重试；`-1` 表示无限期缓存。 | 整数 | `300` |
+
+### Profile 参数参考 {#profile-params-reference}
+
+Profile 的 `<params>` 块用于配置呼叫控制 HTTP 后端的连接参数。除 `gateway-url` 外，其余参数均为可选。
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `gateway-url` | FreeSWITCH POST 呼叫状态的目标 URL；可通过应用数据中的 URL 为单通呼叫覆盖。 | HTTP 或 HTTPS URL | 无（必填） |
+| `gateway-credentials` | HTTP 认证凭据。 | `username:password` 字符串 | 无 |
+| `auth-scheme` | 配置 `gateway-credentials` 时使用的认证方案。添加 `=` 前缀可强制使用此方案而不协商。 | `basic`、`digest`、`NTLM`、`GSS-NEGOTIATE`、`any` | `basic` |
+| `method` | HTTP 方法。省略或设为 `post` 时字段作为 POST 正文发送；其他值则把参数作为 URL 查询字符串并使用该方法。 | `post` 或任意 HTTP 方法字符串 | POST |
+| `disable-100-continue` | 为 `true` 时抑制 `Expect: 100-continue` 头。 | `true`、`false` | `true`（抑制该头） |
+| `timeout` | 等待后端响应的最长秒数。 | 非负整数 | `0`（无超时） |
+| `connect-timeout` | 建立 TCP 连接的最长等待秒数。 | 非负整数 | `0`（无超时） |
+| `enable-cacert-check` | 为 HTTPS 启用 libcurl CA 证书验证。 | `true`、`false` | `false` |
+| `enable-ssl-verifyhost` | 验证服务器主机名与 TLS 证书一致。 | `true`、`false` | `false` |
+| `ssl-cert-path` | 双向 TLS 的 PEM 客户端公钥证书路径。 | 绝对文件路径 | 无 |
+| `ssl-key-path` | 双向 TLS 的 PEM 客户端私钥路径。 | 绝对文件路径 | 无 |
+| `ssl-key-password` | `ssl-key-path` 中私钥的口令。 | 字符串 | 无 |
+| `ssl-version` | 强制使用指定 TLS 协议版本。 | `SSLv3`、`TLSv1` | libcurl 自动协商 |
+| `ssl-cacert-file` | 用于验证对端的 PEM CA 证书；要求 `enable-cacert-check true`。 | 绝对文件路径 | 无 |
+| `cookie-file` | 跨请求保存和发送 HTTP Cookie 的文件路径。 | 绝对文件路径 | 无 |
+| `bind-local` | 出站 HTTP 请求的源 IP 地址。 | IP 地址字符串 | 系统默认值 |
+| `enable-post-var` | 限制发送的 POST 字段。每条指定一个包含的变量；没有配置时发送所有可用字段。 | 变量名字符串 | 发送全部字段 |
+| `user-agent` | HTTP `User-Agent` 头字段的值。 | 字符串 | `mod_httapi/1.0` |
+
+### 权限参考 {#permissions-reference}
+
+Profile 的 `<permissions>` 块包含 `<permission>` 子元素，用于限制 HTTP 后端可以请求执行的操作。设置 `name="all" value="true"` 可启用全部权限；设置 `name="none" value="true"` 可禁用全部权限。如果单独权限列在 `all` / `none` 之后，它会覆盖相应的全局设置。
+
+| 权限 | 默认值 | 允许的操作 |
+|---|---|---|
+| `set-params` | `true` | 后端可通过响应中的 `<params>` 段设置命名参数，这些参数会包含在后续 POST 中。 |
+| `set-vars` | `false` | 后端可通过响应中的 `<variables>` 段设置 FreeSWITCH 通道变量，可用 `<variable-list>` 子元素列出允许或拒绝的变量名。 |
+| `get-vars` | `false` | 后端可使用 `<getVariable>` 指令读取通道变量，支持可选 `<variable-list>`。 |
+| `extended-data` | `false` | 每次 POST 都包含完整通道事件数据（Caller Profile 和全部通道变量），而不只在第一次请求中提供。 |
+| `execute-apps` | `false`（vanilla `httapi.conf.xml` 设为 `true`） | 后端可使用 `<execute>` 指令执行 FreeSWITCH 拨号计划应用。需要 `<application-list>` 子元素限定允许或拒绝的应用；其 `default` 属性设置列表默认策略（`allow` / `deny`）。 |
+| `expand-vars-in-tag-body` | `false` | FreeSWITCH 执行指令前展开标签正文中的通道变量引用，支持 `<variable-list>` 和 `<api-list>` 限定可展开的变量与 API 函数。 |
+| `dial` | `true` | 后端可使用 `<dial>` 将呼叫转到目标或建立桥接。 |
+| `dial-set-context` | `false` | 后端可覆盖 `<dial>` 使用的拨号计划上下文；启用此项隐式启用 `dial`。 |
+| `dial-set-dialplan` | `false` | 后端可覆盖 `<dial>` 使用的拨号计划模块；启用此项隐式启用 `dial`。 |
+| `dial-set-cid-name` | `false` | 后端可通过 `<dial>` 的 `caller-id-name` 属性覆盖主叫显示名称；同时隐式启用 `dial`。 |
+| `dial-set-cid-number` | `false` | 后端可通过 `<dial>` 的 `caller-id-number` 属性覆盖主叫号码；同时隐式启用 `dial`。 |
+| `dial-full-originate` | `false` | 后端可在 `<dial>` 正文中提供含 `/` 的完整 originate 字符串，使 FreeSWITCH 直接桥接呼叫，而非执行会话转接；同时隐式启用 `dial`。 |
+| `conference` | `true` | 后端可使用 `<conference>` 将呼叫加入会议室。 |
+| `conference-set-profile` | `false` | 后端可通过 `<conference>` 的 `profile` 属性覆盖会议 Profile；同时隐式启用 `conference`。 |
+
+---
+
+## httapi 拨号计划应用 {#the-httapi-dialplan-application}
+
+### 应用语法 {#application-syntax}
+
+可像其他应用一样，从拨号计划调用 `httapi`：
+
+```xml
+<action application="httapi" data="http://example.com/ivr/start"/>
+```
+
+`data` 字段允许以下形式：
+
+- 普通 URL：FreeSWITCH 使用 `default` Profile 并访问指定 URL。
+- 带大括号内联参数的 URL：`{param=value,param2=value2}http://example.com/ivr/start`。参数 `httapi_profile` 用于选择 Profile。
+- 空数据：使用 `default` Profile 中的 `gateway-url`。
+
+也可以在调用应用之前设置通道变量 `httapi_profile` 来选择 Profile。
+
+### POST 到后端的字段 {#fields-posted-to-the-backend}
+
+FreeSWITCH 向配置的 URL 发送 `Content-Type: application/x-www-form-urlencoded` 的 HTTP POST。以下字段始终存在：
+
+| 字段 | 说明 |
+|---|---|
+| `session_id` | 当前呼叫的 FreeSWITCH Session UUID。 |
+| `hostname` | FreeSWITCH 交换机名称。 |
+| `url` | 当前请求的网关 URL。 |
+| `exiting` | 呼叫结束时最后一次 POST 中设置为 `true`（在 reporting 状态处理器中发送）；其他请求没有此字段。 |
+
+首次处理呼叫时，还会添加以 `Caller-` 为前缀的 Caller Profile 字段，如 `Caller-Caller-ID-Name`、`Caller-Destination-Number`。启用 `extended-data` 时，第一次请求包含全部通道变量；如果后端返回的 `<params>` 中设置了 `full_channel_data_on_every_req`，则后续每次请求也可以包含全部变量。
+
+后端在响应的 `<params>` 块中设置的参数（见第 13.3 节），会在本次会话的所有后续请求中保留并再次 POST，作为请求/应答循环中的持久状态。
+
+如果 Profile 配置了 `enable-post-var` 条目，则只发送这些条目指定的变量以及上述核心字段。
+
+### 响应文档结构 {#response-document-structure}
+
+后端必须返回 HTTP `200`，并将 `Content-Type` 设置为 `text/xml`。文档结构如下：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="xml/freeswitch-httapi">
+  <params>
+    <!-- persistent key-value pairs re-posted on every subsequent request -->
+    <mykey>myvalue</mykey>
+  </params>
+  <variables>
+    <!-- channel variables to set (requires set-vars permission) -->
+    <some_variable>value</some_variable>
+  </variables>
+  <work>
+    <!-- one or more verb elements executed in order -->
+    <playback file="http://example.com/audio/welcome.wav" loops="1"/>
+    <hangup/>
+  </work>
+</document>
+```
+
+`<params>` 和 `<variables>` 可省略；`<work>` 必须存在。如果 `<work>` 缺失或为空，FreeSWITCH 会记录警告并结束处理循环。
+
+`<work>` 内的指令按文档顺序执行。当某条指令返回非成功状态（例如 `<hangup>` 或 `<break>`），或者通道不再处于活动状态时，停止继续处理。
+
+大多数指令允许使用 `action` 属性，将后续请求转到该步骤指定的其他 URL；`temp-action` 则只影响紧接着的一次请求。
+
+### 响应指令（Verb）参考 {#response-verb-reference}
+
+| 指令 | 作用 | 主要属性 |
+|---|---|---|
+| `<playback>` | 向主叫播放音频文件或提示音，支持通过 `<bind>` 子元素收集按键。 | `file`（URL 或路径）、`loops`、`name`（收集输入的参数名）、`action`（下一步 URL）、`error-file`、`digit-timeout`、`input-timeout`、`terminators`、`asr-engine`、`asr-grammar` |
+| `<say>` | 通过 FreeSWITCH `say` 引擎（语言模块的文本转语音）朗读内容。 | `language`、`type`、`method`、`text`（或标签正文）、`gender`，以及按键收集属性 |
+| `<speak>` | 直接使用 TTS 引擎朗读文本。 | `engine`、`voice`、`text`（或标签正文），以及按键收集属性 |
+| `<pause>` | 静默等待指定时长。 | `milliseconds` |
+| `<record>` | 将主叫音频录制到文件或 URL，之后提交到后端。 | `file`（目标文件名或 HTTP URL）、`name`（参数名）、`action`、`beep-file`、`error-file`、`digit-timeout`、`terminators`、`<bind>` 子元素 |
+| `<recordCall>` | 将整个通话（双腿）录制为文件，在后台持续录制直到通话结束。 | `name`、`limit`（秒）、`action`（录制结束后的通知 URL） |
+| `<execute>` | 执行 FreeSWITCH 拨号计划应用，要求 `execute-apps` 权限，且应用须符合 `<application-list>` 策略。 | `application`、`data`（或标签正文） |
+| `<dial>` | 将呼叫转到拨号计划目标或桥接；需要 `dial` 权限。`context`、`dialplan` 属性要求 `dial-set-context` / `dial-set-dialplan`，完整 originate 字符串要求 `dial-full-originate`。 | `context`、`dialplan`、`caller-id-name`、`caller-id-number`；目标地址放在标签正文中 |
+| `<conference>` | 将呼叫加入会议室，要求 `conference` 权限。 | `profile`（要求 `conference-set-profile`）、`pin`、`flags`；会议室名放在标签正文 |
+| `<sms>` | 使用主叫号码发送 SMS。 | `to`（目标号码）；消息文本放在标签正文 |
+| `<answer>` | 应答呼叫，将通道切换到已应答状态。 | `is-conference`（`true` 设置会议标志） |
+| `<preAnswer>` | 预应答呼叫（早期媒体）。 | 无 |
+| `<ringReady>` | 发送振铃指示，不应答。 | 无 |
+| `<hangup>` | 挂断呼叫并结束 HTTAPI 循环。 | `cause`（FreeSWITCH 挂机原因字符串，或标签正文），默认 `NORMAL_CLEARING` |
+| `<getVariable>` | 读取通道变量，并在下一次 POST 的参数中加入其值；要求 `get-vars` 权限。 | `name`、`permanent`（`true` 表示整个会话持续保留；`false` 只在下一次请求中发送） |
+| `<log>` | 向 FreeSWITCH 控制台日志写入消息。 | `level`（FreeSWITCH 日志级别字符串）、`clean`（`true` 时省略位置前缀） |
+| `<voicemail>` | 访问指定用户的语音信箱应用。 | `profile`、`domain`、`id`、`check`（布尔值）、`auth-only`（布尔值） |
+| `<continue>` | 空操作：继续下一条指令，或重新请求当前 URL。 | 无 |
+| `<break>` | 不挂机，但停止处理当前 `<work>` 块。 | 无 |
+
+### 完整示例 {#worked-example}
+
+下面的拨号计划分机使用 `default` Profile，将入站呼叫交给 HTTAPI 应用：
+
+```xml
+<extension name="httapi-ivr">
+  <condition field="destination_number" expression="^5000$">
+    <action application="httapi" data="http://example.com/ivr/welcome"/>
+  </condition>
+</extension>
+```
+
+位于 `http://example.com/ivr/welcome` 的后端收到 POST 后返回：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="xml/freeswitch-httapi">
+  <params>
+    <step>1</step>
+  </params>
+  <work>
+    <answer/>
+    <playback file="http://example.com/audio/welcome.wav" name="choice" action="http://example.com/ivr/menu" input-timeout="5000" digit-timeout="2000">
+      <bind action="http://example.com/ivr/sales">1</bind>
+      <bind action="http://example.com/ivr/support">2</bind>
+      <bind action="http://example.com/ivr/operator">0</bind>
+    </playback>
+  </work>
+</document>
+```
+
+FreeSWITCH 应答呼叫，播放 `welcome.wav` 并等待一个按键。当主叫按 `1`，FreeSWITCH 向 `http://example.com/ivr/sales` 发送 POST，其中包括会话状态、`<params>` 中保存的 `step=1` 以及收集到的按键。如果在输入超时时间内没有收到按键，FreeSWITCH 会向 `action` URL（`http://example.com/ivr/menu`）发送 POST。`step=1` 参数会在该会话此后的全部请求中持续传递。

@@ -1,0 +1,155 @@
+---
+sidebar_position: 6
+id: signalwire
+slug: /integration/signalwire
+title: "第 30 章：SignalWire 平台连接"
+description: "使用 mod_signalwire 通过持久 WebSocket 会话连接 SignalWire 平台，支持 PSTN 呼入和呼出。"
+sidebar_label: "30. SignalWire 平台连接"
+---
+
+# 第 30 章：SignalWire 平台连接 {#chapter-30-signalwire-connectivity}
+
+`mod_signalwire` 通过持久化 WebSocket 会话，将 FreeSWITCH 实例连接至 SignalWire 平台，并自动创建 SIP 配置实例（Profile）及网关，以便通过 SignalWire 项目接收和发起 PSTN 电话呼叫。该模块包含在默认构建中，且通过 `modules.conf.xml` 自动加载。
+
+<SignalWireCallout
+  title="不止于 mod_signalwire"
+  href="https://signalwire.com/docs/platform/freeswitch/add-ai-to-freeswitch"
+  page="signalwire-chapter"
+  linkText="为这个 FreeSWITCH 实例接入托管 AI 坐席">
+
+`mod_signalwire` 将本地实例连接到云端。其背后的平台采用相同底层引擎，并将本手册介绍的能力以 API 形式提供。附录 D 列出了各章节功能的托管服务对应关系。一种常见的入门方式是：通过 SIP 将某个拨号计划分机指向云端托管的 AI 坐席。
+
+</SignalWireCallout>
+
+## mod_signalwire 的工作原理 {#how-mod_signalwire-works}
+
+加载后，`mod_signalwire` 会自动依次执行以下步骤：
+
+1. 生成或加载持久化连接令牌，该令牌保存在 FreeSWITCH 的存储目录中，文件名为 `adoption-token.dat`。
+2. 如果还没有凭据，模块进入认领（adoption）状态，定期轮询认领服务，直到用户在 SignalWire Dashboard 中认领该令牌。
+3. 认领完成后，模块将凭据保存到 `adoption-auth.dat`，并使用 Blade 协议传输建立到 SignalWire 平台的 WebSocket 会话。
+4. 平台返回 SIP Profile 配置。模块以 `signalwire` 作为 Sofia SIP Profile 名称加载配置，并注册 SIP 网关。
+5. 从 SignalWire 进入的呼叫通过已注册网关到达模块，随后经过 `signalwire` 拨号计划，按照配置的上下文（context）转入 XML 拨号计划。
+
+模块持续监控连接状态；当会话断开或平台推送了 Profile 更新时，会自动重连并重新配置。
+
+---
+
+## 快速开始 {#getting-started}
+
+**前提条件：** 必须先加载 `mod_sofia`。`mod_signalwire` 监听 `mod_sofia` 的加载和卸载事件，在 `mod_sofia` 可用之前不会启动 SIP Profile。
+
+1. 确认 `modules.conf.xml` 中包含 `mod_signalwire`（vanilla 默认构建已经包含）。
+2. 启动 FreeSWITCH。模块会以 `INFO` 级别向日志和控制台打印连接令牌：
+
+   ```
+    /=====================================================================\
+     Connection Token: <uuid>
+    \=====================================================================/
+    Go to https://signalwire.com to set up your Connector now!
+   ```
+
+3. 在 SignalWire Dashboard 中进入 Relay / Connectors，输入令牌并认领该 FreeSWITCH 实例。模块持续轮询认领服务，令牌被认领后自动完成流程。
+4. 认领后，`mod_signalwire` 连接平台并加载 SIP Profile。在 FreeSWITCH 控制台执行 `sofia status profile signalwire`，确认注册状态。
+5. 随后，PSTN 呼入会进入由 `override-context` 指定的 XML 拨号计划上下文；默认使用平台 Profile 提供的上下文，通常为 `public`。
+
+---
+
+## 配置文件：signalwire.conf.xml {#configuration-signalwireconfxml}
+
+配置文件位于 `conf/autoload_configs/signalwire.conf.xml`。在默认 vanilla 安装中，所有参数都被注释；模块完全按照编译时内置的默认值运行。只有在需要覆盖默认设置时，才应取消相关参数的注释并指定值。
+
+```xml
+<configuration name="signalwire.conf" description="SignalWire">
+  <settings>
+    <!-- on/off -->
+    <!--<param name="kslog" value="on"/>-->
+    <!--<param name="blade-bootstrap" value="blade://switchblade:2100"/>-->
+    <!--<param name="adoption-service" value="https://adopt.signalwire.com/adoption"/>-->
+    <!--<param name="stun-server" value="stun.freeswitch.org"/>-->
+    <!--<param name="ssl-verify" value="true"/>-->
+    <!--<authentication></authentication>-->
+
+    <!-- override dialplan context for calls on connector -->
+    <!--<param name="override-context" value="signalwire"/>-->
+  </settings>
+</configuration>
+```
+
+vanilla 配置文件中还包含 `caller-id-in-from` 注释，但当前源码的 `load_config()` 不解析此参数，因此它不会产生任何效果。**不要使用该参数。**
+
+### 参数参考 {#parameter-reference}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `kslog` | 启用内部 KS（libks）协议库的日志记录器，将连接层消息写入 FreeSWITCH 日志。 | `on` 或 `off` | `off` |
+| `blade-bootstrap` | SignalWire Blade 中继端点的 WebSocket URI。仅在私有部署或本地部署 SignalWire 时需要覆盖。 | URI 字符串 | `edge.SPACE.signalwire.com/api/relay/wss`（`SPACE` 为 SignalWire Space 名称） |
+| `adoption-service` | 认领 API 的 HTTPS URL。仅在私有或本地部署中覆盖。 | URL 字符串 | `https://adopt.signalwire.com/adoption` |
+| `stun-server` | 认领及配置时用于发现此 FreeSWITCH 实例外部 IP 地址的 STUN 服务器。支持 `host` 或 `host:port`。 | 主机名或 `host:port` | `stun.freeswitch.org` |
+| `ssl-verify` | 控制 HTTPS 认领请求的 SSL 对端和主机名校验。仅应在受控测试环境设置为 `false`。 | 布尔值（`true` 或 `false`） | `true` |
+| `override-context` | 强制把所有来自 SignalWire 网关的呼入送至指定的 XML 拨号计划上下文，覆盖平台 Profile 给出的上下文。 | 任意有效的拨号计划上下文名称 | 无（采用平台 Profile 中的上下文） |
+| `authentication` | XML 子元素，而非 `param`。内容为内联 JSON 身份认证凭据；适用于凭据静态配置、未经过认领流程的私有部署。其文本内容会直接传给 Blade 客户端库。 | JSON 文本 | 无 |
+
+### 环境变量 {#environment-variables}
+
+下列环境变量在模块加载时读取，其优先级高于 `signalwire.conf.xml` 中的设置。
+
+| 变量 | 覆盖参数 | 说明 |
+|---|---|---|
+| `SW_BLADE_BOOTSTRAP` | `blade-bootstrap` | 在私有部署中设置 Blade 中继 URI。 |
+| `SW_ADOPTION_SERVICE` | `adoption-service` | 在私有部署中设置认领 API URL。 |
+| `KSLOG` | `kslog` | 启动时，只要值非空且不为 `0`，就启用 KS 日志记录器，相当于 `kslog on`。 |
+
+---
+
+## 认领与令牌流程 {#adoption-and-token-workflow}
+
+认领（adoption）是一次性的注册流程，用于将一个 FreeSWITCH 实例关联至某个 SignalWire 项目。
+
+**令牌生成：** 首次加载时，`mod_signalwire` 生成 UUID 令牌并写入 `<storage_dir>/adoption-token.dat`。后续加载时从同一文件读取该令牌。
+
+**认领轮询：** 在认领状态下，模块按逐渐增大的间隔向认领服务 POST 令牌（首次间隔 1 分钟，每次增加 1 分钟，最长 15 分钟）。`404` 表示令牌尚未在 Dashboard 中被认领。收到 `200` 则表示认领完成：凭据写入 `<storage_dir>/adoption-auth.dat`，模块进入连接流程。
+
+**重置令牌：** `signalwire token-reset` 删除 `adoption-token.dat`、`adoption-auth.dat` 和 `signalwire-conf.dat`，生成新令牌，并使实例重新进入认领状态。将实例重新关联到另一个 SignalWire 项目时应使用此命令。
+
+**缓存的 Profile：** 存储目录中的 `signalwire-conf.dat` 保存上次从平台获得的 SIP Profile。启动时，如果凭据已经存在，模块会立即加载该缓存，使 SIP 网关可以在平台连接恢复前先行启动。
+
+---
+
+## 控制台命令参考 {#console-command-reference}
+
+以下命令通过 FreeSWITCH 控制台或 ESL 执行，格式为 `signalwire <subcommand>`。注册的命令语法为：
+
+```
+signalwire token | token-reset | adoption | adopted | reload | update | debug <level> | kslog <on|off>
+```
+
+| 命令 | 用途 |
+|---|---|
+| `signalwire token` | 在控制台打印当前连接令牌及提示横幅。如果没有可用令牌则返回 `-ERR`。 |
+| `signalwire token-reset` | 从存储目录删除 `adoption-token.dat`、`adoption-auth.dat` 和 `signalwire-conf.dat`，生成新令牌并重新进入认领状态；任何文件删除失败时返回 `-ERR`。 |
+| `signalwire adoption` | 处于认领状态时立即触发一次轮询，跳过当前退避计时；模块不在认领状态则返回 `-ERR`。 |
+| `signalwire adopted` | 已完成认领时返回 `+OK Adopted`，仍待认领时返回 `+OK Not Adopted`。 |
+| `signalwire reload` | 设置标志，使模块在下一次状态循环中重启 SIP Profile，并返回 `+OK`。 |
+| `signalwire update` | 设置标志，使模块在下一次状态循环中从平台重新获取配置，并返回 `+OK`。 |
+| `signalwire debug N` | 将 KS 库详细日志阈值设置为整数 N；内部记录器会抑制数值高于该阈值的消息。编译时默认值为 `7`，重启后失效。 |
+| `signalwire kslog on` | 运行时启用 KS 协议日志，将 libks 消息发送到 FreeSWITCH 日志。 |
+| `signalwire kslog off` | 运行时关闭 KS 协议日志。 |
+
+注意：源码中的命令语法注释将 `logfile` 列为 `kslog` 选项，但命令处理器实际只实现了 `on` 和 `off`；当前版本不能通过该控制台命令指定日志文件路径。
+
+---
+
+## 连接后提供的功能 {#what-the-connection-provides}
+
+模块进入就绪状态后，管理员可以使用以下功能：
+
+**SIP 网关：** 自动创建并维护名为 `signalwire` 的 Sofia SIP Profile 及同名网关。该网关使用平台配置的凭据注册到 SignalWire SIP 平台，管理员无需手动配置注册账号与密码。
+
+**PSTN 呼入：** 来自 SignalWire 电话号码的呼叫通过 `signalwire` 网关进入 FreeSWITCH。模块会确认来源 IP 是否与已注册网关的 IP 一致，匹配后才接受呼叫。成功接受的呼叫进入 XML 拨号计划。未设置 `override-context` 时，上下文由平台下发的 Profile 决定；设置后，所有呼入均进入指定的上下文，与平台 Profile 无关。
+
+**PSTN 呼出：** 可在拨号计划中通过 `sofia` 端点使用 `signalwire` 网关发起外呼，地址形式为 `sofia/gateway/signalwire/<number>`。
+
+**自动 Profile 管理：** 模块监听平台下发的配置更新事件；当平台通知配置发生变化时（例如在 SignalWire Dashboard 中增加或删除电话号码），模块重新获取 SIP Profile，并自动通过重新扫描或重启 `signalwire` Sofia Profile 应用更新，无需管理员介入。
+
+管理员不能直接配置这个 SIP Profile；它由平台全面管理，并在本地缓存到 `signalwire-conf.dat`。

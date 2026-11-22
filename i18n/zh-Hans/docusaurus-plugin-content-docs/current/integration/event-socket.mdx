@@ -1,0 +1,472 @@
+---
+sidebar_position: 1
+id: event-socket
+slug: /integration/event-socket
+title: "第 25 章：事件套接字"
+description: "通过入站和出站事件套接字经 TCP 控制 FreeSWITCH 并接收事件；fs_cli 也使用该接口。"
+sidebar_label: "25. 事件套接字"
+---
+
+# 第 25 章：事件套接字 {#chapter-25-the-event-socket}
+
+事件套接字（Event Socket）是一种基于 TCP 的接口，使外部进程能够访问 FreeSWITCH 的呼叫控制、通道管理以及内部事件系统。它支持两种模式：入站模式由外部客户端连接 FreeSWITCH；出站模式则由 FreeSWITCH 为某条呼叫腿连接外部进程。FreeSWITCH 标准命令行工具 `fs_cli` 只使用入站模式。
+
+<SignalWireCallout
+  title="将事件套接字模型用作云端 WebSocket 服务"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="event-socket"
+  linkText="查看 RELAY 实时 SDK">
+
+SignalWire 的实时 WebSocket API——RELAY——以托管服务形式实现事件套接字的模式：接收事件、发送命令，并提供 Python 和 TypeScript 强类型 SDK。控制程序仍采用类似架构，只是套接字终止于平台，而非本地的 8021 端口。
+
+</SignalWireCallout>
+
+## 事件套接字提供哪些功能 {#what-the-event-socket-provides}
+
+事件套接字监听 TCP 端口，接收使用 ESL（Event Socket Library）协议的客户端连接。身份认证完成后，客户端可以：
+
+- 执行 FreeSWITCH API 命令并获取输出。
+- 订阅并实时接收 FreeSWITCH 事件系统发送的通知。
+- 通过程序发起呼叫、桥接通道以及操作呼叫腿。
+- 在活动会话中发送 DTMF、播放音频及控制媒体。
+
+在出站模式下，套接字接口由拨号计划在通话过程中调用。FreeSWITCH 建立到外部服务器的 TCP 连接，并在连接期间将该呼叫腿的控制权交给服务器。
+
+---
+
+## 模块与配置文件 {#module-and-configuration-file}
+
+事件套接字由 `mod_event_socket` 提供。该模块必须在启动时加载，通常通过 `modules.conf.xml` 配置。
+
+配置文件为 `autoload_configs/event_socket.conf.xml`。最简默认配置如下：
+
+```xml
+<configuration name="event_socket.conf" description="Socket Client">
+  <settings>
+    <param name="nat-map" value="false"/>
+    <param name="listen-ip" value="::"/>
+    <param name="listen-port" value="8021"/>
+    <param name="password" value="ClueCon"/>
+    <!--<param name="apply-inbound-acl" value="loopback.auto"/>-->
+    <!--<param name="stop-on-bind-error" value="true"/>-->
+  </settings>
+</configuration>
+```
+
+注意：vanilla 默认配置将 `listen-ip` 设置为 `::`（所有接口，双协议栈）。但如果配置文件中完全未指定 `listen-ip`，模块代码会回退到 `127.0.0.1`。
+
+---
+
+## 参数参考 {#parameter-reference}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `listen-ip` | 套接字绑定的 IP 地址。 | 任意有效 IP 地址，或表示所有接口的 `::`。 | `127.0.0.1`（省略时的代码默认值） |
+| `listen-port` | 套接字监听的 TCP 端口。 | 任意有效端口号。 | `8021` |
+| `password` | 客户端认证时必须提供的密码。 | 任意字符串。 | `ClueCon` |
+| `apply-inbound-acl` | 入站连接适用的 ACL 列表名称。 | `acl.conf.xml` 中定义的任意 ACL 名称。 | `loopback.auto`（未配置该参数时采用） |
+| `nat-map` | 通过 FreeSWITCH NAT 子系统尝试为套接字端口映射 NAT。 | `true`、`false` | `false` |
+| `stop-on-bind-error` | 绑定套接字失败时中止 FreeSWITCH 启动。 | `true`、`false` | `false` |
+| `debug` | 为该模块启用详细诊断日志。 | 整数；`0` 关闭，任意正数开启。 | `0` |
+
+**`apply-inbound-acl`** 最多支持 100 个条目；重复该参数可以添加多个 ACL 名称。来源 IP 必须被**每一个**指定的 ACL 允许，而不是只满足其中一个。
+
+**`nat-map`**：模块能够识别并解析该参数，但只有 FreeSWITCH NAT 子系统检测到兼容的 NAT 类型（`switch_nat_get_type()`）时才执行映射。最终效果取决于系统层面的 NAT 配置；在大多数部署中，该参数实际上不起作用。
+
+**TCP Keepalive** 不是可配置参数。`socket` 拨号计划应用创建的**出站** TCP 套接字会无条件设置 `SO_KEEPALIVE`、`TCP_KEEPIDLE`（30 秒）及 `TCP_KEEPINTVL`（30 秒）。模块不会为已接受的**入站**连接启用 Keepalive。
+
+---
+
+## 入站模式 {#inbound-mode}
+
+入站模式下，`mod_event_socket` 在加载模块时绑定 `listen-ip`:`listen-port`，并接受外部 TCP 连接。
+
+### 连接生命周期 {#connection-lifecycle}
+
+1. 客户端向 `listen-ip`:`listen-port` 建立 TCP 连接。
+2. 如果配置了 `apply-inbound-acl`，且来源 IP 不被允许，FreeSWITCH 发送 `Content-Type: text/rude-rejection` 并关闭连接。
+3. FreeSWITCH 发送认证挑战：
+
+```text
+Content-Type: auth/request
+
+```
+
+4. 客户端发送 `auth` 命令，后跟空行：
+
+```text
+auth ClueCon
+
+```
+
+5. FreeSWITCH 返回 `command/reply` 消息：
+   - 成功：`Reply-Text: +OK accepted`
+   - 失败：`Reply-Text: -ERR invalid`，并关闭连接。
+6. 认证成功后，客户端可以发送任意命令。每条命令的应答为带 `Reply-Text` 字段的 `Content-Type: command/reply` 消息。API 调用结果则通过 `Content-Type: api/response` 返回，包含 `Content-Length` 头和作为正文的输出。
+7. 任一方均可关闭连接。FreeSWITCH 主动关闭连接前，会发送 `Content-Type: text/disconnect-notice`。
+
+要修改监听地址或端口，请编辑 `event_socket.conf.xml` 并重新加载或重启模块。将 `listen-ip` 设置为 `127.0.0.1` 会限制只能从本机连接；设置为 `0.0.0.0` 或 `::` 则接受所有接口上的连接，此时应使用 `apply-inbound-acl` 限制允许的来源地址。
+
+### 完整会话示例 {#worked-session-example}
+
+下面展示原始消息收发过程：客户端认证后，同步执行一个 API 命令、后台执行另一个命令、订阅心跳事件，最后断开连接。客户端发出的行以 `>` 开头；FreeSWITCH 返回的行以 `<` 开头。每个消息块末尾的空行也显式标出。
+
+```text
+< Content-Type: auth/request
+<
+
+> auth ClueCon
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK accepted
+<
+
+> api status
+>
+
+< Content-Type: api/response
+< Content-Length: 1234
+<
+< UP 0 years, 0 days, 2 hours, 14 minutes, 22 seconds, 647 milliseconds, 552 microseconds
+< ...
+
+> bgapi originate sofia/gateway/mygw/15551234567 &echo
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK Job-UUID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+< Job-UUID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+<
+
+< Content-Type: text/event-plain
+< Content-Length: 502
+<
+< Event-Name: BACKGROUND_JOB
+< Job-UUID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+< Job-Command: originate
+< Job-Command-Arg: sofia/gateway/mygw/15551234567 &echo
+<
+< +OK b7f1e2a0-1234-5678-abcd-000000000001
+
+> event plain HEARTBEAT
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK event listener enabled plain
+<
+
+< Content-Type: text/event-plain
+< Content-Length: 432
+<
+< Event-Name: HEARTBEAT
+< Core-UUID: ...
+< Event-Date-Timestamp: ...
+< ...
+
+> exit
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK bye
+<
+< Content-Type: text/disconnect-notice
+< Content-Length: 14
+<
+< Disconnected.
+```
+
+---
+
+## 出站模式 {#outbound-mode}
+
+出站模式中，拨号计划把呼叫转交给 `socket` 应用。FreeSWITCH 主动连接指定主机及端口，然后将呼叫腿控制权交给远程进程。
+
+**拨号计划应用语法：**
+
+```text
+socket <host>[:<port>][/<path>] [full] [async]
+```
+
+- `host` 为 IP 地址或主机名。可以用 `\|` 分隔多个目标；FreeSWITCH 逐一尝试，直到连接被某个目标接受。
+- `port` 可选，默认出站端口为 `8084`。
+- `path` 可选，放在端口之后的 `/` 后面；如果存在，则保存到通道变量 `socket_path`，远程进程可从连接事件中读取。
+- 可选的 `full` 参数使连接应答包含完整的通道变量集合；不指定则只包含主叫资料和通道状态头字段。
+- 可选的 `async` 参数会在单独线程中运行 ESL 监听器并驻留通话，之后若套接字会话设置了 `socket_resume` 或发送 `resume` 命令，拨号计划便可继续执行。没有 `async` 时，拨号计划会阻塞在 `socket` 应用内，直到远程进程关闭连接。
+
+**拨号计划分机示例：**
+
+```xml
+<extension name="outbound-esl">
+  <condition field="destination_number" expression="^5000$">
+    <action application="socket" data="192.168.1.50:8084 full"/>
+  </condition>
+</extension>
+```
+
+出站模式不受 `event_socket.conf.xml` 中参数控制。该文件的监听地址及端口只适用于入站连接。
+
+### 连接握手 {#connection-handshake}
+
+出站连接的握手不同于入站模式：FreeSWITCH 是 TCP 客户端，远程进程是 TCP 服务器。
+
+1. FreeSWITCH 连接到远程进程。
+2. 远程进程等待接收第一批数据。
+3. FreeSWITCH 等待远程进程发送 `connect` 命令。无需认证：出站监听器自动视为已认证（建立连接之前就会设置 `LFLAG_AUTHED`）。
+4. 远程进程发送：
+
+```text
+connect
+
+```
+
+5. FreeSWITCH 返回 `command/reply` 消息，通道数据以事件头字段形式附加其中。该消息包含 `Reply-Text: +OK`、`Socket-Mode`（`async` 或 `static`）、`Control`（`full` 或 `single-channel`），以及通道及 Caller Profile 变量。应答的 `Content-Type` 为 `command/reply`。
+6. 远程进程收到连接应答后，通常发送 `myevents` 订阅本通道事件，再发送 `sendmsg` 命令，在通道上执行拨号计划应用。
+7. 远程进程关闭 TCP 连接时，控制权返回到拨号计划中 `socket` 应用之后的动作。
+
+### async 与阻塞执行 {#async-vs-blocking}
+
+未启用 `async` 时，`socket` 应用在 TCP 连接持续期间占用拨号计划线程。通道完全由远程进程控制，拨号计划不会继续向下执行。
+
+启用 `async` 后，FreeSWITCH 将通道驻留，并为 ESL 监听器创建独立线程；驻留操作后拨号计划线程会立即释放。远程进程发送 `resume`（或将通道变量 `socket_resume` 设为 `true`）时，FreeSWITCH 将通道转回执行状态，从 `socket` 应用之后的下一项继续执行拨号计划。如果远程进程未发送 `resume` 就关闭套接字，通道仍会保持驻留，直到挂机或其他方式终止。
+
+### 出站会话完整示例 {#worked-outbound-session-example}
+
+下面展示出站连接的收发过程。远程服务器监听端口 8084。FreeSWITCH 发送的行以 `<` 开头，远程进程发送的行以 `>` 开头。
+
+```text
+(TCP connection established by FreeSWITCH to 192.168.1.50:8084)
+
+> connect
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK
+< Socket-Mode: static
+< Control: full
+< Channel-Name: sofia/internal/1001@192.168.1.1
+< Channel-State: CS_EXECUTE
+< Channel-Call-State: ACTIVE
+< Unique-ID: b7f1e2a0-1234-5678-abcd-000000000001
+< Caller-Caller-ID-Number: 1001
+< Caller-Destination-Number: 5000
+< ... (all channel and caller profile headers)
+<
+
+> myevents
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK Events Enabled
+<
+
+> sendmsg
+> call-command: execute
+> execute-app-name: playback
+> execute-app-arg: /usr/share/freeswitch/sounds/en/us/callie/ivr/ivr-welcome.wav
+>
+
+< Content-Type: command/reply
+< Reply-Text: +OK
+<
+
+< Content-Type: text/event-plain
+< Content-Length: 580
+<
+< Event-Name: CHANNEL_EXECUTE
+< Unique-ID: b7f1e2a0-1234-5678-abcd-000000000001
+< Application: playback
+< Application-Data: /usr/share/freeswitch/sounds/en/us/callie/ivr/ivr-welcome.wav
+< ...
+
+< Content-Type: text/event-plain
+< Content-Length: 610
+<
+< Event-Name: CHANNEL_EXECUTE_COMPLETE
+< Unique-ID: b7f1e2a0-1234-5678-abcd-000000000001
+< Application: playback
+< Application-Response: FILE PLAYED
+< ...
+
+(remote process closes the TCP connection)
+(dialplan continues at the next action after the socket application)
+```
+
+---
+
+## 命令参考 {#command-reference}
+
+所有命令以普通文本发送，并以一个空行（连续两个换行符）结束。解析器会一直读取，直到遇到 `\r\n\r\n` 或 `\n\n`。多行命令（如 `sendmsg`）在命令行与结尾空行之间还可以包含附加头字段。
+
+应答使用消息块格式：先是 `Content-Type` 及可能的 `Content-Length` 等头字段，然后是空行和消息正文。
+
+| 命令 | 用途 | 示例 |
+|---|---|---|
+| `auth <password>` | 认证连接。入站模式的第一条命令必须是此命令。返回 `+OK accepted` 或 `-ERR invalid`。 | `auth ClueCon` |
+| `api <cmd> [<arg>]` | 同步执行 API 命令，结果在 `Content-Type: api/response` 消息的正文中。 | `api status` |
+| `bgapi <cmd> [<arg>]` | 在后台线程执行 API 命令。FreeSWITCH 立即返回 `Job-UUID`；完成后发送包含 `Job-UUID` 的 `BACKGROUND_JOB` 事件，正文为执行结果。 | `bgapi originate sofia/gateway/gw/15551234567 &echo` |
+| `event <format> <TYPE> [<TYPE> ...]` | 按指定格式（`plain`、`json` 或 `xml`）订阅一种或多种事件。重复执行可添加事件类型。 | `event plain HEARTBEAT CHANNEL_HANGUP` |
+| `nixevent <TYPE> [<TYPE> ...]` | 从现有订阅中删除指定事件类型，不清除其他订阅。 | `nixevent HEARTBEAT` |
+| `noevents` | 取消全部事件订阅并清空事件队列。 | `noevents` |
+| `myevents [<uuid>]` | 订阅关联会话（出站模式）或指定 UUID（入站模式）的全部通道事件。格式沿用已选格式，未选择时使用 `plain`。 | `myevents` |
+| `filter <header-name> <value>` | 增加按头字段过滤的条件。仅发送 `<header-name>` 与 `<value>` 匹配的事件。多个过滤条件按“与”关系组合。值可带 `+`（包含）或 `-`（排除）前缀；以 `/` 开头的值按正则表达式处理。 | `filter Unique-ID b7f1e2a0-1234-5678-abcd-000000000001` |
+| `filter delete <header-name> [<value>]` | 删除特定过滤条目；使用 `filter delete all` 清除全部过滤器。 | `filter delete Unique-ID` |
+| `sendevent <TYPE>` | 向 FreeSWITCH 事件系统发出事件。可以在结尾空行前提供额外头字段和正文。 | `sendevent CUSTOM`，并带 `Event-Subclass: myapp::notify` |
+| `sendmsg [<uuid>]` | 向会话发送消息，执行拨号计划应用或其他呼叫级命令。头字段跟在命令行之后。出站模式可省略 `<uuid>`，此时命令操作当前绑定会话。 | 见下文 `sendmsg` 说明。 |
+| `log <level>` | 开始以指定级别流式输出 FreeSWITCH 日志（`debug`、`info`、`notice`、`warning`、`err`、`crit`、`alert`）。日志作为 `Content-Type: log/data` 消息块发送。 | `log info` |
+| `nolog` | 停止流式输出日志并清空日志队列。 | `nolog` |
+| `linger [<seconds>]` | 出站模式下，通道挂机后仍保持 ESL 连接 `<seconds>` 秒，以便接收挂机相关事件。未指定参数则一直保持，直到远程进程关闭套接字。 | `linger 30` |
+| `nolinger` | 取消之前设置的 `linger`。 | `nolinger` |
+| `divert_events on\|off` | 出站模式下将会话内部事件（如 DTMF）转入 ESL 事件队列，而不是交由原生流程处理。 | `divert_events on` |
+| `resume` | 出站异步模式下，从 `socket` 应用之后的动作恢复拨号计划执行。 | `resume` |
+| `exit` | 正常关闭 ESL 连接。FreeSWITCH 返回 `+OK bye` 并关闭套接字；还支持别名 `...`。 | `exit` |
+
+**`sendmsg` 详细说明**
+
+`sendmsg` 用于向会话发送私有事件，通过 `call-command` 头字段选择操作：
+
+- `execute`：在通道上执行拨号计划应用。必填头字段：`execute-app-name`。可选：`execute-app-arg`（或者通过 `Content-Type: text/plain` 将参数放在正文中）、`loops`、`event-lock`。
+- `hangup`：挂断通道。可选字段：`hangup-cause`（默认 `NORMAL_CLEARING`）。
+- `nomedia`：将通道切换为无媒体模式。
+- `unicast`：启用单播音频流。头字段包括 `local-ip`、`local-port`、`remote-ip`、`remote-port`、`transport`（`tcp` 或 `udp`）以及 `flags`。
+
+执行 `playback` 的 `sendmsg` 示例：
+
+```text
+sendmsg b7f1e2a0-1234-5678-abcd-000000000001
+call-command: execute
+execute-app-name: playback
+execute-app-arg: /usr/share/freeswitch/sounds/en/us/callie/ivr/ivr-welcome.wav
+
+```
+
+执行挂机的 `sendmsg` 示例：
+
+```text
+sendmsg b7f1e2a0-1234-5678-abcd-000000000001
+call-command: hangup
+hangup-cause: NORMAL_CLEARING
+
+```
+
+---
+
+## 事件订阅与消息格式 {#event-subscription-and-formats}
+
+### 选择格式 {#selecting-a-format}
+
+`event` 命令的第一个参数是序列化格式。它对连接期间发送的全部事件生效，直到另一条 `event` 命令改变格式。
+
+| 格式 | 说明 |
+|---|---|
+| `plain` | 每行一个 `Header-Name: value` 键值对。如果包含正文，正文放在头字段和空行之后。 |
+| `json` | 将事件序列化为 JSON 对象。 |
+| `xml` | 将事件序列化为 XML 文档。 |
+
+### 订阅事件 {#subscribing-to-events}
+
+```text
+event plain HEARTBEAT CHANNEL_HANGUP_COMPLETE BACKGROUND_JOB
+```
+
+`event` 后面的第一个参数为格式，剩余参数为事件类型名称。这些名称不区分大小写，对应 `SWITCH_EVENT_*` 枚举，例如 `HEARTBEAT`、`CHANNEL_ANSWER`、`DTMF`、`ALL`。
+
+一次订阅全部事件：
+
+```text
+event plain ALL
+```
+
+订阅 `CUSTOM` 事件时，将 `CUSTOM` 列为事件类型，并在后面紧接着附加子类名称：
+
+```text
+event plain CUSTOM sofia::register sofia::unregister
+```
+
+指定 `CUSTOM` 后，解析器会把同一命令中其后的所有参数都作为子类名称。如果还需订阅非自定义事件，请另外发送一条 `event` 命令。
+
+`nixevent` 可以从已有订阅中移除指定事件类型，同时保留其他订阅：
+
+```text
+nixevent HEARTBEAT
+```
+
+`noevents` 会取消全部订阅并清空队列中的事件。
+
+`myevents` 是便捷命令，用于订阅某一个会话 UUID 的全部通道级事件。出站模式不带参数时，它指向调用 `socket` 应用的那个会话。入站模式必须提供 UUID：
+
+```text
+myevents b7f1e2a0-1234-5678-abcd-000000000001
+```
+
+执行 `myevents` 后，只会发送 `Unique-ID` 与目标会话匹配的事件（以及由该会话监听器拥有的 `BACKGROUND_JOB` 事件）。
+
+**过滤器**
+
+过滤器会在事件类型订阅基础上进一步筛选，可以匹配任意事件头字段的名称和值：
+
+```text
+filter Unique-ID b7f1e2a0-1234-5678-abcd-000000000001
+```
+
+可以同时启用多个过滤器。一条事件要被发送，必须满足全部有效过滤条件（逻辑与）。带 `-` 前缀的值用于排除匹配事件，以 `/` 开头的值视为针对头字段值的正则表达式。
+
+### 线路协议中的事件交付格式 {#event-delivery-on-the-wire}
+
+每条事件以消息块形式交付：
+
+```text
+Content-Length: <byte-count>
+Content-Type: text/event-plain
+
+<event headers>
+
+<event body, if any>
+```
+
+JSON 格式的 `Content-Type` 是 `text/event-json`；XML 格式则为 `text/event-xml`。
+
+`Content-Length` 是跟在 `Content-Type` 后空行之后的事件负载（头字段及可能的正文）的**准确字节数**。客户端必须严格读取指定字节数，取得完整事件后才能解析下一块消息。
+
+通过 `log` 流式发送的日志消息采用类似格式：
+
+```text
+Content-Type: log/data
+Content-Length: <byte-count>
+Log-Level: <integer>
+Text-Channel: <integer>
+Log-File: <filename>
+Log-Func: <function>
+Log-Line: <line-number>
+User-Data: <string>
+
+<log message text>
+```
+
+---
+
+## 使用 ACL 限制访问 {#restricting-access-with-acls}
+
+`apply-inbound-acl` 参数指定在 `acl.conf.xml` 中定义的 ACL。启用后，FreeSWITCH 在发送认证挑战前先根据命名 ACL 检查客户端来源 IP。来源地址不被允许时，服务器返回 `Content-Type: text/rude-rejection` 并关闭套接字。
+
+如果 `event_socket.conf.xml` 中没有配置 `apply-inbound-acl`，模块默认使用 `loopback.auto`，仅允许来自 `127.0.0.1` 和 `::1` 的连接。要允许远程主机连接，应先在 `acl.conf.xml` 中定义适当的 ACL，再通过 `apply-inbound-acl` 引用。详情参阅本手册的 [ACL 章节](./access-control-lists.mdx)。
+
+可以重复添加多个 `apply-inbound-acl` 条目，最多支持 100 个 ACL 名称。仅当来源 IP 被全部已列出的 ACL 允许时才接受连接；只要不满足其中一个，就会被拒绝。
+
+如果事件套接字必须从非环回地址访问，建议把 `listen-ip` 设置为明确的接口地址，将 `apply-inbound-acl` 设为范围尽可能小的 ACL，并使用高强度 `password`。
+
+---
+
+## 与 fs_cli 的关系 {#relationship-to-fs_cli}
+
+`fs_cli` 是 FreeSWITCH 的标准交互式控制台，它通过入站模式事件套接字连接，与其他客户端使用同一种 ESL 协议。默认情况下，它使用密码 `ClueCon` 连接到 `127.0.0.1:8021`。
+
+这些默认值可以通过命令行参数或 `~/.fs_cli_conf` 文件覆盖：
+
+| 参数 | 用途 |
+|---|---|
+| `-H` | 目标主机。 |
+| `-P` | 目标端口。 |
+| `-p` | 连接密码。 |
+
+如果修改了 `event_socket.conf.xml` 中的 `listen-ip` 或 `listen-port`，必须相应调整 `fs_cli` 的参数。除此之外，`fs_cli` 与模块之间没有其他配置依赖关系。

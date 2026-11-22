@@ -1,0 +1,161 @@
+---
+sidebar_position: 24
+id: mod_http_cache
+slug: /module-reference/applications/mod_http_cache
+title: "mod_http_cache——HTTP 媒体与对象存储缓存"
+description: "缓存 HTTP 媒体及支持 AWS S3 与 Azure Blob 的对象存储访问。"
+sidebar_label: "mod_http_cache"
+---
+# mod_http_cache——HTTP 媒体与对象存储缓存 {#mod_http_cache-—-cached-http-media-and-object-storage}
+
+`mod_http_cache` 是位于 `src/mod/applications/mod_http_cache` 的应用模块，可将 HTTP 和 HTTPS URL 指向的文档下载到本地磁盘缓存，并在后续请求时从缓存提供文件。它遵守源服务器的缓存生存期（未指定时使用可配置默认值），因此 Web 服务器提供的提示音或其他媒体文件只需下载一次，此后直接从磁盘重复播放。
+
+除了普通 HTTP，该模块还可以从对象存储读取和写入：它使用具名配置实例中定义的凭据，为 **AWS S3** 和 **Azure Blob Storage** 请求签名，因此常用于播放存储桶中的录音与提示音，以及将通话录音上传回存储桶。
+
+拨号计划需要播放 URL 指向的媒体而不希望每次呼叫都重新下载，或者需要在云存储和本地之间搬运录音时，可以使用 `mod_http_cache`。
+
+<SignalWireCallout
+  title="远程音频，无需自行管理缓存"
+  href="https://signalwire.com/docs/swml/reference/calling/play"
+  page="mod-http-cache"
+  linkText="查看 SWML 中的 play">
+
+SWML 是 SignalWire 基于 JSON/YAML 的呼叫控制标记语言，可以直接通过 `play` 播放远程 URL。获取和缓存都由平台处理，无需预取步骤或本地缓存目录。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+此模块**不在默认加载集合中**，`conf/vanilla/autoload_configs/modules.conf.xml` 中没有对应条目。请添加加载行并重启，或在运行时加载：
+
+```xml
+<load module="mod_http_cache"/>
+```
+
+```
+freeswitch@> load mod_http_cache
+```
+
+模块链接 libcurl，并内置 AWS S3 与 Azure Blob 支持；只要存在 libcurl，无需额外构建标志。
+
+## 配置：`http_cache.conf.xml` {#configuration-http_cacheconfxml}
+
+`<settings>` 节控制缓存和 HTTP 客户端。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `enable-file-formats` | 注册 `http://`、`https://` 文件格式，使 URL 可直接传给 `playback`、`record` 等应用。无论此参数如何，`http_cache://` 格式始终可用。**加载 `mod_httapi` 时不要启用**，因为两个模块都会注册 `http`/`https` 格式。 | `true` / `false` | `false` |
+| `max-urls` | 缓存索引中最多追踪的 URL 数量。 | 整数 | `4000`（默认配置文件提供 `10000`） |
+| `location` | 保存缓存文档的本地目录。 | 文件系统路径 | `${base_dir}/http_cache`（默认配置文件提供 `$${cache_dir}`） |
+| `default-max-age` | 源服务器未指定缓存时间时采用的生存期（秒）。 | 整数（秒） | `86400` |
+| `prefetch-thread-count` | 服务 `http_prefetch` 请求的后台线程数，必须大于 0。 | 整数 | `8` |
+| `prefetch-queue-size` | 预取请求队列最大长度，必须大于 0。 | 整数 | `100` |
+| `ssl-cacert` | 验证 HTTPS 证书所用 CA 证书包的绝对路径。 | 文件系统路径 | `$${certs_dir}/cacert.pem` |
+| `ssl-verifypeer` | 是否验证对端 TLS 证书。 | `true` / `false` | `true` |
+| `ssl-verifyhost` | 是否验证主机名与 TLS 证书匹配。 | `true` / `false` | `true` |
+| `connect-timeout` | 建连超时时间（秒）。 | 整数（秒） | `300` |
+| `download-timeout` | 总下载超时时间（秒）。 | 整数（秒） | `300` |
+
+```xml
+<configuration name="http_cache.conf" description="HTTP GET cache">
+  <settings>
+    <param name="enable-file-formats" value="false"/>
+    <param name="max-urls" value="10000"/>
+    <param name="location" value="$${cache_dir}"/>
+    <param name="default-max-age" value="86400"/>
+    <param name="prefetch-thread-count" value="8"/>
+    <param name="prefetch-queue-size" value="100"/>
+    <param name="ssl-cacert" value="$${certs_dir}/cacert.pem"/>
+    <param name="ssl-verifypeer" value="true"/>
+    <param name="ssl-verifyhost" value="true"/>
+  </settings>
+</configuration>
+```
+
+### 存储配置实例（S3 与 Azure Blob） {#storage-profiles-s3-and-azure-blob}
+
+`<profiles>` 块定义具名的对象存储凭据集合。每个 `<profile>` 包含三种凭据元素之一：`<aws-s3>`、`<azure-blob>` 或 `<default>`，以及可选的 `<domains>` 列表。请求的主机若匹配某配置实例的 `<domains>`，该实例会自动应用；否则可在 URL 前通过 `{profile=...}` 参数显式选择（见下文）。
+
+| 元素 | 用途 |
+|---|---|
+| `<aws-s3>` / `<access-key-id>` | AWS（或兼容 S3）访问密钥 ID。设置了 `AWS_ACCESS_KEY_ID` 环境变量时由其覆盖。 |
+| `<aws-s3>` / `<secret-access-key>` | AWS 访问密钥秘密值。设置了 `AWS_SECRET_ACCESS_KEY` 环境变量时由其覆盖。 |
+| `<aws-s3>` / `<region>` | 存储区域。 |
+| `<aws-s3>` / `<base-domain>` | 兼容 S3 的非 AWS 服务的基础域，用于指定自定义端点。省略时默认为 `s3.<region>.amazonaws.com`。 |
+| `<aws-s3>` / `<expires>` | 生成的 URL 签名有效期（秒），默认 `604800`（一周）。 |
+| `<azure-blob>` / `<secret-access-key>` | Azure 存储账户密钥。设置了 `AZURE_STORAGE_ACCESS_KEY` 环境变量时由其覆盖。 |
+| `<default>` / `<header name="...">value</header>` | 不含凭据的配置实例，可向 `<domains>` 指定的请求注入一个或多个静态 HTTP 请求头（每个请求头重复配置 `<header>`）。适合向普通 Web 服务传递 API 密钥或认证令牌。 |
+| `<domains>` / `<domain name="...">` | 自动应用此配置实例的主机列表。 |
+
+```xml
+<profiles>
+  <profile name="s3">
+    <aws-s3>
+      <access-key-id><![CDATA[AKIAIOSFODNN7EXAMPLE]]></access-key-id>
+      <secret-access-key><![CDATA[wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY]]></secret-access-key>
+      <region><![CDATA[ap-southeast-1]]></region>
+      <expires>604800</expires>
+    </aws-s3>
+    <domains>
+      <domain name="bucket1.s3-ap-southeast-1.amazonaws.com"/>
+    </domains>
+  </profile>
+</profiles>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `http_get` | 使用缓存下载 URL，并返回本地文件路径。 | `{param=val}<url>` |
+| `http_tryget` | 仅当 URL 已经缓存时返回本地文件；不会下载。 | `{param=val}<url>` |
+| `http_put` | 通过 HTTP PUT（或 S3/Azure）上传本地文件到 URL。 | `{param=val}<url> <file>` |
+| `http_prefetch` | 在线程中预先下载 URL，以便后续 `http_get` 立即返回。 | `{param=val}<url>` |
+| `http_clear_cache` | 删除所有缓存条目。 | （无参数） |
+| `http_remove_cache` | 删除指定 URL 的缓存。 | `<url>` |
+
+可选前缀 `{param=val}` 接受：
+
+- `profile`：选择具名存储配置实例，例如 `{profile=s3}`。
+- `refresh`：为 `true` 时忽略已有缓存并重新下载。
+- `prefetch`：为 `true` 时通过后台线程获取，立即返回（效果与 `http_prefetch` 相同）。
+
+```
+freeswitch@> http_get http://example.com/prompts/welcome.wav
+freeswitch@> http_get {refresh=true}https://example.com/prompts/welcome.wav
+freeswitch@> http_put {profile=s3}https://bucket1.s3-ap-southeast-1.amazonaws.com/recording.wav /tmp/recording.wav
+freeswitch@> http_clear_cache
+```
+
+## 拨号计划用法 {#dialplan-usage}
+
+该模块注册 API 命令和文件格式接口（而不是拨号计划应用），因此可通过两种方式在拨号计划中使用。
+
+**作为 API，通过变量展开**——将 URL 解析为本地路径再播放：
+
+```xml
+<action application="set" data="prompt=${http_get(http://example.com/prompts/welcome.wav)}"/>
+<action application="playback" data="${prompt}"/>
+```
+
+**作为文件格式接口**——直接把 URL 交给媒体应用。`http_cache://` 形式始终可用，并包装一个完整 URL：
+
+```xml
+<action application="playback" data="http_cache://http://example.com/prompts/welcome.wav"/>
+```
+
+当 `enable-file-formats` 为 `true` 时，也可以直接使用 `http://` 和 `https://`：
+
+```xml
+<action application="playback" data="http://example.com/prompts/welcome.wav"/>
+```
+
+## 依赖项 {#dependencies}
+
+需要 **libcurl**。AWS S3 请求签名与 Azure Blob 支持均编译在模块内部。
+
+## 相关文档 {#see-also}
+
+- [第 18 章：音频文件与流媒体源](../../media/audio-files-and-streaming.mdx)
+
+**源码：** `src/mod/applications/mod_http_cache`、`conf/vanilla/autoload_configs/http_cache.conf.xml`

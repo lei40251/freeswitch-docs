@@ -1,0 +1,148 @@
+---
+sidebar_position: 8
+id: mod_curl
+slug: /module-reference/applications/mod_curl
+title: "mod_curl——从拨号计划发起 HTTP 请求"
+description: "使用 mod_curl 在 FreeSWITCH 拨号计划中发起 HTTP 请求及上传文件。"
+sidebar_label: "mod_curl"
+---
+# mod_curl——从拨号计划发起 HTTP 请求 {#mod_curl-—-http-requests-from-the-dialplan}
+
+`mod_curl` 是位于 `src/mod/applications/mod_curl` 的应用模块，将 HTTP 客户端功能直接提供给 FreeSWITCH 拨号计划和 API 层。它封装 libcurl 执行 GET、HEAD、POST、PUT、PATCH 和 DELETE 请求，并将 HTTP 响应体和状态码保存到通道变量中。
+
+如果拨号计划需要在通话进行中请求 REST API，例如查询来电者数据、将呼叫详情发送到 Webhook，或根据外部服务的结果进行呼叫路由，而又不想离开拨号计划上下文，可以使用 `mod_curl`。
+
+<SignalWireCallout
+  title="无需额外模块即可在通话中发起 HTTP 请求"
+  href="https://signalwire.com/docs/swml/reference/calling/request"
+  page="mod-curl"
+  linkText="查看 SWML 中的 request">
+
+SWML 是 SignalWire 基于 JSON/YAML 的呼叫控制标记语言，可通过 `request` 方法在通话中调用 HTTP API；托管 AI 智能体甚至可以在没有服务器的情况下将其作为函数调用。这与 `mod_curl` 的思想相同，但运行在托管平台上。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+该模块**默认不加载**。在 `conf/vanilla/autoload_configs/modules.conf.xml` 中，对应条目已被注释：
+
+```xml
+<!-- <load module="mod_curl"/> -->
+```
+
+要启用，请取消该行注释（或添加它）并重启 FreeSWITCH，也可以在运行时加载：
+
+```
+freeswitch@> load mod_curl
+```
+
+无需特殊构建标志；只要存在 libcurl（默认就会有），标准 FreeSWITCH 构建即可编译该模块。
+
+## 配置：`curl.conf.xml` {#configuration-curlconfxml}
+
+`mod_curl` 在加载及触发 `reloadxml` 事件时读取 `conf/autoload_configs/curl.conf.xml`。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `max-bytes` | 模块允许缓存的最大 HTTP 响应体大小 | 整数（字节） | `64000` |
+| `validate-certs` | 当不存在 `cacert.pem` 时，是否验证 HTTPS URL 的对端 TLS 证书 | `true` / `false` | `false` |
+
+模块会始终先尝试使用 `{certs_dir}/cacert.pem` 建立 HTTPS 连接；只有文件不存在时，`validate-certs` 才决定回退行为。
+
+```xml
+<configuration name="curl.conf" description="cURL module">
+  <settings>
+    <param name="max-bytes" value="64000"/>
+  </settings>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `curl` | 发送 HTTP 请求并将响应保存到通道变量 | 见下方语法 |
+| `curl_sendfile` | 通过 multipart POST 向 URL 上传文件 | 见下方语法 |
+
+### `curl`
+
+```
+curl <url> [headers|json|content-type <mime-type>|connect-timeout <seconds>|timeout <seconds>|append_headers <header-name:header-value>|insecure|secure|proxy <http://proxy:port>] [get|head|post|delete|put [data]]
+```
+
+向 `<url>` 发送 HTTP 请求。默认方法为 `GET`。响应体保存到 `curl_response_data`；HTTP 状态码保存到 `curl_response_code`。
+
+- `headers`：将响应头附加在 `curl_response_data` 前面。
+- `json`：返回包含 `exit_code`、`status_code`、`body` 和 `headers` 数组的 JSON 对象。
+- `content-type <mime-type>`：设置请求的 `Content-Type` 头（用于 `post`、`put`、`patch`、`delete`）。
+- `append_headers <name:value>`：添加任意请求头（最多可重复 10 次）。
+- `insecure`：禁用 TLS 证书验证。
+- `secure`：启用 TLS 证书验证（覆盖 `validate-certs` 默认设置）。
+- `proxy <url>`：通过 HTTP 代理发送请求。
+
+执行时还会读取 `curl_connect_timeout` 和 `curl_timeout` 通道变量（见通道变量小节）。
+
+```xml
+<action application="curl" data="https://api.example.com/lookup?ani=${caller_id_number} json"/>
+<action application="set" data="lookup_result=${curl_response_data}"/>
+```
+
+### `curl_sendfile`
+
+```
+curl_sendfile <url> <filenameParamName=filepath> [nopost|postparam1=val&postparam2=val [event|none [identifier]]]
+```
+
+将本地文件通过 multipart/form-data POST 上传到 `<url>`。第二个参数是 `name=path` 对，分别指定表单字段名和本地文件路径。额外的可选 POST 字段使用 URL 编码的 `key=value` 对，并用 `&` 连接。第四个参数决定如何报告结果：`event` 触发自定义事件 `curl_sendfile::ack`；`none`（默认）写入 FreeSWITCH 日志。
+
+不提供内联参数调用时，应用会从通道变量读取参数（见通道变量小节）。
+
+```xml
+<action application="curl_sendfile" data="https://upload.example.com/recording recording=/tmp/call.wav extra=foo%3Dbar event"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `curl` | 从 `fs_cli` 或 ESL 发起 HTTP 请求 | `curl <url> [options] [method [data]]` |
+| `curl_sendfile` | 从 `fs_cli` 或 ESL 上传文件 | `curl_sendfile <url> <name=path> [postdata [event\|stream\|both\|none [identifier]]]` |
+
+`curl` API 命令与拨号计划应用支持相同的选项，但 `connect-timeout` 和 `timeout` 通过内联参数传入（而非通道变量），结果直接写入输出流。
+
+`curl_sendfile` API 命令还提供应用不支持的两种输出模式：`stream`（写入 API 输出流）和 `both`（同时发送事件并写入流）。
+
+```
+freeswitch@> curl https://api.example.com/status get
+freeswitch@> curl https://api.example.com/event post field=value content-type application/x-www-form-urlencoded
+freeswitch@> curl_sendfile https://upload.example.com/files recording=/tmp/call.wav nopost stream
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `curl_response_data` | 写入 | `curl` 应用写入的 HTTP 响应体（使用 `json` 标志时为 JSON 对象） |
+| `curl_response_code` | 写入 | `curl` 应用写入的 HTTP 状态码字符串 |
+| `curl_method` | 写入 | `curl` 应用写入的 HTTP 请求方法 |
+| `curl_connect_timeout` | 读取 | TCP 建连超时（秒），`curl` 应用执行时读取 |
+| `curl_timeout` | 读取 | 请求总超时（秒），`curl` 应用执行时读取 |
+| `curl_sendfile_url` | 读取 | 不提供内联参数时，`curl_sendfile` 应用使用的目标 URL |
+| `curl_sendfile_filename_element` | 读取 | `curl_sendfile` 文件上传的 multipart 表单字段名（通道变量模式） |
+| `curl_sendfile_filename` | 读取 | `curl_sendfile` 上传的本地文件路径（通道变量模式） |
+| `curl_sendfile_extrapost` | 读取 | `curl_sendfile` 额外的 URL 编码 POST 字段（通道变量模式） |
+| `curl_sendfile_report` | 读取 | `curl_sendfile` 通道变量模式的输出方式：`event` 或 `none` |
+| `curl_sendfile_identifier` | 读取 | 附加到 `curl_sendfile::ack` 事件的标识符字符串（通道变量模式） |
+
+## 事件 {#events}
+
+`curl_sendfile` 完成且选择 `event` 输出模式时，`mod_curl` 会触发自定义事件子类 `curl_sendfile::ack`（`SWITCH_EVENT_CUSTOM`）。事件包含以下头字段：
+
+- `Command-Execution-Identifier`：标识符字符串（会话 UUID 或显式值）。
+- `Filename`：上传的本地文件路径。
+- `File-Access`：`Success` 或 `Failure`。
+- `REST-HTTP-Code`：HTTP 响应状态码（成功时）。
+
+事件正文包含服务器返回的 HTTP 响应体。
+
+**源码：** `src/mod/applications/mod_curl`、`conf/vanilla/autoload_configs/curl.conf.xml`

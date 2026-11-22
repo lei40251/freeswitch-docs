@@ -1,0 +1,342 @@
+---
+sidebar_position: 3
+id: ivr-menus
+slug: /applications/ivr-menus
+title: "第 21 章：IVR 菜单"
+description: "通过 XML 定义语音提示与按键菜单，使用 mod_dptools 的 ivr 应用实现分层菜单与转移。"
+sidebar_label: "21. IVR 菜单"
+---
+
+# 第 21 章：IVR 菜单 {#chapter-21-ivr-menus}
+
+IVR 菜单系统允许在 XML 中定义以语音提示引导、收集按键的菜单，由 `mod_dptools` 加载，再通过拨号计划中的 `ivr` 应用调用。每个菜单播放欢迎语、收集一个或多个数字，并根据来电者的按键执行对应操作。菜单可以任意嵌套：按某个键可以进入子菜单、返回当前菜单顶部，或沿菜单栈退回一级。
+
+<SignalWireCallout
+  title="将菜单改为语音提示，或直接进行对话"
+  href="https://signalwire.com/docs/swml/reference/calling/ai"
+  page="ivr-menus"
+  linkText="查看托管 AI 坐席">
+
+在 FreeSWITCH 团队创立的 SignalWire 平台上，IVR 菜单可以表示为 SWML 中的 [`prompt`](https://signalwire.com/docs/swml/reference/calling/prompt?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=ivr-menus) 与 [`switch`](https://signalwire.com/docs/swml/reference/calling/switch?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=ivr-menus)；SWML 是一种基于 JSON/YAML 的呼叫控制标记语言。也可以完全舍弃树形菜单：`ai` 方法会使用按代码中指定步骤运行的语音坐席接听。正在运行的 FreeSWITCH 服务器现在也能通过 SIP 接入同一坐席。
+
+</SignalWireCallout>
+
+## IVR 菜单模型 {#ivr-menu-model}
+
+IVR 菜单是一个有名称的 XML 元素，指定以下内容：
+
+- 向来电者播放的一段或两段欢迎音频文件或 TTS 语句。
+- 控制输入等待时长，以及允许多少次无效输入或超时的计时参数。
+- 一组 `<entry>` 元素，将按键数字串（或正则表达式）映射到指定操作。
+
+同一 FreeSWITCH 实例中的所有菜单共享一个命名空间。菜单通过名称引用子菜单；引擎运行时从已加载的菜单栈中解析名称。文件中定义的第一个菜单被视为该组菜单的栈顶。
+
+引擎持续收集按键，直到收到 `digit-len` 个数字，或者第一个数字到达后在 `inter-digit-timeout` 毫秒内没有收到新数字。随后按顺序遍历 `<entry>` 列表进行匹配。若无匹配项，则播放 `invalid-sound` 并增加失败计数；若在 `timeout` 毫秒内完全没有数字输入，则增加超时计数。当任一计数达到上限，菜单即退出。
+
+---
+
+## 配置文件 {#configuration-file}
+
+`ivr.conf.xml` 是由 `mod_dptools` 加载的模块配置文件，其唯一用途是通过 `X-PRE-PROCESS` include 指令汇集菜单文件。
+
+```xml
+<!-- conf/autoload_configs/ivr.conf.xml -->
+<configuration name="ivr.conf" description="IVR menus">
+  <menus>
+    <X-PRE-PROCESS cmd="include" data="../ivr_menus/*.xml"/>
+  </menus>
+</configuration>
+```
+
+启动时会加载 `conf/ivr_menus/` 下的所有 `*.xml` 文件。每个文件均在 `<include>` 根元素内包含一个或多个 `<menu>` 元素。
+
+---
+
+## 菜单定义：`<menu>` 元素 {#menu-definition-the-menu-element}
+
+菜单文件使用一个 `<include>` 包裹一个或多个 `<menu>` 元素。每个 `<menu>` 的 `name` 属性既是 `ivr` 拨号计划应用使用的标识，也是 `menu-sub` 条目引用子菜单时使用的标识。
+
+```xml
+<include>
+  <menu name="main_menu"
+      greet-long="phrase:main_menu_greeting"
+      greet-short="phrase:main_menu_greeting_short"
+      invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+      exit-sound="voicemail/vm-goodbye.wav"
+      timeout="10000"
+      inter-digit-timeout="2000"
+      max-failures="3"
+      max-timeouts="3"
+      digit-len="1">
+
+    <entry action="menu-exec-app" digits="1" param="transfer 1000 XML default"/>
+    <entry action="menu-sub"      digits="2" param="billing_menu"/>
+    <entry action="menu-top"      digits="9"/>
+    <entry action="menu-exit"     digits="*"/>
+  </menu>
+</include>
+```
+
+### `<menu>` 属性参考 {#menu-attribute-reference}
+
+| 属性 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `name` | 当前菜单的唯一标识，必填。 | 任意字符串 | 无 |
+| `greet-long` | 第一次进入菜单时播放的音频或 TTS。 | 文件路径或 `phrase:` / `say:` 前缀 | 无 |
+| `greet-short` | 再次进入菜单（如从子菜单返回或循环）时播放的音频或 TTS。 | 文件路径或 `phrase:` / `say:` 前缀 | 无 |
+| `invalid-sound` | 按下的数字不匹配任何条目时播放的音频或 TTS。 | 文件路径或 `phrase:` / `say:` 前缀 | 无 |
+| `exit-sound` | 菜单正常退出（失败或超时次数达到上限，或执行 `menu-exit`）时播放的音频或 TTS。 | 文件路径或 `phrase:` / `say:` 前缀 | 无 |
+| `transfer-sound` | 转移呼叫前播放的音频或 TTS。 | 文件路径或 `phrase:` / `say:` 前缀 | 无 |
+| `timeout` | 等待第一个数字的毫秒数，超过后增加超时计数。 | 整数（毫秒） | `10000` |
+| `inter-digit-timeout` | 收到第一个数字后，等待后续数字的毫秒数。 | 整数（毫秒） | 显式设置 `timeout` 时取其一半；两者均省略时为 `0`（无数字间超时） |
+| `max-failures` | 允许的无效按键次数上限，达到后退出菜单。 | 整数 | `3` |
+| `max-timeouts` | 允许的超时次数上限，达到后退出菜单；省略时继承 `max-failures`。 | 整数 | `max-failures` 的值 |
+| `digit-len` | 匹配前最多收集的数字数。设置为 `0` 时，引擎自动将其扩展为所有条目中最长字面量 `digits` 值的长度。 | 整数 | `0` |
+| `confirm-macro` | 执行匹配操作前，用于回读已收集数字以供确认的短语宏名称。 | 短语宏名称 | 无 |
+| `confirm-key` | 来电者用于确认的按键，与 `confirm-macro` 配合。 | 单个数字字符串 | 无 |
+| `confirm-attempts` | 允许的确认尝试次数。 | 整数 | `3` |
+| `tts-engine` | 当音频值以 `say:` 开头时使用的 TTS 引擎。 | 引擎名称，如 `flite` | 无 |
+| `tts-voice` | 与 `tts-engine` 配合使用的语音名称。 | 语音名称，如 `rms` | 无 |
+| `pin` | 若已设置，播放菜单欢迎语前必须输入此 PIN。 | 数字字符串 | 无 |
+| `pin-file` | 输入 PIN 前播放的音频提示。 | 文件路径 | `ivr/ivr-please_enter_pin_followed_by_pound.wav` |
+| `bad-pin-file` | PIN 错误时播放的音频。 | 文件路径 | `conference/conf-bad-pin.wav` |
+| `exec-on-max-failures` | 达到 `max-failures` 时执行的拨号计划应用字符串。 | `app arg` 字符串 | 无 |
+| `exec-on-max-timeouts` | 达到 `max-timeouts` 时执行的拨号计划应用字符串。 | `app arg` 字符串 | 无 |
+
+### 音频及 TTS 前缀 {#sound-and-tts-prefixes}
+
+所有音频属性（`greet-long`、`greet-short`、`invalid-sound`、`exit-sound`、`transfer-sound`）都接受以下三种形式：
+
+| 形式 | 示例 | 行为 |
+|---|---|---|
+| 文件路径 | `ivr/ivr-that_was_an_invalid_entry.wav` | 相对于声音文件根目录播放指定音频。 |
+| `phrase:` 前缀 | `phrase:main_menu_greeting` | 执行指定的短语宏。 |
+| `say:` 前缀 | `say:Press 1 for sales` | 使用 `tts-engine` 和 `tts-voice` 合成语音。 |
+
+### PIN 保护 {#pin-protection}
+
+在菜单上设置 `pin` 后，引擎会先使用 `pin-file` 提示来电者输入 PIN，再播放欢迎语。PIN 正确则正常进入菜单；不匹配则播放 `bad-pin-file`。引擎固定允许 **3 次** PIN 尝试，此值硬编码，无法通过任何 `<menu>` 属性控制。
+
+```xml
+<menu name="secure_menu"
+    greet-long="phrase:secure_menu_greeting"
+    greet-short="phrase:secure_menu_greeting_short"
+    invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+    exit-sound="voicemail/vm-goodbye.wav"
+    timeout="10000"
+    max-failures="3"
+    max-timeouts="3"
+    digit-len="1"
+    pin="1234"
+    pin-file="ivr/ivr-please_enter_pin_followed_by_pound.wav"
+    bad-pin-file="conference/conf-bad-pin.wav">
+
+  <entry action="menu-exec-app" digits="1" param="transfer 2000 XML default"/>
+  <entry action="menu-exit"     digits="*"/>
+</menu>
+```
+
+### 失败与超时回调 {#callbacks-on-failure-and-timeout}
+
+`exec-on-max-failures` 和 `exec-on-max-timeouts` 都接受 `application argument` 形式的拨号计划应用调用。当相应计数达到上限时，引擎先执行该应用，再退出菜单。若希望在来电者多次未能正确操作后，将其转到语音信箱分机或人工坐席队列，这就是适合使用的钩子。
+
+```xml
+<menu name="main_menu"
+    greet-long="phrase:main_menu_greeting"
+    greet-short="phrase:main_menu_greeting_short"
+    invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+    exit-sound="voicemail/vm-goodbye.wav"
+    timeout="10000"
+    max-failures="3"
+    max-timeouts="3"
+    digit-len="1"
+    exec-on-max-failures="transfer 0 XML default"
+    exec-on-max-timeouts="transfer 0 XML default">
+
+  <entry action="menu-exec-app" digits="1" param="transfer 1000 XML default"/>
+</menu>
+```
+
+---
+
+## 条目定义：`<entry>` 元素 {#entries-the-entry-element}
+
+`<menu>` 内的每个 `<entry>` 元素都将某个数字字符串或正则表达式映射到一个操作。属性包括：
+
+- `action`：操作名称（必填）。
+- `digits`：待匹配的数字字符串或正则表达式（必填）。
+- `param`：操作的附加参数（对需要参数的操作必填；`menu-top` 与 `menu-back` 不使用）。
+
+### `<entry>` 操作参考 {#entry-action-reference}
+
+| 操作 | 效果 |
+|---|---|
+| `menu-exec-app` | 使用 `param` 中的值执行拨号计划应用；呼叫离开菜单。例如 `param="transfer 1000 XML default"`。 |
+| `menu-sub` | 进入 `param` 指定的子菜单；当前菜单压入栈中。 |
+| `menu-top` | 返回菜单栈顶（当前组中定义的第一个菜单），并再次播放 `greet-short`。 |
+| `menu-back` | 返回菜单栈中的上一级菜单，并播放上一级菜单的 `greet-short`。 |
+| `menu-play-sound` | 播放 `param` 指定的音频或 TTS，但不退出菜单。 |
+| `menu-exit` | 立即退出菜单并播放 `exit-sound`。 |
+
+### 数字模式与正则表达式 {#digit-patterns-and-regular-expressions}
+
+`digits` 属性既可以是字面量字符串，也可以是由 `/` 分隔符包围的 PCRE 正则表达式。使用正则表达式时，捕获组在 `menu-exec-app` 条目的 `param` 中可以作为 `$1`、`$2` 等引用，从而允许在 IVR 菜单中直接拨打可变长度的分机号码。
+
+```xml
+<!-- Literal: caller presses exactly "1" -->
+<entry action="menu-exec-app" digits="1" param="transfer 1000 XML default"/>
+
+<!-- Regex: matches any 4-digit extension in the 1000-1099 range -->
+<entry action="menu-exec-app" digits="/^(10[0-9][0-9])$/" param="transfer $1 XML default"/>
+```
+
+不同的 `<entry>` 元素可以使用不同的正则表达式。条目按文档中的先后顺序求值，第一个匹配项生效。
+
+---
+
+## 嵌套子菜单 {#nesting-submenus}
+
+子菜单就是被 `menu-sub` 条目按名称引用的普通 `<menu>` 元素。同一文件中的菜单（或同一个 `<menus>` 块中加载的跨文件菜单）共享命名空间。引擎在运行时从已加载的菜单栈中解析子菜单名称。
+
+最佳实践是在文件中首先定义顶层菜单，再定义其下的所有子菜单。`menu-back` 返回上一级；`menu-top` 返回当前呼叫调用时的第一个菜单。
+
+```xml
+<include>
+  <!-- Top-level menu -->
+  <menu name="company_ivr"
+      greet-long="phrase:company_ivr_main"
+      greet-short="phrase:company_ivr_main_short"
+      invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+      exit-sound="voicemail/vm-goodbye.wav"
+      timeout="10000"
+      inter-digit-timeout="2000"
+      max-failures="3"
+      max-timeouts="3"
+      digit-len="1">
+
+    <entry action="menu-sub"  digits="1" param="sales_menu"/>
+    <entry action="menu-sub"  digits="2" param="support_menu"/>
+    <entry action="menu-top"  digits="9"/>
+    <entry action="menu-exit" digits="*"/>
+  </menu>
+
+  <!-- Submenu -->
+  <menu name="sales_menu"
+      greet-long="phrase:sales_menu_greeting"
+      greet-short="phrase:sales_menu_greeting_short"
+      invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+      exit-sound="voicemail/vm-goodbye.wav"
+      timeout="15000"
+      max-failures="3"
+      max-timeouts="3"
+      digit-len="1">
+
+    <entry action="menu-exec-app" digits="1" param="transfer 2001 XML default"/>
+    <entry action="menu-exec-app" digits="2" param="transfer 2002 XML default"/>
+    <entry action="menu-back"     digits="*"/>
+  </menu>
+</include>
+```
+
+此例中，在 `sales_menu` 中按 `*` 会调用 `menu-back`，将来电者带回 `company_ivr` 并重新播放简短欢迎语。在 `company_ivr` 中按 `9` 会调用 `menu-top`，从顶部重新启动 `company_ivr`。
+
+---
+
+## 从拨号计划调用菜单 {#invoking-a-menu-from-the-dialplan}
+
+`ivr` 拨号计划应用只接收一个参数：要进入的顶层菜单的 `name`。调用 `ivr` 前必须已接听呼叫。该应用也在[拨号计划工具参考](../dialplan/dptools-reference.mdx)中概述。
+
+```xml
+<extension name="main_ivr">
+  <condition field="destination_number" expression="^1000$">
+    <action application="answer"/>
+    <action application="sleep"  data="1000"/>
+    <action application="ivr"   data="company_ivr"/>
+  </condition>
+</extension>
+```
+
+`ivr` 前的 `sleep` 可以让远端在开始播放音频之前完成应答信令。时长（毫秒）取决于运营商或端点，常见值为 `1000` 至 `2000`。
+
+当 `ivr` 返回时，控制流会继续执行当前拨号计划分机中的下一个操作。如果菜单在内部转移了呼叫（例如 `menu-exec-app` 执行 `transfer`），则呼叫会离开当前分机，进入指定上下文中的目标分机。
+
+---
+
+## 随附的演示 IVR {#the-bundled-demo-ivr}
+
+FreeSWITCH 标准配置附带可运行的演示 IVR，可通过 `default` 拨号计划上下文中的分机 `5000` 访问。`conf/dialplan/default.xml` 中的分机定义如下：
+
+```xml
+<extension name="ivr_demo">
+  <condition field="destination_number" expression="^5000$">
+    <action application="answer"/>
+    <action application="sleep" data="2000"/>
+    <action application="ivr"   data="demo_ivr"/>
+  </condition>
+</extension>
+```
+
+`demo_ivr` 菜单定义在 `conf/ivr_menus/demo_ivr.xml` 中，完整内容如下：
+
+```xml
+<include>
+  <!-- demo IVR, Main Menu -->
+  <menu name="demo_ivr"
+      greet-long="phrase:demo_ivr_main_menu"
+      greet-short="phrase:demo_ivr_main_menu_short"
+      invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+      exit-sound="voicemail/vm-goodbye.wav"
+      confirm-macro=""
+      confirm-key=""
+      tts-engine="flite"
+      tts-voice="rms"
+      confirm-attempts="3"
+      timeout="10000"
+      inter-digit-timeout="2000"
+      max-failures="3"
+      max-timeouts="3"
+      digit-len="4">
+
+    <entry action="menu-exec-app" digits="1" param="bridge sofia/$${domain}/888@conference.freeswitch.org"/>
+    <entry action="menu-exec-app" digits="2" param="transfer 9196 XML default"/>
+    <entry action="menu-exec-app" digits="3" param="transfer 9664 XML default"/>
+    <entry action="menu-exec-app" digits="4" param="transfer 9191 XML default"/>
+    <entry action="menu-exec-app" digits="5" param="transfer 1234*256 enum"/>
+    <entry action="menu-sub"      digits="6" param="demo_ivr_submenu"/>
+    <entry action="menu-exec-app" digits="/^(10[01][0-9])$/" param="transfer $1 XML features"/>
+    <entry action="menu-top"      digits="9"/>
+  </menu>
+
+  <!-- Demo IVR, Sub Menu -->
+  <menu name="demo_ivr_submenu"
+      greet-long="phrase:demo_ivr_sub_menu"
+      greet-short="phrase:demo_ivr_sub_menu_short"
+      invalid-sound="ivr/ivr-that_was_an_invalid_entry.wav"
+      exit-sound="voicemail/vm-goodbye.wav"
+      timeout="15000"
+      max-failures="3"
+      max-timeouts="3">
+
+    <entry action="menu-top" digits="*"/>
+  </menu>
+</include>
+```
+
+`demo_ivr` 的按键映射如下：
+
+| 按键 | 操作 |
+|---|---|
+| `1` | 将来电者桥接到 `888@conference.freeswitch.org` 上的公开 FreeSWITCH 会议。 |
+| `2` | 转移到分机 `9196`（回声测试）。 |
+| `3` | 转移到分机 `9664`（保持音乐）。 |
+| `4` | 转移到分机 `9191`。 |
+| `5` | 转移到 `enum` 上下文中的分机 `1234*256`。 |
+| `6` | 进入 `demo_ivr_submenu`。 |
+| `9` | 返回 `demo_ivr` 顶部。 |
+| `1000`-`1019` | 将任意符合 `/^(10[01][0-9])$/` 的四位数字转移到 `features` 上下文中的对应分机。 |
+
+`digit-len` 设置为 `4`，意味着引擎匹配前最多等待 4 位数字。为什么 `1` 至 `9` 这样的单数字条目仍然有效？因为来电者按下一位数字后，如果 `inter-digit-timeout`（2000 毫秒）内没有后续输入，引擎就会针对当前的一位数字缓冲区执行匹配。
+
+`demo_ivr_submenu` 播放欢迎语并等待输入。按 `*` 会触发 `menu-top`，将来电者带回 `demo_ivr` 顶部。
+
+标准配置还包含 `conf/ivr_menus/new_demo_ivr.xml`，定义了 `new_demo_ivr` 以及多个遵循相同结构的子菜单。默认拨号计划并没有分机调用 `new_demo_ivr`；它用于提供多级子菜单布局的参考示例。

@@ -1,0 +1,545 @@
+---
+sidebar_position: 5
+id: utility-applications
+slug: /applications/utilities
+title: "第 23 章：工具类应用"
+description: "FreeSWITCH 工具模块的存储、呼叫限制、驻留、组播寻呼、视频文件及监听应用。"
+sidebar_label: "23. 工具类应用"
+---
+
+# 第 23 章：工具类应用 {#chapter-23-utility-applications}
+
+本章介绍 FreeSWITCH 随附的面向运维人员的工具模块。每个模块作为独立单元说明，包括配置文件（若存在）、注册的拨号计划应用、开放的 API 命令，以及应用接受的参数和选项。本章出现的拨号计划应用（如 `db`、`hash`、`limit`、`valet_park` 等）在[拨号计划工具参考](../dialplan/dptools-reference.mdx)中也有概要。
+
+<SignalWireCallout
+  title="将工具功能封装为方法"
+  href="https://signalwire.com/docs/swml/reference/calling"
+  page="utility-applications"
+  linkText="浏览 SWML 呼叫控制参考">
+
+基于同一引擎，SignalWire 的 JSON/YAML 呼叫控制标记语言 SWML 将呼叫驻留、保持音乐、按键发送和呼叫转移提供为方法。呼叫控制参考给出了本章这些功能的单行调用方式。
+
+</SignalWireCallout>
+
+## mod_db：持久键值存储与呼叫限额 {#mod_db-persistent-key-value-store-and-call-limiting}
+
+`mod_db` 提供两种独立服务：通过拨号计划中的 `db` 应用访问、基于 SQL 的持久键值存储；以及核心 `limit` 子系统的 `db` 后端。数据在模块重新加载后仍保留，但进程重启会清除（启动时会删除属于本地主机名的记录）。
+
+### 配置：`db.conf.xml` {#configuration-dbconfxml}
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `odbc-dsn` | `limit` 与 `db` 存储共同使用的 ODBC 或原生 DSN；缺失时 FreeSWITCH 使用名为 `call_limit` 的本地 SQLite 数据库。 | `dsn:username:password` 或 `pgsql://` / `sqlite://` URI | 无（SQLite `call_limit`） |
+
+**`db.conf.xml` 示例：**
+
+```xml
+<configuration name="db.conf" description="LIMIT DB Configuration">
+  <settings>
+    <!--<param name="odbc-dsn" value="dsn:user:pass"/>-->
+  </settings>
+</configuration>
+```
+
+### 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `db` | 在持久化 `db_data` 表中插入或删除键值对。 | `insert/<realm>/<key>/<value>` 或 `delete/<realm>/<key>` |
+| `group` | 在持久化 `group_data` 表中向具名组添加或删除 URL 条目。 | `insert:<groupname>:<url>` 或 `delete:<groupname>:<url>` |
+| `limit` | 通过 `db` 后端实施并发呼叫数限制；增加指定 realm 和 resource 的计数，超过 `max` 后继续在 `limit_exceeded` 分机执行。 | `db <realm> <resource> <max> [<transfer_destination> [<transfer_dialplan> [<transfer_context>]]]` |
+
+#### `db` 应用 {#db-application}
+
+`db` 应用操作持久化 `db_data` 表。拨号计划中只支持 `insert` 和 `delete`；读取操作需使用 `db` ESL API 命令。
+
+```xml
+<!-- Store a value -->
+<action application="db" data="insert/myapp/caller_state/active"/>
+
+<!-- Remove a value -->
+<action application="db" data="delete/myapp/caller_state"/>
+```
+
+#### `group` 应用 {#group-application}
+
+`group` 应用在持久化 `group_data` 表中的具名组内添加或删除 URL。用于返回该组拨号字符串的 `call` 操作只能通过 `group` ESL API 命令执行。
+
+```xml
+<action application="group" data="insert:salesgroup:sofia/internal/1001@example.com"/>
+<action application="group" data="delete:salesgroup:sofia/internal/1001@example.com"/>
+```
+
+#### 使用 `db` 后端的 `limit` 应用 {#limit-application-with-db-backend}
+
+`limit` 应用由核心注册，存储操作委托给第一个参数指定的后端。指定 `db` 即选用 `mod_db` 后端。
+
+达到限额时，呼叫被转移到当前拨号计划上下文中的 `limit_exceeded` 分机（除非显式指定转移目的地）。
+
+```xml
+<!-- Allow at most 5 concurrent calls per SIP user within the domain realm -->
+<action application="limit" data="db ${domain} ${sip_auth_username} 5 limit_exceeded"/>
+```
+
+`mod_limit` 自带拨号计划中的示例：
+
+```xml
+<extension name="limit" continue="true">
+  <condition>
+    <action application="limit" data="db $${domain} ${sip_auth_username} ${max_calls}"/>
+  </condition>
+</extension>
+
+<extension name="limit_exceeded">
+  <condition field="destination_number" expression="^limit_exceeded$">
+    <action application="playback" data="/sounds/overthelimit.wav"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+#### `limit` 参数参考 {#limit-argument-reference}
+
+| 位置 | 名称 | 用途 |
+|----------|------|---------|
+| 1 | `backend` | 限额后端：`db` 或 `hash`。 |
+| 2 | `realm` | 计数器的分组命名空间。 |
+| 3 | `resource` | realm 内的具体资源标识。 |
+| 4 | `max` | 最大并发数；使用 `-1` 仅追踪、不限制。 |
+| 5 | `transfer_destination` | 超出限制时转移到的分机（可选，默认 `limit_exceeded`）。 |
+| 6 | `transfer_dialplan` | 转移时使用的拨号计划（可选）。 |
+| 7 | `transfer_context` | 转移时使用的上下文（可选）。 |
+
+#### `db` 后端的 `limit` 设置的通道变量 {#channel-variables-set-by-limit-with-db-backend}
+
+| 变量 | 值 |
+|----------|-------|
+| `limit_realm` | 传给 `limit` 的 realm 参数。 |
+| `limit_id` | 传给 `limit` 的 resource 参数。 |
+| `limit_max` | 传给 `limit` 的 max 参数。 |
+| `limit_usage` | 当前 realm 和 resource 的并发使用数。 |
+| `limit_usage_<realm>_<resource>` | 与 `limit_usage` 相同，但按 realm 与 resource 组合命名。 |
+
+### ESL API 命令 {#esl-api-commands}
+
+`mod_db` 注册两条 ESL API 命令。
+
+#### `db` API
+
+```
+db [insert|delete|select|exists|count|list]/<realm>/<key>[/<value>]
+```
+
+| 操作 | 参数 | 返回值 |
+|-----------|-----------|---------|
+| `insert` | `/<realm>/<key>/<value>` | `+OK` |
+| `delete` | `/<realm>/<key>` | `+OK` |
+| `select` | `/<realm>/<key>` | 已存储值，或空字符串 |
+| `exists` | `/<realm>/<key>` | `true` 或 `false` |
+| `count` | 无或 `/<realm>` | 不同 realm 的数量，或指定 realm 中的键数 |
+| `list` | 无或 `/<realm>` | 以逗号分隔的 realm 名称，或指定 realm 中的键列表 |
+
+```
+db select/myapp/caller_state
+db exists/myapp/caller_state
+```
+
+#### `group` API
+
+```
+group [insert|delete|call]:<groupname>:<url>
+```
+
+| 操作 | 行为 |
+|-----------|---------|
+| `insert` | 将 `<url>` 添加到 `<groupname>`。 |
+| `delete` | 从 `<groupname>` 中移除 `<url>`；URL 为 `*` 时移除全部条目。 |
+| `call` | 返回组内所有 URL 的拨号字符串。追加 `:order` 采用顺序方式（通过 `\|` 分隔），追加 `:multi` 采用并行方式（通过 `:_:` 分隔）。默认同时拨号（逗号分隔）。 |
+
+```
+group call:salesgroup
+group call:salesgroup:order
+```
+
+---
+
+## mod_hash：内存共享状态与 limit_hash 后端 {#mod_hash-in-memory-shared-state-and-limit_hash-backend}
+
+`mod_hash` 维护两张内存哈希表：一张作为核心 `limit` 子系统的 `hash` 后端（追踪并发呼叫数与呼叫速率），另一张是通过 `hash` 应用访问的通用进程内键值存储。数据保存在进程内存中，因此进程重启后会丢失。
+
+`mod_hash` 还支持通过 ESL 与远程 FreeSWITCH 节点同步限额计数。模块按照配置的时间间隔轮询每个远程节点，并将其限额数据合并到本地计数中。
+
+### 配置：`hash.conf.xml` {#configuration-hashconfxml}
+
+`remotes` 部分定义可选的远程对等节点，模块从中获取限额使用数据。
+
+| 属性 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `name` | 远程节点的逻辑名称。 | 任意字符串 | 必填 |
+| `host` | 远程 FreeSWITCH 的 IP 或主机名。 | IP 地址或主机名 | 必填 |
+| `port` | 远程节点的 ESL 端口。 | 端口号 | `8021` |
+| `username` | 远程节点的 ESL 用户名。 | 字符串 | 无 |
+| `password` | 远程节点的 ESL 密码。 | 字符串 | 必填 |
+| `interval` | 轮询间隔（毫秒）。 | 整数 | 必填 |
+
+**`hash.conf.xml` 示例：**
+
+```xml
+<configuration name="hash.conf" description="Hash Configuration">
+  <remotes>
+    <!-- <remote name="node2" host="10.0.0.10" port="8021" password="ClueCon" interval="1000"/> -->
+  </remotes>
+</configuration>
+```
+
+### 拨号计划应用 {#dialplan-applications-1}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `hash` | 在内存哈希表中插入、条件插入或删除键值对。 | `insert/<realm>/<key>/<value>`、`insert_ifempty/<realm>/<key>/<value>`、`delete/<realm>/<key>` 或 `delete_ifmatch/<realm>/<key>/<value>` |
+| `limit` | 使用 `hash` 后端限制并发呼叫数或速率。 | `hash <realm> <resource> <max> [<interval>]` |
+
+#### `hash` 应用 {#hash-application}
+
+`hash` 应用管理内存键值存储，数据不会跨进程重启保留。
+
+| 操作 | 行为 |
+|-----------|---------|
+| `insert` | 无条件将 `<realm>/<key>` 设为 `<value>`，覆盖原值。 |
+| `insert_ifempty` | 仅当键不存在时，将 `<realm>/<key>` 设为 `<value>`。 |
+| `delete` | 若 `<realm>/<key>` 存在则删除。 |
+| `delete_ifmatch` | 仅当 `<realm>/<key>` 的当前值等于 `<value>` 时删除。 |
+
+```xml
+<!-- Set an in-memory flag for the current domain/user -->
+<action application="hash" data="insert/${domain}/${sip_auth_username}/active"/>
+
+<!-- Remove it on hangup via an anti-action or in a separate extension -->
+<action application="hash" data="delete/${domain}/${sip_auth_username}"/>
+```
+
+#### 使用 `hash` 后端的 `limit` 应用 {#limit-application-with-hash-backend}
+
+`hash` 后端既支持并发呼叫数限制，也支持速率限制。速率限制使用 `<interval>` 秒的滑动窗口。
+
+```xml
+<!-- Limit to 10 concurrent calls per user -->
+<action application="limit" data="hash ${domain} ${sip_auth_username} 10"/>
+
+<!-- Limit to 5 calls per user per 60-second window -->
+<action application="limit" data="hash ${domain} ${sip_auth_username} 5 60"/>
+```
+
+`hash` 后端设置的通道变量：
+
+| 变量 | 值 |
+|----------|-------|
+| `limit_usage` | 该资源当前的总使用数。 |
+| `limit_usage_<realm>_<resource>` | 同上，但按 realm 与 resource 命名。 |
+| `limit_rate` | 当前时间窗口内的速率使用数。 |
+| `limit_rate_<realm>_<resource>` | 同上，但按 realm 与 resource 命名。 |
+
+### ESL API 命令 {#esl-api-commands-1}
+
+`mod_hash` 注册三条 ESL API 命令。
+
+#### `hash` API
+
+```
+hash [insert|insert_ifempty|select|delete|delete_ifmatch]/<realm>/<key>[/<value>]
+```
+
+| 操作 | 行为 |
+|-----------|---------|
+| `insert` | 将 `<realm>/<key>` 设为 `<value>`，覆盖原值。 |
+| `insert_ifempty` | 仅当键不存在时，将 `<realm>/<key>` 设为 `<value>`；否则返回 `-ERR key already exists`。 |
+| `select` | 返回 `<realm>/<key>` 存储的值，未找到时为空。 |
+| `delete` | 删除 `<realm>/<key>`，不存在时返回 `-ERR Not found`。 |
+| `delete_ifmatch` | 仅当 `<realm>/<key>` 当前值等于 `<value>` 时删除。 |
+
+#### `hash_dump` API
+
+输出内存哈希表的内容，供远程节点在限额同步时使用。
+
+```
+hash_dump all|limit|db [<realm>]
+```
+
+| 参数 | 输出 |
+|----------|-------|
+| `all` | 限额计数和数据库哈希表。 |
+| `limit` | 仅限额追踪计数器。 |
+| `db` | 仅键值存储条目；可选按 `<realm>` 筛选。 |
+
+#### `hash_remote` API
+
+管理用于限额同步的远程 ESL 连接。
+
+```
+hash_remote list|kill [name]|rescan
+```
+
+| 子命令 | 行为 |
+|------------|---------|
+| `list` | 列出所有已配置的远程节点及连接状态（`Off`、`Down` 或 `Up`）。 |
+| `kill <name>` | 断开并删除指定远程节点。 |
+| `rescan` | 重新读取 `hash.conf.xml`，连接新增的远程节点。 |
+
+---
+
+## mod_limit：向后兼容适配模块 {#mod_limit-backward-compatibility-shim}
+
+`mod_limit` 是已弃用的兼容模块，本身不注册应用。加载时，如果 `mod_hash` 和 `mod_db` 尚未存在，它会尝试加载，并把内部变量 `switch_limit_backwards_compat_flag` 设置为 `true`，以便直接引用 `mod_limit` 的旧拨号计划继续工作。
+
+新安装应直接加载 `mod_hash` 和 `mod_db`，省略 `mod_limit`。加载 `mod_limit` 时，启动日志会输出警告。
+
+---
+
+## mod_valet_parking：代客泊车式呼叫驻留 {#mod_valet_parking-valet-call-parking}
+
+`mod_valet_parking` 实现具名停车场式的呼叫驻留系统。呼叫驻留在一个具名场地中的指定分机号上，该号码可以显式指定、由来电者通过 DTMF 输入，或从数字范围内自动分配。任何拨打相同场地和分机号的通道都能取回驻留的呼叫并与之桥接。场地状态保存在内存中，进程重启后丢失。
+
+驻留和取回时会触发 Presence 事件（`SWITCH_EVENT_PRESENCE_IN`），使 SIP 电话能够通过 `park+<lot>` 资源订阅场地状态。
+
+`mod_valet_parking` 没有配置文件。
+
+### 拨号计划应用 {#dialplan-applications-2}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `valet_park` | 在具名场地驻留或取回呼叫。 | `<lotname> <extension>` 或 `<lotname> ask [<min>] [<max>] [<timeout_ms>] [<prompt>]` 或 `<lotname> auto in\|out <min> <max>` |
+
+#### 分机参数模式 {#extension-argument-modes}
+
+| 模式 | 语法 | 行为 |
+|------|--------|---------|
+| 显式指定 | `<lotname> <extension>` | 将呼叫驻留到指定分机；若该分机已有未桥接的驻留呼叫，则取回并与之桥接。 |
+| 询问输入 | `<lotname> ask [<min>] [<max>] [<timeout_ms>] [<prompt>]` | 播放提示并收集来电者的 DTMF，以确定分机号。 |
+| 自动存入 | `<lotname> auto in <min> <max>` | 自动选择 `<min>` 到 `<max>` 范围内最低的可用分机并驻留呼叫，向来电者播报分配的槽位。 |
+| 自动取出 | `<lotname> auto out <min> <max>` | 取回 `<min>` 到 `<max>` 范围内等待时间最长的驻留呼叫。 |
+
+#### `ask` 模式使用的备用通道变量 {#ask-mode-fallback-channel-variables}
+
+省略 `ask` 模式的参数时，`valet_park` 会读取以下通道变量作为默认值。位置参数的优先级高于通道变量。
+
+| 变量 | 用途 | 缺失时默认值 |
+|----------|---------|-------------------|
+| `valet_ext_min` | 输入分机号所需的最少 DTMF 数字数。 | `1` |
+| `valet_ext_max` | 输入分机号最多允许的 DTMF 数字数。 | `11` |
+| `valet_ext_to` | DTMF 收集超时（毫秒）。 | `10000` |
+| `valet_ext_prompt` | 提示输入分机号时播放的音频文件。 | `ivr/ivr-enter_ext_pound.wav` |
+
+#### `valet_park` 使用的通道变量 {#channel-variables-honored-by-valet_park}
+
+| 变量 | 用途 |
+|----------|---------|
+| `valet_hold_music` | 驻留期间播放的保持音乐；回退到通道已配置的保持音乐。 |
+| `valet_announce_slot` | 设置为 `false` 可禁止 `auto in` 模式播报槽位，默认 `true`。 |
+| `valet_parking_timeout` | 驻留多少秒后将呼叫转移到 orbit 分机。 |
+| `valet_parking_orbit_exten` | 驻留超时时转移到的分机。 |
+| `valet_parking_orbit_dialplan` | orbit 转移使用的拨号计划。 |
+| `valet_parking_orbit_context` | orbit 转移使用的上下文。 |
+| `valet_parking_orbit_exit_key` | 按下后立即触发 orbit 转移的 DTMF 数字。 |
+
+#### `valet_park` 设置的通道变量 {#channel-variable-set-by-valet_park}
+
+| 变量 | 值 |
+|----------|-------|
+| `valet_lot_extension` | 当前通道驻留所在的分机号码。 |
+
+### ESL API 命令 {#esl-api-commands-2}
+
+#### `valet_info` API
+
+返回 XML，描述全部活动驻留场地及每个槽位中的呼叫。
+
+```
+valet_info [<lot name>]
+```
+
+不传参数时返回所有场地；传入场地名称时仅返回该场地。
+
+```xml
+<lots>
+  <lot name="valet_parking_lot">
+    <extension uuid="...">6001</extension>
+  </lot>
+</lots>
+```
+
+#### 标准拨号计划示例 {#vanilla-dialplan-examples}
+
+随附的 `valet_parking.xml` 提供两个可直接使用的分机：
+
+```xml
+<!-- Retrieve a valet-parked call by dialing 6000 and entering the slot number -->
+<extension name="valet_park">
+  <condition field="destination_number" expression="^(6000)$">
+    <action application="answer"/>
+    <action application="valet_park" data="valet_parking_lot ask 1 11 10000 ivr/ivr-enter_ext_pound.wav"/>
+  </condition>
+</extension>
+
+<!-- Park or retrieve via extension 6001-6099 (blind transfer to park; dial to retrieve) -->
+<extension name="valet_park">
+  <condition field="destination_number" expression="^(60\d[1-9])$">
+    <action application="answer"/>
+    <action application="valet_park" data="valet_parking_lot $1"/>
+  </condition>
+</extension>
+```
+
+---
+
+## mod_esf：组播寻呼 {#mod_esf-multicast-paging}
+
+`mod_esf`（Extra SIP Functionality）实现 RTP 组播寻呼。`esf_page_group` 应用应答入站呼叫，并同时将来电者音频广播到某个组播组。它还发送兼容 Polycom 的寻呼协议数据包，使组播组中的 Polycom IP 电话能够显示主叫标识并提醒用户。应用一直阻塞到来电者挂机。
+
+`mod_esf` 没有配置文件。运行时参数通过应用参数传入，或在调用前设置为通道变量。
+
+### 拨号计划应用 {#dialplan-applications-3}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `esf_page_group` | 通过 RTP 向组播组广播当前会话音频，可选兼容 Polycom 寻呼协议。 | `[<mcast_ip> [<mcast_port> [<control_port> [<ttl>]]]]` |
+
+#### 参数 {#arguments}
+
+参数以空格分隔。首先应用通道变量 `esf_multicast_ip`；若提供位置参数 `<mcast_ip>`，则覆盖它。
+
+| 位置 | 名称 | 默认值 | 用途 |
+|----------|------|---------|---------|
+| 1 | `mcast_ip` | `224.168.168.168` | 组播组 IP 地址。 |
+| 2 | `mcast_port` | `34567` | RTP 音频流使用的 UDP 端口。 |
+| 3 | `control_port` | `6061` | Linksys/SPA 寻呼控制包使用的 UDP 端口。 |
+| 4 | `ttl` | `1` | 组播 IP TTL（1–255）。 |
+
+#### `esf_page_group` 使用的通道变量 {#channel-variables-honored-by-esf_page_group}
+
+| 变量 | 用途 |
+|----------|---------|
+| `esf_multicast_ip` | 组播组 IP 地址；若提供位置参数会被覆盖。 |
+| `esf_multicast_bind_ip` | 用于绑定组播套接字的本地 IP，默认 `local_ip_v4`。 |
+| `esf_multicast_write_codec` | 组播流使用的音频编解码器：`PCMU`（默认）或 `G722`。 |
+| `esf_multicast_channel` | Polycom 寻呼通道号（1–254），默认 `0x1a`（26）。 |
+| `esf_multicast_alert_sound` | 直播音频开始前播放的寻呼提示音文件路径。 |
+
+#### `esf_page_group` 设置的通道变量 {#channel-variable-set-by-esf_page_group}
+
+| 变量 | 值 |
+|----------|-------|
+| `multicast_ttl` | 当前寻呼会话使用的 TTL 值。 |
+
+#### 标准拨号计划示例 {#vanilla-dialplan-example}
+
+摘自 `conf/vanilla/dialplan/default.xml`：
+
+```xml
+<extension name="rtp_multicast_page">
+  <condition field="destination_number" expression="^pagegroup$|^7243$">
+    <action application="answer"/>
+    <action application="esf_page_group"/>
+  </condition>
+</extension>
+```
+
+---
+
+## mod_fsv：视频文件录制与回放 {#mod_fsv-video-file-recording-and-playback}
+
+`mod_fsv` 实现 FreeSWITCH Video（`.fsv`）文件格式，并提供将音视频呼叫录制到 `.fsv` 文件及从中回放的应用。`.fsv` 是一种专有容器，按带长度前缀的帧交错存储原始 RTP 视频数据包和 L16 音频。模块还注册文件接口，因此在 FreeSWITCH 接受文件路径的地方（例如 `playback` 参数）也能使用 `.fsv` 文件。
+
+`mod_fsv` 没有配置文件。
+
+### 拨号计划应用 {#dialplan-applications-4}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `record_fsv` | 将会话的音频和视频同时录制到 `.fsv` 文件；阻塞直到通道挂机或收到 DTMF 结束键。 | `<filepath>` |
+| `play_fsv` | 向会话回放先前录制的 `.fsv` 文件，包括音视频流；阻塞直到播放结束或收到 DTMF 结束键。 | `<filepath>` |
+| `play_yuv` | 将 I420 格式的原始 YUV 文件作为视频播放到会话，同时音频流发送静音。 | `<filepath> [<width> [<height> [<timeout_ms> [<suppress_timestamp>]]]]` |
+| `decode_video` | 读取并解码会话的入站视频帧，记录分辨率信息；设置 `video_width` 和 `video_height` 通道变量。 | `[<max_pictures>]` |
+
+#### `record_fsv` 行为 {#record_fsv-behavior}
+
+应用先应答通道，最多等待 30 秒使视频流出现，然后开始录制。音频以 L16 捕获并存入文件，视频 RTP 数据包原样保存。播放结束键（通道变量 `playback_terminators`）同样适用。
+
+```xml
+<action application="record_fsv" data="/var/recordings/call_${uuid}.fsv"/>
+```
+
+#### `play_fsv` 行为 {#play_fsv-behavior}
+
+应用读取文件头以确定视频编解码器及音频采样率、应答通道，并回放同步音视频。文件头版本必须与模块编译时使用的版本相同；不匹配的文件会被拒绝。
+
+```xml
+<action application="play_fsv" data="/var/recordings/call_abc123.fsv"/>
+```
+
+#### `play_yuv` 参数 {#play_yuv-arguments}
+
+| 位置 | 名称 | 默认值 | 用途 |
+|----------|------|---------|---------|
+| 1 | `filepath` | 必填 | 原始 I420 YUV 文件路径。 |
+| 2 | `width` | `352` | 视频帧宽度（像素）。 |
+| 3 | `height` | `288` | 视频帧高度（像素）。 |
+| 4 | `timeout_ms` | `0`（不超时） | 最大播放时长（毫秒）。 |
+| 5 | `suppress_timestamp` | `0` | 设为 `1` 可关闭叠加在每帧上的时间戳。 |
+
+#### `decode_video` 设置的通道变量 {#channel-variables-set-by-decode_video}
+
+| 变量 | 值 |
+|----------|-------|
+| `video_width` | 首个成功解码视频帧的像素宽度。 |
+| `video_height` | 首个成功解码视频帧的像素高度。 |
+
+---
+
+## mod_spy：用户通话监控 {#mod_spy-user-call-monitoring}
+
+`mod_spy` 提供持久的用户级呼叫监听。`userspy` 应用针对 `user@domain` 目标注册监听，随后驻留监听通道。当被监听用户桥接呼叫时，监听通道会自动以窃听方式连接。多个监听通道可以同时观察同一目标。
+
+监听使用带 `ED_DTMF` 标志的核心函数 `switch_ivr_eavesdrop_session`，这意味着监听者能听到被桥接通话的两条呼叫腿。`mod_spy` 没有配置文件。
+
+### 拨号计划应用 {#dialplan-applications-5}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `userspy` | 为 `user@domain` 注册持久窃听监听；通道驻留并等待，目标用户桥接呼叫时自动建立窃听连接。 | `<user@domain> [<uuid>]` |
+
+#### 参数 {#arguments-1}
+
+| 位置 | 名称 | 用途 |
+|----------|------|---------|
+| 1 | `user@domain` | 需要监听的 SIP 用户与域。模块会匹配目标通话中的多组通道变量：`Caller-Username`/`domain_name`、`dialed_user`/`dialed_domain`、`user_name`/`domain_name`、`sip_to_user`/`domain_name` 以及 `verto_user`/`verto_host`。 |
+| 2 | `uuid` | 可选；指定后，监听通道会立即窃听对应 UUID，而不再等待桥接事件。 |
+
+#### `userspy` 设置的通道变量 {#channel-variables-set-by-userspy}
+
+| 变量 | 值 |
+|----------|-------|
+| `spy_uuid` | 被监听呼叫的 UUID，在激活窃听前立即设置；提供可选 `uuid` 参数时，也会由调用方直接设置。 |
+
+#### 等待时的保持音乐 {#hold-music-while-waiting}
+
+监听通道等待目标建立桥接时，会播放通道配置的保持音乐（`hold_music` 变量或 Profile 默认值）。未配置保持音乐时，通道每次休眠 10 秒。
+
+```xml
+<extension name="userspy">
+  <condition field="destination_number" expression="^spy$">
+    <action application="answer"/>
+    <action application="set" data="hold_music=local_stream://moh"/>
+    <action application="userspy" data="1001@${domain_name}"/>
+  </condition>
+</extension>
+```
+
+### ESL API 命令 {#esl-api-commands-3}
+
+#### `userspy_show` API
+
+返回全部活动监听注册及每条监听通道 UUID 的列表。
+
+```
+userspy_show
+```

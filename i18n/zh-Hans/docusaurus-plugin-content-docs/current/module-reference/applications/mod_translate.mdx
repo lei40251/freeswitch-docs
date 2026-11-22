@@ -1,0 +1,124 @@
+---
+sidebar_position: 36
+id: mod_translate
+slug: /module-reference/applications/mod_translate
+title: "mod_translate——号码转换规则"
+description: "配置 mod_translate 的正则表达式号码规范化规则、应用及拨号计划驱动器。"
+sidebar_label: "mod_translate"
+---
+# mod_translate——号码转换规则 {#mod_translate-—-number-translation-rules}
+
+`mod_translate` 根据一组具名的正则表达式替换配置实例，将电话号码规范化。每个配置实例包含按顺序排列的规则：应用首个匹配的规则后即停止继续展开。规则支持 PCRE 捕获组，以及在替换字符串中展开 FreeSWITCH 通道变量。
+
+号码来源格式混杂或不规范时，可使用该模块在路由之前统一规范号码，例如本地短号、以 `+` 开头的 E.164、10 位北美编号计划（NANP）号码或国际拨号前缀。该模块也注册为拨号计划驱动器，能够在主拨号计划执行前一次性改写被叫号码、主叫号码和 ANI。
+
+## 加载模块 {#loading-the-module}
+
+在 `load` / `modules.conf.xml` 中的模块名称为 `mod_translate`。默认发行版中，该条目**处于注释状态**，需要显式启用：
+
+```xml
+<load module="mod_translate"/>
+```
+
+无需特殊构建标志；源码中包含该模块时会默认编译。
+
+## 配置：`translate.conf.xml` {#configuration-translateconfxml}
+
+配置文件为 `translate.conf.xml`（在 FreeSWITCH 配置路径中查找）。它包含一个 `<profiles>` 元素。每个 `<profile>` 都有一个 `name` 属性，以及一个或多个按文档顺序求值的 `<rule>` 元素。
+
+### `<profile>` 元素 {#element}
+
+| 属性 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `name` | 标识配置实例；供拨号计划驱动器、应用和 API 命令使用 | 任意字符串（如 `US`、`GB`、`HK`） | — |
+
+### `<rule>` 元素 {#element-1}
+
+| 属性 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `regex` | 与号码进行匹配的 PCRE 模式 | 任意 PCRE 表达式 | — |
+| `replace` | 替换字符串；`$1`～`$9` 引用捕获组；`${varname}` 展开通道/事件变量 | 任意字符串 | — |
+
+规则按顺序求值，以第一个匹配项为准。如果没有匹配的规则，则号码保持不变。
+
+```xml
+<include>
+  <configuration name="translate.conf" description="Number Translation Rules">
+    <profiles>
+      <profile name="US">
+        <rule regex="^\+(\d+)$" replace="$1"/>
+        <rule regex="^(1[2-9]\d{2}[2-9]\d{6})$" replace="$1"/>
+        <rule regex="^([2-9]\d{2}[2-9]\d{6})$" replace="1$1"/>
+        <rule regex="^([2-9]\d{6})$" replace="1${areacode}$1"/>
+        <rule regex="^011(\d+)$" replace="$1"/>
+      </profile>
+      <profile name="GB">
+        <rule regex="^\+(\d+)$" replace="$1"/>
+        <rule regex="^$" replace="$1"/>
+      </profile>
+      <profile name="HK">
+        <rule regex="\+(\d+)$" replace="$1"/>
+        <rule regex="^(852\d{8})$" replace="$1"/>
+        <rule regex="^(\d{8})$" replace="852$1"/>
+      </profile>
+    </profiles>
+  </configuration>
+</include>
+```
+
+FreeSWITCH 接收 `SWITCH_EVENT_RELOADXML` 事件时会重新加载配置（例如在 `fs_cli` 中执行 `reloadxml`）。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `translate` | 使用具名配置实例转换单个号码；结果写入 `${translated}` | `<number> [<profile>]` |
+
+### `translate`
+
+将指定配置实例中首个匹配的规则应用到 `<number>`，把结果保存在通道变量 `translated` 中。未提供 `<profile>` 时默认使用 `US`。
+
+```xml
+<action application="translate" data="${destination_number} US"/>
+<action application="log"       data="INFO Translated: ${translated}"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `translate` | 在 `fs_cli` 或 ESL 中转换号码 | `translate <number> [<profile>]` |
+
+```
+freeswitch> translate 2125551234 US
+12125551234
+```
+
+在会话之外调用时，模块从全局变量读取 `default_areacode`（在 `vars.xml` 中设置），用于补全 7 位本地号码。如果未设置 `default_areacode`，则使用占位区号 `777`。
+
+## 拨号计划驱动器 {#dialplan-driver}
+
+`mod_translate` 还注册名为 `translate` 的拨号计划。在 SIP 配置实例中将其设置为拨号计划（例如 `<param name="dialplan" value="translate"/>`）后，它会在交回控制权之前，先转换每个入站呼叫的被叫号码、主叫号码及 ANI。
+
+拨号计划驱动器按以下优先顺序确定使用哪个配置实例：
+
+1. 拨号计划 URI 中传入的配置实例名（例如 `translate:GB`）
+2. 通道变量 `translate_profile`
+3. 通道变量 `country`
+4. 通道变量 `default_country`
+5. 硬编码回退值：`US`
+
+在拨号计划驱动器处理期间，通道变量 `areacode`（缺失时回退到 `default_areacode`）可供规则的 `replace` 字符串进行变量展开。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `translated` | 写入 | `translate` 拨号计划应用的输出，保存改写后的号码 |
+| `translate_profile` | 读取 | 拨号计划驱动器使用的配置实例名称（优先级 2） |
+| `country` | 读取 | 缺少 `translate_profile` 时使用的配置实例名称（优先级 3） |
+| `default_country` | 读取 | 拨号计划驱动器在上述变量均不存在时使用的配置实例名称（优先级 4） |
+| `areacode` | 读写 | 用于展开 7 位本地号码的区号；如果未设置则从 `default_areacode` 复制 |
+| `default_areacode` | 读取 | 全局回退区号，供拨号计划驱动器和 API 命令共同使用 |
+
+**源码：** `src/mod/applications/mod_translate`、`conf/vanilla/autoload_configs/translate.conf.xml`

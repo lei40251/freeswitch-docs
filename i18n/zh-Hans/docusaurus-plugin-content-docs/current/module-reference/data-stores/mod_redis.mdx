@@ -1,0 +1,86 @@
+---
+sidebar_position: 6
+id: mod_redis
+slug: /module-reference/data-stores/mod_redis
+title: "mod_redis — 旧版 Redis 呼叫并发限制后端"
+description: "通过随附的 credis 库，以 Redis 为后端实现 FreeSWITCH 呼叫并发限制。"
+sidebar_label: "mod_redis"
+---
+
+# mod_redis — 旧版 Redis 呼叫并发限制后端 {#mod_redis-—-legacy-redis-limit-backend}
+
+`mod_redis` 是位于 `src/mod/applications` 类别的呼叫限制后端，把呼叫并发计数器存储在 Redis 键值数据库中。它向 FreeSWITCH 的 limit 子系统注册名为 `redis` 的后端，让内置的 `limit` 拨号计划应用能够使用 Redis，在多台服务器之间共享计数器状态。
+
+**此模块已弃用。** 源码在每次调用时发出 `SWITCH_LOG_CRIT` 警告：“mod_redis is deprecated and will be removed in FS 1.8. Check out mod_hiredis.” 新部署请使用 `mod_hiredis`。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_redis`，默认的 `autoload_configs/modules.conf.xml` 中**未列出**它，因此不会自动加载。若要启用，请在该文件的 `<modules>` 部分添加：
+
+```xml
+<load module="mod_redis"/>
+```
+
+无须特殊构建标志。模块自带 Redis 客户端 `credis`（`credis.c`／`credis.h`），编译时直接链接，因此不需要安装外部 Redis 客户端库。
+
+## 配置：`redis.conf.xml` {#configuration-redisconfxml}
+
+FreeSWITCH 在模块加载时读取一次 `autoload_configs/redis.conf.xml`。模块没有注册 `reloadxml` 处理器，因此运行时不会重新读取配置；执行 `reload mod_redis` 会卸载并重载模块（重新读取配置），但单独执行 `reloadxml` 不会应用更改。要应用参数修改，请重载模块或重启 FreeSWITCH。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `host` | Redis 服务器主机名或 IP 地址 | 可解析的主机名或 IP | `localhost` |
+| `port` | Redis 服务器 TCP 端口 | 整数 | `6379` |
+| `timeout` | 连接超时，单位毫秒 | 整数（ms） | `10000` |
+| `ignore_connect_fail` | 为 `true` 时，即使 Redis 不可访问也允许呼叫继续 | `true` \| `false` | `false` |
+
+随附的示例（`conf/vanilla/autoload_configs/redis.conf.xml`）：
+
+```xml
+<configuration name="redis.conf" description="mod_redis Configuration">
+  <settings>
+    <param name="host" value="localhost"/>
+    <param name="port" value="6379"/>
+    <param name="timeout" value="10000"/>
+  </settings>
+</configuration>
+```
+
+注意，随附配置文件中没有 `ignore_connect_fail`，其默认值为 `false`。
+
+## 拨号计划应用 {#dialplan-applications}
+
+`mod_redis` 本身不注册拨号计划应用，而是通过将 `redis` 注册为命名后端，供 `mod_dptools` 提供的标准 `limit` 应用调用。使用 `limit` 时，将 `redis` 作为第一个参数：
+
+```xml
+<action application="limit" data="redis realm resource 5"/>
+```
+
+`data` 属性中的字段如下：
+
+| 字段 | 用途 |
+|---|---|
+| `redis` | 选择本模块提供的后端 |
+| `realm` | 计数器的逻辑分组名（例如 `outbound`） |
+| `resource` | Realm 内的具体资源标识（例如 `NANPA`） |
+| `5` | 允许的最大并发呼叫数；`0` 表示不限制 |
+
+呼叫开始时，模块会增加名为 `realm_resource` 的 Redis 键值计数；挂断时会将其减少。还会使用名为 `switchname_realm_resource` 的键维护每台交换机的 UUID 计数器。
+
+## API 命令 {#api-commands}
+
+`mod_redis` 不注册 API 命令。
+
+## 通道变量 {#channel-variables}
+
+`mod_redis` 不直接读取或设置通道变量。其内部逐通道状态保存在与通道关联的私有哈希中，键为 `limit_redis`。这属于实现细节，拨号计划无法访问。
+
+## 依赖 {#dependencies}
+
+`mod_redis` 随附 `credis` C 客户端库（模块源码目录中的 `credis.c`、`credis.h`），不需要外部 `hiredis` 等 Redis 客户端库。运行时必须有能够通过配置的 `host` 和 `port` 访问的 Redis 服务器。
+
+## 另请参阅 {#see-also}
+
+- [第 23 章：工具类应用](../../applications/utility-applications.mdx)
+
+**源码：** `src/mod/applications/mod_redis`、`conf/vanilla/autoload_configs/redis.conf.xml`

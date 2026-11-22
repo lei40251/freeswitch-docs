@@ -1,0 +1,231 @@
+---
+sidebar_position: 3
+id: esl-inbound
+slug: /programming/esl-inbound
+title: "第 46 章：入站事件套接字"
+description: "从自建程序连接 FreeSWITCH 的 event_socket 监听端口：线路协议、ESL 客户端库以及消费事件的完整示例。"
+sidebar_label: "46. 入站事件套接字"
+---
+
+# 第 46 章：入站事件套接字 {#chapter-46-the-inbound-event-socket}
+
+在 **入站（inbound）** 模式下，你的程序充当客户端：它主动建立到 FreeSWITCH `mod_event_socket` 监听端口的 TCP 连接，完成身份认证后，可以持续发送命令和接收事件。仪表盘、点击呼叫后端、外呼器、计费采集程序，以及任何从通话流程之外控制正在运行的 FreeSWITCH 的程序，都适合采用这种模式。
+
+与此相对，另一章节[出站事件套接字](/programming/esl-outbound)介绍的是 **出站（outbound）** 模式：角色正好相反，拨号计划中的 `socket` 应用使 FreeSWITCH 主动连接到**你的**监听服务，并将某一路通话交给该服务控制。两种模式使用相同的线路协议，但连接方向不同。入站模式面向整个服务器且可以保持长连接；出站模式则面向单次呼叫。
+
+监听器本身、配置参数及 ACL 限制详见集成章节[事件套接字](/integration/event-socket)。可订阅的事件详见[事件模型](./event-model.mdx)和[事件目录](./events-catalog.mdx)。本章面向程序开发人员，重点说明如何编写连接此套接字的客户端代码。
+
+<SignalWireCallout
+  title="托管式入站事件套接字方案"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="esl-inbound"
+  linkText="查看 RELAY 实时 SDK">
+
+SignalWire 的实时 WebSocket API——RELAY——将本章介绍的设计模式作为托管服务提供：通过强类型的 Python 或 TypeScript SDK 订阅事件并发送命令，无需自行保护交换机上的控制套接字。
+
+</SignalWireCallout>
+
+## 连接模型 {#the-connection-model}
+
+`mod_event_socket` 默认监听端口 `8021`，密码为 `ClueCon`。发行版附带的 `event_socket.conf.xml` 将 `listen-ip` 绑定到 `::`（所有接口，IPv6/IPv4），但本机控制程序通常应安全地连接 `127.0.0.1:8021`。
+
+```
+listen-port = 8021
+password    = ClueCon
+```
+
+来源：`conf/vanilla/autoload_configs/event_socket.conf.xml`。`mod_event_socket.c` 中的 `auth` 命令会逐字节比较密码（`parse_command` 中的 `if (!strcmp(prefs.password, pass))`）。**将该端口暴露给本机之外的系统前，务必修改默认密码。**
+
+建立连接后，FreeSWITCH 会首先发送身份认证挑战：
+
+```
+Content-Type: auth/request
+
+```
+
+（对应 `mod_event_socket.c` 中的 `switch_snprintf(buf, ..., "Content-Type: auth/request\n\n")`。）你的程序必须先以 `auth` 响应，服务器才会接受后续命令。
+
+## 线路协议 {#the-wire-protocol}
+
+套接字上的每条消息都由一组 `Name: Value` 形式的头字段构成，以空行结束；之后可以附带消息正文，正文长度由 `Content-Length` 指定。这与 FreeSWITCH 事件使用的消息封装方式相同，因此协议是对称的：你发送的命令与接收的事件具有相似的格式。
+
+### 命令 {#commands}
+
+下表列出 `mod_event_socket.c` 中 `parse_command` 识别的主要命令。每条命令作为单独一行发送，末尾再附加空行。命令拼写与源码中的比较字符串保持一致。
+
+| 命令 | 用途 |
+| --- | --- |
+| `auth <password>` | 完成身份认证，必须首先执行；返回 `+OK accepted` 或 `-ERR invalid`。 |
+| `api <cmd> <args>` | 执行 API 命令并**阻塞**直到完成；结果作为 `Content-Type: api/response` 返回。 |
+| `bgapi <cmd> <args>` | 在**后台**执行 API 命令；立即返回 `Job-UUID`，之后以 `BACKGROUND_JOB` 事件发送结果。 |
+| `event <format> <types>` | 订阅事件。格式可以是 `plain`、`json` 或 `xml`；`event plain ALL` 表示订阅全部事件。 |
+| `nixevent <types>` | 取消订阅指定事件类型，同时保留其他订阅。 |
+| `noevents` | 取消订阅全部事件。 |
+| `filter <header> <value>` | 根据头字段过滤发送给客户端的事件；使用 `filter delete ...` 删除过滤条件。 |
+| `sendevent <event-name>` | 向 FreeSWITCH 事件系统注入事件。 |
+| `sendmsg <uuid>` | 向指定通道发送消息或命令，用于控制通话。 |
+| `exit` | 正常关闭连接，返回 `+OK bye`。 |
+
+这些命令已对照 `mod_event_socket.c` 中的 `strncasecmp(cmd, "...")` 判断：`auth `（约第 1739 行）、`api `（约第 2277 行）、`bgapi `（约第 2322 行）、`event`（约第 2454 行）、`nixevent`（约第 2536 行）、`noevents`（约第 2590 行）、`filter `（约第 1950 行）、`sendevent`（约第 2230 行）、`sendmsg`（约第 2169 行）、`exit`（约第 1732 行）。此外还有用于日志流的 `log`、`nolog`，以及出站模式使用的 `linger`、`divert` 等命令。
+
+### 命令与应答 {#command-and-reply}
+
+大多数命令都会收到同步的 **Command/Reply（命令应答）**。FreeSWITCH 的回复形式如下：
+
+```
+Content-Type: command/reply
+Reply-Text: +OK accepted
+
+```
+
+（对应 `mod_event_socket.c` 中的 `"Content-Type: command/reply\nReply-Text: %s\n\n"`。）以 `+OK` 开头表示成功；以 `-ERR` 开头则表示失败，并带有原因，例如 `-ERR invalid` 或 `-ERR command not found`。
+
+`api` 是例外：其结果不是 `command/reply`，而是单独封装的消息块：
+
+```
+Content-Type: api/response
+Content-Length: 5
+
++OK 1
+```
+
+（对应 `mod_event_socket.c` 中 `api_exec` 的 `"Content-Type: api/response\nContent-Length: %ld\n\n"`。）程序必须按 `Content-Length` 指定的字节数完整读取正文。
+
+### 阻塞执行与后台执行 {#blocking-vs-background}
+
+`api uptime` 会占用该套接字，直到命令执行完毕并直接返回输出。相反，`bgapi originate ...` 会立即返回：
+
+```
+Content-Type: command/reply
+Reply-Text: +OK Job-UUID: 1b9be1e2-...
+Job-UUID: 1b9be1e2-...
+
+```
+
+（对应 `mod_event_socket.c` 的 `bgapi` 分支中的 `"~Reply-Text: +OK Job-UUID: %s\nJob-UUID: %s\n\n"`。）真实执行结果会稍后以 `BACKGROUND_JOB` 事件发送，前提是客户端已订阅事件。该事件带有相同的 `Job-UUID` 头字段，正文包含命令输出。事件在 `api_exec` 中构造：
+
+```c
+switch_event_create(&event, SWITCH_EVENT_BACKGROUND_JOB);
+switch_event_add_header_string(event, ..., "Job-UUID", acs->uuid_str);
+switch_event_add_header_string(event, ..., "Job-Command", acs->api_cmd);
+switch_event_add_body(event, "%s", reply);
+```
+
+耗时操作（尤其是 `originate`）应使用 `bgapi`，避免单个长时间运行的呼叫阻塞整个控制连接。
+
+## ESL 客户端库 {#the-esl-client-library}
+
+一般不需要自行实现上述消息封装。FreeSWITCH 在 `libs/esl/` 中提供 **ESL（Event Socket Library，事件套接字库）**：这是一个小型 C 库，并通过 SWIG 提供 Lua、Python、Perl、PHP、Ruby、Java 和 .NET 绑定。各种语言绑定均提供 `libs/esl/src/include/esl_oop.h` 中定义的两个主要对象：`ESLconnection` 和 `ESLevent`。
+
+### ESLconnection {#eslconnection}
+
+入站模式通过主机名、端口、密码构造 `ESLconnection`。构造函数会连接到服务器并自动完成 `auth` 握手。常用方法如下，均来自 `esl_oop.h`：
+
+| 方法 | 作用 |
+| --- | --- |
+| `ESLconnection(host, port, password)` | 连接并完成认证（入站模式）。 |
+| `connected()` | 当套接字仍处于连接状态时返回非零值。 |
+| `api(cmd, arg)` | 发送 `api` 并阻塞等待，返回正文为执行结果的 `ESLevent`。 |
+| `bgapi(cmd, arg, job_uuid)` | 发送 `bgapi` 后立即返回；执行结果稍后通过 `BACKGROUND_JOB` 事件到达。 |
+| `events(etype, value)` | 订阅事件。`etype` 为 `plain`、`json` 或 `xml`；`value` 为事件列表。 |
+| `filter(header, value)` | 添加服务端事件过滤条件。 |
+| `recvEvent()` | 阻塞直到收到下一条事件，并将其作为 `ESLevent` 返回。 |
+| `recvEventTimed(ms)` | 与 `recvEvent` 类似，但超时为 `ms` 毫秒。 |
+| `sendEvent(event)` | 发送自定义构造的 `ESLevent`，对应 `sendevent` 命令。 |
+| `sendMSG(event, uuid)` | 向指定通道发送消息，对应 `sendmsg` 命令。 |
+| `disconnect()` | 关闭连接。 |
+
+这些方法在底层构造前述线路命令。例如 `api(cmd, arg)` 发送 `api <cmd> <arg>`；`bgapi` 发送 `bgapi <cmd> <arg>` 并携带 `Job-UUID:` 头字段（详见 `esl.c`、`esl_oop.cpp`）。`events` 发送 `event <type> <value>`；`filter` 发送 `filter <header> <value>`。
+
+### ESLevent {#eslevent}
+
+每条事件和每次 API 调用的结果均封装为 `ESLevent`。`esl_oop.h` 中提供的访问方法如下：
+
+| 方法 | 返回值 |
+| --- | --- |
+| `getHeader(name)` | 指定头字段的值；不存在时为 null。 |
+| `getBody()` | 事件正文（API 输出或消息负载）。 |
+| `getType()` | 事件名称，例如 `CHANNEL_ANSWER`。 |
+| `serialize(format)` | 将整个事件序列化为文本（也可以使用 `json` / `xml`）。 |
+| `addHeader(name, value)` | 在构造待发送事件时设置头字段。 |
+| `addBody(value)` | 在构造待发送事件时设置正文。 |
+
+## 完整示例 {#a-worked-example}
+
+下面的示例使用 Lua 绑定（`libs/esl/lua`）。其中构造函数、`con:api(...)` 和 `e:getBody()` 的调用方式，与随 FreeSWITCH 分发的 `libs/esl/lua/single_command.lua` 相同。Python、Perl 等语言绑定的方法一一对应，差异仅在于使用点号还是冒号调用。
+
+```lua
+-- inbound ESL: connect, run an API command, then watch channel events
+require("ESL")
+
+-- ESLconnection(host, port, password) connects AND authenticates
+local con = ESL.ESLconnection("127.0.0.1", "8021", "ClueCon")
+
+if con:connected() == 0 then
+    print("could not connect to FreeSWITCH")
+    return
+end
+
+-- a blocking api call: result is the ESLevent body
+local info = con:api("status")
+print(info:getBody())
+
+-- kick off a call in the background; we get a Job-UUID back immediately
+con:bgapi("originate", "user/1000 &echo")
+
+-- subscribe to all events in plain format so we receive BACKGROUND_JOB
+-- and the CHANNEL_* lifecycle
+con:events("plain", "ALL")
+
+-- consume events forever
+while con:connected() == 1 do
+    -- recvEvent() blocks for the next event; recvEventTimed(ms) is the
+    -- timed variant
+    local e = con:recvEvent()
+    if e then
+        local name = e:getHeader("Event-Name")
+        if name == "CHANNEL_CREATE"
+            or name == "CHANNEL_ANSWER"
+            or name == "CHANNEL_HANGUP" then
+            print(string.format("%s  uuid=%s  number=%s",
+                name,
+                e:getHeader("Unique-ID"),
+                e:getHeader("Caller-Destination-Number")))
+        elseif name == "BACKGROUND_JOB" then
+            -- the deferred result of our bgapi originate
+            print("job " .. tostring(e:getHeader("Job-UUID"))
+                .. " -> " .. tostring(e:getBody()))
+        end
+    end
+end
+```
+
+下面是等价的 Python 版本，与随附的 `libs/esl/python3/events.py` 示例相符：
+
+```python
+from ESL import ESLconnection
+
+con = ESLconnection("127.0.0.1", "8021", "ClueCon")
+if con.connected():
+    print(con.api("status").getBody())
+    con.events("plain", "ALL")
+    while con.connected():
+        e = con.recvEvent()
+        if e:
+            print(e.getType(), e.getHeader("Unique-ID"))
+```
+
+## 常见用途 {#common-uses}
+
+**监控通道生命周期。** 使用 `con:events("plain", "CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP_COMPLETE")` 订阅事件，并循环调用 `recvEvent()`。通过每条事件中的 `Unique-ID`、`Caller-Caller-ID-Number`、`Caller-Destination-Number`、`Hangup-Cause` 等头字段，可以获知通话双方及呼叫状态。为降低无关事件数量，可以仅订阅所需事件类型而非 `ALL`，也可以使用 `filter` 按头字段缩小范围。
+
+**发起和控制呼叫。** 通过 `api` / `bgapi` 可以执行任意 API 命令。最常用的操作包括：
+
+- `con:bgapi("originate", "user/1000 &park")`：非阻塞地发起呼叫。
+- `con:api("uuid_kill", uuid)` 或 `con:api("uuid_transfer", uuid .. " 9999")`：根据通道的 `Unique-ID` 操作正在进行的通话。
+
+由于 `bgapi` 返回的是 `Job-UUID`，而真正的结果稍后通过 `BACKGROUND_JOB` 事件送达，健壮的外呼程序应持续运行事件接收循环，记录返回的 `Job-UUID`，并与每条 `BACKGROUND_JOB` 事件头中的 `Job-UUID` 对应，以获知每次 `originate` 的执行结果。
+
+**注入事件。** 构造 `ESLevent`，通过 `addHeader` 填写字段，再调用 `con:sendEvent(...)`（对应 `sendevent` 命令）发送，以触发自定义事件或其他模块的行为。
+
+有关监听端配置、ACL、`event_socket.conf.xml` 参数以及原始协议示例，请参阅[事件套接字](/integration/event-socket)。有关按呼叫处理、由 FreeSWITCH 主动连接应用程序的模式，请参阅[出站事件套接字](/programming/esl-outbound)。

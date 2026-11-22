@@ -1,0 +1,687 @@
+---
+sidebar_position: 2
+id: conferencing
+slug: /applications/conferencing
+title: "第 20 章：会议"
+description: "配置 mod_conference 的会议室、混音、视频混流布局、成员标志及运行时 API。"
+sidebar_label: "20. 多人音视频会议"
+---
+
+# 第 20 章：会议 {#chapter-20-conferencing}
+
+FreeSWITCH 通过 `mod_conference` 提供多人音视频会议。来电者会被桥接到具名会议室；每间会议室由一个配置实例管理，用于指定编解码器参数、音频行为和视频混流选项。全部配置位于 `autoload_configs/conference.conf.xml` 与 `autoload_configs/conference_layouts.conf.xml`。
+
+<SignalWireCallout
+  title="只需一个方法即可加入会议"
+  href="https://signalwire.com/docs/swml/reference/calling/join-conference"
+  page="conferencing"
+  linkText="查看 SWML 中的 join_conference">
+
+在 SignalWire 的 JSON/YAML 呼叫控制标记语言 SWML 中，[`join_conference`](https://signalwire.com/docs/swml/reference/calling/join-conference?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=conferencing) 可以让来电者进入基于同一引擎的托管会议，无须规划会议配置实例与媒体容量。视频会议室也遵循相同模式，通过 [`join_room`](https://signalwire.com/docs/swml/reference/calling/join-room?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=conferencing) 加入。
+
+</SignalWireCallout>
+
+## 会议模型 {#conference-model}
+
+会议室由名称字符串标识。当 `conference` 拨号计划应用以 `roomname@profilename` 调用时，FreeSWITCH 从 `conference.conf.xml` 中查找 `profilename`，并使用该配置实例的参数创建会议室（如果还不存在）。之后拨入相同会议室名称的来电者加入已有会议实例。
+
+要点如下：
+
+- Profile 是一组具名参数，不代表某间会议室，而是用于创建会议室的配置模板。
+- 会议室名称可以是任意字符串，通常由目的号码和域构成（例如 `3001-example.com`），以避免不同域之间发生名称冲突。
+- 未指定 Profile 时，使用 `default`。
+- 最后一名成员离开时，会议室会自动销毁；若离开的是带 `endconf` 标志的成员，则在宽限计时器到期后销毁。
+
+---
+
+## conference.conf.xml {#conference-conf-xml}
+
+`mod_conference` 在启动时加载此文件。文件包含三个顶层部分：`<advertise>`、`<caller-controls>` 和 `<profiles>`。
+
+### Advertise 块 {#advertise-block}
+
+可选的 `<advertise>` 部分在启动时为所列会议室发布 SIP 呈现状态（Presence）。
+
+```xml
+<advertise>
+  <room name="3001@$${domain}" status="FreeSWITCH"/>
+</advertise>
+```
+
+| 属性 | 用途 |
+|-----------|---------|
+| `name` | 要公布的 SIP AOR，支持变量展开。 |
+| `status` | 发送给订阅者的 Presence 状态字符串。 |
+
+### 来电者控制项 {#caller-controls}
+
+来电者控制项把 DTMF 按键映射为活动会议室成员可以执行的会议内操作。控制项按名称分组；若 Profile 的 `caller-controls` 参数未指定其他组，则使用 `default` 组。
+
+保留名称 `none` 可为某个 Profile 禁用所有 DTMF 控制（例如 `sla` Profile）。
+
+某成员设置 `dist-dtmf` 标志后，该成员的 DTMF 控制被禁用，按键会改为传递给其他成员。
+
+```xml
+<caller-controls>
+  <group name="default">
+    <control action="mute"           digits="0"/>
+    <control action="deaf mute"      digits="*"/>
+    <control action="energy up"      digits="9"/>
+    <control action="energy equ"     digits="8"/>
+    <control action="energy dn"      digits="7"/>
+    <control action="vol talk up"    digits="3"/>
+    <control action="vol talk zero"  digits="2"/>
+    <control action="vol talk dn"    digits="1"/>
+    <control action="vol listen up"  digits="6"/>
+    <control action="vol listen zero" digits="5"/>
+    <control action="vol listen dn"  digits="4"/>
+    <control action="hangup"         digits="#"/>
+  </group>
+</caller-controls>
+```
+
+**可用的控制操作：**
+
+| 操作 | 效果 |
+|--------|--------|
+| `mute` | 切换当前来电者的静音状态。 |
+| `mute on` | 无条件静音当前来电者。 |
+| `mute off` | 无条件取消当前来电者静音。 |
+| `vmute` | 切换当前来电者的视频静音状态。 |
+| `vmute on` | 无条件开启视频静音。 |
+| `vmute off` | 无条件解除视频静音。 |
+| `vmute snap` | 抓取一张静态图片作为视频静音占位画面。 |
+| `vmute snapoff` | 移除抓取的静态占位画面。 |
+| `deaf mute` | 同时切换聋听（deaf）与静音状态。 |
+| `deaf` | 仅切换 deaf 状态（音频接收）。 |
+| `deaf on` | 无条件禁止当前来电者听到会议音频。 |
+| `deaf off` | 无条件恢复会议音频接收。 |
+| `energy up` | 提高能量阈值（讲话检测灵敏度的控制值）。 |
+| `energy equ` | 将能量阈值重置为 Profile 默认值。 |
+| `energy dn` | 降低能量阈值。 |
+| `vol talk up` | 提高当前来电者的发送音量。 |
+| `vol talk zero` | 重置当前来电者的发送音量。 |
+| `vol talk dn` | 降低当前来电者的发送音量。 |
+| `vol listen up` | 提高当前来电者的接收音量。 |
+| `vol listen zero` | 重置当前来电者的接收音量。 |
+| `vol listen dn` | 降低当前来电者的接收音量。 |
+| `hangup` | 将当前来电者从会议中断开。 |
+| `lock` | 切换会议室的锁定状态（主持人操作）。 |
+| `transfer` | 将来电者转移到拨号计划目标（要求 `<control>` 元素设置 `data` 属性）。 |
+| `execute_application` | 为当前来电者执行拨号计划应用（要求 `data` 属性）。 |
+| `floor` | 切换当前来电者的音频发言权保持状态。 |
+| `vid-floor` | 切换当前来电者的视频主画面发言权保持状态。 |
+| `vid-floor-force` | 强制将视频发言权分配给当前来电者，不进行状态切换。 |
+| `moh toggle` | 切换当前来电者的保持音乐。 |
+| `border` | 循环切换当前来电者的视频边框样式（要求 `data` 属性）。 |
+| `event` | 触发自定义事件（要求 `<control>` 元素设置 `data` 属性）。 |
+
+Profile 可通过 `moderator-controls` 为主持人另行指定控制组。
+
+### Profile 参数 {#profile-parameters}
+
+`<profile>` 元素包含若干 `<param name="..." value="..."/>` 子元素。解析时，参数名称中的下划线与连字符可以互换。
+
+**音频参数：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `rate` | 会议混音器的音频采样率。 | `8000`、`12000`、`16000`、`24000`、`32000`、`44100`、`48000`；或 `auto`，继承首个来电者的编解码器。 | `8000` |
+| `channels` | 音频通道数。 | `1`（单声道）、`2`（立体声）或 `auto`。 | `1` |
+| `interval` | 帧时长（毫秒），必须是 10 的倍数且不超过平台限制。 | 整数毫秒，或 `auto`。 | `20` |
+| `energy-level` | 语音活动检测阈值；低于该值的音频被视为静音，不参与混音。 | 整数 `0`–`1800`（任意线性单位）。 | `100` |
+| `comfort-noise` | 启用静音期间的舒适噪声生成。`true` 使用内部级别 `1400`；`2`–`9999` 可显式指定级别；`false` 或 `0` 禁用。 | `true`、`false` 或整数 `2`–`9999`。 | `false` |
+| `auto-gain-level` | 自动增益控制（AGC）的目标级别；非零时，AGC 调整成员发送音量以达到此能量级别。 | 整数；`false`/`0` 表示禁用。 | `0`（禁用） |
+| `auto-gain-low-energy-level` | AGC 能量下限；不会把成员音量降低到该值以下。 | 整数。 | 无 |
+| `auto-gain-margin` | AGC 调整的边界余量（死区）。 | 整数。 | 无 |
+| `auto-gain-change-factor` | 每个调整周期内 AGC 的步长。 | 整数。 | 无 |
+| `auto-gain-period-len` | 每个 AGC 调整周期包含的帧数。 | 整数。 | 无 |
+| `auto-energy-level` | 自动追踪能量阈值的目标级别；设置后阈值动态浮动，以便自适应讲话检测。若未设置 `energy-level`，初始值为该参数的一半。 | 整数，负值限制为 `0`。 | 无（禁用） |
+| `auto-energy-seconds` | 自动能量追踪使用的平均窗口秒数。 | 整数秒，`0` 或未设置时回退到默认值。 | `5` |
+| `max-energy-level` | 能量上限；高于该值的音频可触发成员静音，用于抑制过大音量或噪声。`0` 禁用；若低于 `energy-level` 也会禁用。 | 整数，负值限制为 `0`。 | `0`（禁用） |
+| `max-energy-hit-trigger` | 对超过 `max-energy-level` 的连续帧进行处理前所需的帧数；仅设置 `max-energy-level` 时生效。 | 整数，负值限制为 `0`。 | `5` |
+| `max-energy-level-mute-ms` | 成员超过 `max-energy-level` 后被静音的持续毫秒数；内部根据 `interval` 换算为帧数。 | 整数毫秒。 | 无 |
+| `timer-name` | 混音使用的内部计时器模块。 | 模块名字符串，如 `soft`。 | `soft` |
+
+**声音文件参数：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `sound-prefix` | 其他声音参数中相对声音路径使用的目录前缀。 | 目录路径。 | 首个来电者的 `sound_prefix` 通道变量。 |
+| `tts-engine` | TTS 引擎模块名称；设置后，以 `say:` 开头的声音参数会合成语音，而不是播放文件。 | 引擎名字符串，如 `flite`、`cepstral`。 | 无 |
+| `tts-voice` | 与指定 TTS 引擎配套的语音名称。 | 语音名字符串，如 `kal16`、`david`。 | 无 |
+| `moh-sound` | 成员独自在会议室中时播放的保持音乐文件或流。 | 文件路径或流 URI。 | 无 |
+| `perpetual-sound` | 不论成员数多少都持续循环播放的文件或流；播放期间没有成员可以讲话。 | 文件路径或流 URI。 | 无 |
+| `alone-sound` | 成员为唯一参与者时向其播放的文件。 | 文件路径或流 URI。 | 无 |
+| `member-enter-sound` | 新成员加入后立即仅向其播放的音频。 | 文件路径或流 URI。 | 无 |
+| `enter-sound` | 有人加入时向全部成员播放的文件或音调。 | 文件路径或流 URI。 | 无 |
+| `exit-sound` | 有人离开时向全部成员播放的文件或音调。 | 文件路径或流 URI。 | 无 |
+| `muted-sound` | 通知成员已被静音的音频。 | 文件路径。 | 无 |
+| `unmuted-sound` | 通知成员已解除静音的音频。 | 文件路径。 | 无 |
+| `mute-detect-sound` | 已静音成员讲话时向其播放的音频（要求 `mute-detect` 标志）。 | 文件路径。 | 无 |
+| `deaf-sound` | 通知成员已进入 deaf 状态的音频。 | 文件路径。 | 无 |
+| `undeaf-sound` | 通知成员 deaf 状态已取消的音频。 | 文件路径。 | 无 |
+| `blind-sound` | 通知成员已进入视频 blind 状态的音频。 | 文件路径。 | 无 |
+| `unblind-sound` | 通知成员视频 blind 状态已取消的音频。 | 文件路径。 | 无 |
+| `kicked-sound` | 向被踢出会议的成员播放的音频。 | 文件路径。 | 无 |
+| `locked-sound` | 来电者尝试加入已锁定会议时播放的音频。 | 文件路径。 | 无 |
+| `is-locked-sound` | 通话期间会议锁定时向全部成员播放的音频。 | 文件路径。 | 无 |
+| `is-unlocked-sound` | 通话期间会议解除锁定时向全部成员播放的音频。 | 文件路径。 | 无 |
+| `pin-sound` | 提示输入会议 PIN 的音频。 | 文件路径。 | 无 |
+| `bad-pin-sound` | 输入的 PIN 不正确时播放的音频。 | 文件路径。 | 无 |
+
+**访问控制参数：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `pin` | 加入会议所需的 PIN；成员必须匹配才能进入。 | 数字字符串。 | 无 |
+| `moderator-pin` | 加入会议时授予主持人身份的 PIN。 | 数字字符串。 | 无 |
+| `pin-retries` | 拒绝来电者前允许的 PIN 尝试次数。 | 大于等于 0 的整数。 | `3` |
+| `max-members` | 最大并发成员数；`0` 关闭限制；`1` 无效并按 `0` 处理。 | 整数。 | `0` |
+| `max-members-sound` | 会议已满导致来电者被拒绝时播放的文件。 | 文件路径。 | 无 |
+
+**行为参数：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `domain` | Presence 使用的 SIP 域。 | 域名字符串，支持变量展开。 | 无 |
+| `caller-controls` | 应用于普通成员的 `<caller-controls>` 组名称。 | 组名称字符串；`none` 表示禁用。 | `default` |
+| `moderator-controls` | 应用于主持人的 `<caller-controls>` 组名称。 | 组名称字符串。 | 无（使用 `caller-controls`） |
+| `member-flags` | 通过该 Profile 加入的每名成员都会获得的标志，以管道符分隔。 | 见[成员标志](#member-flags-profile)。 | 无 |
+| `conference-flags` | 控制整间会议室行为的标志，以管道符分隔。 | 见[会议标志](#conference-flags)。 | 无 |
+| `caller-id-name` | 会议发起出站呼叫时使用的主叫标识姓名。 | 字符串。 | `conference`（模块应用名称） |
+| `caller-id-number` | 会议发起出站呼叫时使用的主叫标识号码。 | 字符串。 | `0000000000` |
+| `announce-count` | 成员人数达到此阈值时播报人数；`0` 禁用。 | 整数。 | `0` |
+| `suppress-events` | 不再触发的事件子类型列表，以逗号分隔。有效值：`del-member`、`energy-level`、`volume-level`、`gain-level`、`dtmf`、`stop-talking`、`start-talking`、`mute-detect`、`mute-member`、`hold-member`、`kick-member`、`dtmf-member`、`energy-level-member`、`volume-in-member`、`volume-out-member`、`play-file`、`play-file-done`、`play-file-member`、`speak-text`、`speak-text-member`、`lock`、`unlock`、`transfer`、`bgdial-result`、`floor-change`、`record`。 | 逗号分隔的字符串。 | 无 |
+| `verbose-events` | 设为 `true` 时，在会议事件中生成额外详细信息。 | `true`、`false`。 | 无 |
+| `ivr-dtmf-timeout` | 匹配来电者控制序列时，相邻 DTMF 按键间的超时毫秒数；低于 `500` 时上调为 `500`。 | 整数毫秒。 | `500` |
+| `ivr-input-timeout` | 等待首个 DTMF 按键的毫秒数；`0` 表示无限等待；非零且小于 `500` 时上调至 `5000`。 | 整数毫秒。 | `0` |
+| `endconf-grace-time` | 最后一名带 `endconf` 标志的成员离开后，延迟结束会议的秒数。 | 整数秒。 | 无 |
+| `terminate-on-silence` | 整个会议持续静音多少秒后自动终止；`0` 或未设置表示禁用。 | 整数秒。 | 无 |
+| `min-required-recording-participants` | 自动录音开始所需的最少成员数。 | `1` 或 `2`。 | `1` |
+| `broadcast-chat-messages` | 将成员发出的 SIP MESSAGE 聊天消息转发给所有其他成员。 | `true`、`false`。 | `true` |
+| `heartbeat-period-sec` | 触发一次 `conference-heartbeat` 事件的间隔秒数；`0` 禁用。 | 整数秒。 | `0` |
+| `description` | 会议的可读描述字符串（纳入 CDR 和事件）。 | 字符串。 | 无 |
+| `outcall-templ` | 会议发起出站呼叫（如 `dial`/`bgdial` API 或呼叫列表功能）时使用的拨号字符串模板；每次呼叫都会展开模板中的通道变量。 | 支持变量展开的拨号字符串模板。 | 无 |
+
+**录音参数：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `auto-record` | 每次会议自动录音的路径模板，支持通道变量和 `strftime` 格式符；特殊值 `shout://...` 会把录音推送到 Icecast/Shoutcast 流。 | 路径字符串。 | 无 |
+| `recording-metadata` | 附加在自动录音事件上的任意元数据字符串。 | 字符串。 | 无 |
+| `cdr-log-dir` | CDR XML 文件目录；`auto` 写入 `$PREFIX/logs/conference_cdr/`，相对路径以 `$PREFIX/logs/` 为根。 | 路径字符串或 `auto`。 | 无 |
+| `cdr-event-mode` | 控制 CDR 写入文件、作为事件发送或两者同时进行。 | `content`、`file`、`both`。 | 无 |
+
+**视频参数：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `video-mode` | 视频混流策略。 | `passthrough`、`transcode`、`mux`。 | `passthrough` |
+| `video-layout-name` | MCU 视频混流的布局名称或 `group:groupname`。同一 Profile 中可重复出现；第一个作为初始布局，后续值扩展自动选择列表。 | 布局名称或 `group:name`。 | 无 |
+| `video-canvas-size` | MCU 混流画布分辨率。 | `WIDTHxHEIGHT` 字符串，如 `1920x1080`。 | 无 |
+| `video-canvas-bgcolor` | MCU 画布背景颜色，十六进制 RGB。 | `#RRGGBB` 字符串。 | 无 |
+| `video-border-color` | 画布中每个成员槽位周围的边框颜色。 | `#RRGGBB` 字符串。 | 无 |
+| `video-border-size` | 成员槽位边框的像素宽度，`0` 禁用。 | 整数。 | `0` |
+| `video-letterbox-bgcolor` | 源视频宽高比与槽位不同时，留黑边区域的填充颜色。 | `#RRGGBB` 字符串。 | 无 |
+| `video-fps` | MCU 输出帧率（帧/秒）。 | 数值。 | `30` |
+| `video-codec-bandwidth` | MCU 视频编码器的目标输出带宽。 | 带单位后缀的值，如 `3mb`。 | 无 |
+| `video-auto-floor-msec` | 成员持续获得音频发言权多少毫秒后，自动获得视频发言权；`0` 关闭自动提升。 | 整数毫秒。 | `0` |
+| `video-canvas-count` | 同时存在的 MCU 画布数量（用于超级画布/多画布部署）。 | 整数。 | `1` |
+| `video-layout-conf` | 本会议用于加载视频布局的布局配置文件名称。 | 配置文件名字符串。 | `conference_layouts.conf` |
+| `video-super-canvas-label-layers` | 非零时，在超级画布（所有画布的合成视图）的每一层绘制画布/层标签文字。 | 整数（`0` 关闭，非零开启）。 | `0` |
+| `video-super-canvas-show-all-layers` | 非零时，超级画布展示所有画布的全部图层，而非仅活动图层。 | 整数（`0` 关闭，非零开启）。 | `0` |
+| `video-super-canvas-bgcolor` | 超级画布背景颜色，十六进制 RGB。 | `#RRGGBB` 字符串。 | `#068df3` |
+| `video-quality` | MCU 输出编码器的画质预设。 | 整数 `0`–`4`。 | `1` |
+| `video-kps-debounce` | 带宽变化后，调整 MCU 编码器码率之前等待的毫秒数。 | 整数毫秒。 | `5000` |
+| `video-no-video-avatar` | 没有摄像头的成员所使用的占位图片。 | 文件路径。 | 无 |
+| `video-mute-banner` | 视频静音成员槽位上显示的文字或图片覆盖层。 | 字符串或文件路径。 | 无 |
+| `scale-h264-canvas-size` | 主画布较大时，供 H.264 编码使用的缩小后画布分辨率。 | `WIDTHxHEIGHT` 字符串。 | 无 |
+| `scale-h264-canvas-fps-divisor` | 缩放 H.264 输出时，用该值除以画布帧率；`0` 使用完整帧率。 | 整数。 | `0` |
+| `scale-h264-canvas-bandwidth` | 缩放 H.264 输出的带宽目标。 | 带单位后缀的值。 | 无 |
+| `video-codec-config-profile-name` | 用于 MCU 视频编码的具名编解码器配置实例。 | 字符串。 | 无 |
+
+### 会议标志 {#conference-flags}
+
+会议级标志通过 Profile 的 `conference-flags`（管道符分隔）或通道变量 `conference_flags` 设置，用于控制整个会议室的行为。
+
+| 标志 | 效果 |
+|------|--------|
+| `wait-mod` | 在主持人加入前让所有成员保持等待状态。 |
+| `audio-always` | 无论语音活动检测结果如何，始终混合所有成员音频。 |
+| `video-floor-only` | 仅在显式指定时分配视频发言权，不随音频发言权自动分配。 |
+| `rfc-4579` | 启用 RFC 4579 会议事件包信令。 |
+| `livearray-sync` | 将成员状态同步到 Verto live array。 |
+| `livearray-json-status` | 在 live array 事件中包含 JSON 状态。 |
+| `json-events` | 以 JSON 形式触发会议成员事件。 |
+| `minimize-video-encoding` | 尽可能只编码一次出站视频并共享视频流。 |
+| `manage-inbound-video-bitrate` | 主动管理向视频发送方请求的码率。 |
+| `video-required-for-canvas` | 没有视频的成员不显示在 MCU 画布上。 |
+| `video-mute-exit-canvas` | 视频静音成员从画布中移除。 |
+| `video-bridge-first-two` | 恰有两个视频成员时直接桥接视频。 |
+| `video-muxing-personal-canvas` | 每个成员分别接收个人画布（点对点视图）。 |
+| `restart-auto-record` | 会议重新启动时重新开始自动录音。 |
+| `auto-3d-position` | 根据画布中的布局位置自动分配三维空间音频位置。 |
+| `ded-vid-layer-audio-floor` | 专门为当前占据音频发言权的成员保留一个视频画布层。 |
+| `breakable` | 允许转移或其他通道应用中断会议。 |
+
+### 成员标志（Profile）{#member-flags-profile}
+
+Profile 参数 `member-flags` 设置通过该 Profile 入会的每名成员的默认标志。同样的标志也可以按单次呼叫在入会时设置（见[入会时的成员标志](#member-flags-at-join-time)）。
+
+| 标志 | 效果 |
+|------|--------|
+| `mute` | 成员以静音状态加入（无法讲话）。 |
+| `vmute` | 成员以视频静音状态加入（不发送摄像头视频）。 |
+| `deaf` | 成员以 deaf 状态加入（听不到会议音频）。 |
+| `blind` | 成员以视频 blind 状态加入（不接收任何视频）。 |
+| `mute-detect` | 已静音成员讲话时触发事件。 |
+| `dist-dtmf` | 将 DTMF 数字传递给其他成员，而非作为控制指令处理。 |
+| `skip-dtmf` | 完全忽略该成员的所有 DTMF 输入（既不控制也不透传）。 |
+| `moderator` | 授予主持人身份，使用 `moderator-controls` 按键映射。 |
+| `nomoh` | 该成员独自在会议中时不播放保持音乐。 |
+| `endconf` | 该成员离开时终止会议。 |
+| `mandatory_member_endconf` | 类似 `endconf`，但仅在该成员自行离开时终止会议，被踢出则不会终止。 |
+| `mintwo` | 至少有两名成员加入后才允许会议结束（避免立即销毁）。 |
+| `ghost` | 在会议参与人数及其他成员视角中隐藏该成员。 |
+| `join-only` | 如果会议尚不存在则拒绝加入，不创建新会议室。 |
+| `positional` | 为成员启用三维空间音频（要求布局支持 `auto-3d-position`）。 |
+| `no-positional` | 即使会议启用了三维空间音频，也明确禁用该成员的该功能。 |
+| `join-vid-floor` | 成员加入时立即获得视频发言权。 |
+| `no-video-blanks` | 没有人拥有视频发言权时，不向该成员发送空白视频帧。 |
+| `no-minimize-encoding` | 即使会议设置了 `minimize-video-encoding`，也为该成员单独编码。 |
+| `second-screen` | 成员接收视频，但不贡献音频，也不显示在画布中；同时隐式设置 deaf 和 mute。 |
+| `flip-video` | 混流前垂直翻转成员入站视频。 |
+| `talk-data-events` | 为该成员触发详细讲话数据事件。 |
+| `video-bridge` | 仅有两名视频参与者时，将视频直接桥接到该成员。 |
+
+---
+
+## 自带的配置实例 {#bundled-profiles}
+
+标准配置在 `conference.conf.xml` 中提供以下 Profile：
+
+| Profile | `rate` | `channels` | 说明 |
+|---------|--------|------------|-------|
+| `default` | `8000` | `1` | 窄带音频，用于 `nb_conferences` 拨号计划号段（`30xx`）。 |
+| `wideband` | `16000` | `1` | 宽带音频，用于 `wb_conferences` 号段（`31xx`）。 |
+| `ultrawideband` | `32000` | `1` | 超宽带音频，用于 `uwb_conferences` 号段（`32xx`）；包含注释掉的视频 MCU 参数供参考。 |
+| `cdquality` | `48000` | `1` | CD 品质单声道音频，用于 `cdquality_conferences` 号段（`33xx`）；包含注释掉的视频 MCU 参数供参考。 |
+| `video-mcu-stereo` | `48000` | `2` | CD 品质立体声，MCU 完整视频混流采用 `1920x1080`、30 fps、3 Mbps。默认布局 `3x3`，由 `grid` 组自动选择；`energy-level` 为 `200`。 |
+| `video-mcu-stereo-720` | `48000` | `2` | 与 `video-mcu-stereo` 相同，但画布为 `1280x720`。 |
+| `video-mcu-stereo-480` | `48000` | `2` | 与 `video-mcu-stereo` 相同，但画布为 `640x480`。 |
+| `video-mcu-stereo-320` | `48000` | `2` | 与 `video-mcu-stereo` 相同，但画布为 `480x320`。 |
+| `sla` | `16000` | `1` | 共享线路呈现（SLA）辅助 Profile；来电者控制被禁用（`none`），保持音乐为静音，`energy-level` 为 `200`。 |
+
+除了设置为 `false` 的 `video-mcu-*` Profile，其他自带 Profile 均将 `comfort-noise` 设置为 `true`。
+
+四个 `video-mcu-stereo*` Profile 共用相同的 `conference-flags` 值：
+
+```
+livearray-json-status|json-events|video-floor-only|rfc-4579|livearray-sync|
+minimize-video-encoding|manage-inbound-video-bitrate|video-required-for-canvas|
+video-mute-exit-canvas|mute-detect
+```
+
+它们还将 `video-auto-floor-msec` 设置为 `1000`。
+
+**最小 Profile 示例**（窄带，无视频）：
+
+```xml
+<profile name="default">
+  <param name="domain"        value="$${domain}"/>
+  <param name="rate"          value="8000"/>
+  <param name="interval"      value="20"/>
+  <param name="energy-level"  value="100"/>
+  <param name="muted-sound"   value="conference/conf-muted.wav"/>
+  <param name="unmuted-sound" value="conference/conf-unmuted.wav"/>
+  <param name="alone-sound"   value="conference/conf-alone.wav"/>
+  <param name="moh-sound"     value="$${hold_music}"/>
+  <param name="enter-sound"   value="tone_stream://%(200,0,500,600,700)"/>
+  <param name="exit-sound"    value="tone_stream://%(500,0,300,200,100,50,25)"/>
+  <param name="kicked-sound"  value="conference/conf-kicked.wav"/>
+  <param name="comfort-noise" value="true"/>
+</profile>
+```
+
+---
+
+## 视频布局 {#video-layouts}
+
+视频布局配置位于 `autoload_configs/conference_layouts.conf.xml`。布局定义成员的视频流如何放置在 MCU 画布上。MCU 使用标准化的 360×360 单位网格坐标系，在渲染时缩放到实际画布分辨率。
+
+### 布局定义 {#layout-definitions}
+
+每个 `<layout>` 元素包含一个或多个 `<image>` 子元素。图像位置相关属性如下：
+
+| 属性 | 用途 |
+|-----------|---------|
+| `x` | 槽位左上角在画布坐标系中的水平偏移。 |
+| `y` | 槽位左上角在画布坐标系中的垂直偏移。 |
+| `scale` | 槽位宽度（画布单位），高度根据宽高比计算。 |
+| `hscale` | 显式指定槽位高度（画布单位，用于非正方形槽位）。 |
+| `floor` | 为 `true` 时，此槽位保留给音频发言权持有者。 |
+| `floor-only` | 仅在存在发言权持有者时填充该槽位。 |
+| `overlap` | 为 `true` 时，将此槽位叠加在主图层上（画中画）。 |
+| `zoom` | 为 `true` 时，对源视频进行裁剪与缩放，填满槽位且不产生黑边。 |
+| `reservation_id` | 用于指定成员位置的具名保留槽位，如 `presenter`、`secondary`、`third`。 |
+| `auto-3d-position` | 布局属性（设置在 `<layout>` 而不是 `<image>` 上），为带 `positional` 标志的成员启用三维位置自动分配。 |
+
+**自带的布局名称：**
+
+`1x1`、`2x1`、`1x2`、`2x1-zoom`、`3x1-zoom`、`2x2`、`3x3`、`4x4`、`5x5`、`6x6`、`8x8`、`5-grid-zoom`、`3x2-zoom`、`7-grid-zoom`、`4x2-zoom`、`1x1+2x1`、`1up_top_left+5`、`1up_top_left+7`、`1up_top_left+9`、`2up_top+8`、`2up_middle+8`、`2up_bottom+8`、`3up+4`、`3up+9`、`2x1-presenter-zoom`、`presenter-dual-vertical`、`presenter-dual-horizontal`、`presenter-overlap-small-top-right`、`presenter-overlap-small-bot-right`、`presenter-overlap-large-top-right`、`presenter-overlap-large-bot-right`、`overlaps`。
+
+**示例：`3x3` 布局定义：**
+
+```xml
+<layout name="3x3" auto-3d-position="true">
+  <image x="0"   y="0"   scale="120"/>
+  <image x="120" y="0"   scale="120"/>
+  <image x="240" y="0"   scale="120"/>
+  <image x="0"   y="120" scale="120"/>
+  <image x="120" y="120" scale="120"/>
+  <image x="240" y="120" scale="120"/>
+  <image x="0"   y="240" scale="120"/>
+  <image x="120" y="240" scale="120"/>
+  <image x="240" y="240" scale="120"/>
+</layout>
+```
+
+### 布局组 {#layout-groups}
+
+布局组允许 MCU 随着会议成员增加，自动升级到更大的布局。Profile 的 `video-layout-name` 设置为 `group:groupname` 时，MCU 会选择组内能容纳当前成员数的最小布局。
+
+```xml
+<groups>
+  <group name="grid">
+    <layout>1x1</layout>
+    <layout>2x1</layout>
+    <layout>1x1+2x1</layout>
+    <layout>2x2</layout>
+    <layout>3x3</layout>
+    <layout>4x4</layout>
+    <layout>5x5</layout>
+    <layout>6x6</layout>
+    <layout>8x8</layout>
+  </group>
+</groups>
+```
+
+**自带布局组：**
+
+| 组 | 包含的布局 |
+|-------|-----------------|
+| `grid` | `1x1`、`2x1`、`1x1+2x1`、`2x2`、`3x3`、`4x4`、`5x5`、`6x6`、`8x8` |
+| `grid-zoom` | `1x1`、`2x1-zoom`、`3x1-zoom`、`2x2`、`5-grid-zoom`、`3x2-zoom`、`7-grid-zoom`、`4x2-zoom`、`3x3` |
+| `1up_top_left_plus` | `1up_top_left+5`、`1up_top_left+7`、`1up_top_left+9` |
+| `3up_plus` | `3up+4`、`3up+9` |
+
+在 Profile 中引用布局组：
+
+```xml
+<param name="video-layout-name" value="group:grid"/>
+```
+
+---
+
+## conference 拨号计划应用 {#the-conference-dialplan-application}
+
+`conference` 应用将通道放入会议室；[拨号计划工具参考](../dialplan/dptools-reference.mdx)中也有概述。
+
+### 参数语法 {#argument-syntax}
+
+```
+conference <roomname>[@<profile>][+<pin>][+flags{<flag>|<flag>...}]
+```
+
+| 组成部分 | 是否必需 | 说明 |
+|-----------|----------|-------------|
+| `roomname` | 是 | 用于标识会议室的任意字符串。名称相同的会议室共享同一会议实例。 |
+| `@profile` | 否 | `conference.conf.xml` 中的 Profile 名称，省略时默认为 `default`。 |
+| `+pin` | 否 | 当前来电者提交用于入会验证的 PIN。 |
+| `+flags{...}` | 否 | 按呼叫设置的成员标志（管道符分隔），会与 `conference_member_flags` 通道变量和 Profile 的 `member-flags` 合并。 |
+
+**拨号计划示例：**
+
+```xml
+<action application="conference" data="3001-${domain_name}@default"/>
+```
+
+使用 PIN 和主持人标志入会：
+
+```xml
+<action application="conference" data="3001-${domain_name}@default+54321+flags{moderator}"/>
+```
+
+### 入会时的成员标志 {#member-flags-at-join-time}
+
+成员标志可以通过三种途径设置，并在入会时合并：
+
+1. Profile 参数 `member-flags`（应用于使用该 Profile 的全部成员）。
+2. 通道变量 `conference_member_flags`（在调用 `conference` 前通过拨号计划设置）。
+3. `conference` 应用参数中的 `+flags{...}` 后缀。
+
+通过通道变量设置标志：
+
+```xml
+<action application="set"        data="conference_member_flags=moderator|mute"/>
+<action application="conference" data="3001-${domain_name}@default"/>
+```
+
+### 桥接模式 {#bridge-mode}
+
+`bridge:` 前缀会创建双人会议，并立即桥接到远端端点：
+
+```
+conference bridge:<roomname>:<dial-string>
+```
+
+除非桥接变体另有指定，否则使用 `default` Profile 创建会议室。被桥接方应答后，两条呼叫腿都会进入指定会议室。
+
+**默认拨号计划中的示例：**
+
+```xml
+<action application="conference"
+        data="bridge:mydynaconf:sofia/${use_profile}/1234@conference.freeswitch.org"/>
+```
+
+---
+
+## 默认拨号计划中的会议分机 {#default-dialplan-conference-extensions}
+
+标准配置的 `default` 拨号计划上下文（`dialplan/default.xml`）提供可直接使用的会议分机。所有纯音频会议分机都会在进入会议前应答呼叫。
+
+| 分机名称 | 目标号码模式 | Profile | 说明 |
+|---------------|---------------------|---------|-------------|
+| `nb_conferences` | `30xx` (3000-3099) | `default` | 窄带 8 kHz 会议；会议室名为 `DDDD-${domain_name}`。 |
+| `wb_conferences` | `31xx` (3100-3199) | `wideband` | 宽带 16 kHz 会议；会议室名为 `DDDD-${domain_name}`。 |
+| `uwb_conferences` | `32xx` (3200-3299) | `ultrawideband` | 超宽带 32 kHz 会议；会议室名为 `DDDD-${domain_name}`。 |
+| `cdquality_conferences` | `33xx` (3300-3399) | `cdquality` | CD 品质单声道 48 kHz 会议；会议室名为 `DDDD-${domain_name}`。 |
+| `cdquality_stereo_conferences` | 带 `-screen` 后缀的 `35xx` | `video-mcu-stereo` | 1080p 视频 MCU；设置 `join-vid-floor` 成员标志；会议室名为不带域名的分机号码。 |
+| `conference-canvases` | `35xx-canvas-N` | `video-mcu-stereo` | 设置 `second-screen` 标志及 `video_initial_watching_canvas`，然后转移到 `35xx`。 |
+| `cdquality_conferences` | `35xx` (3500-3599) | `video-mcu-stereo` | 1080p 立体声视频 MCU；会议室名为不带域名的分机号码。 |
+| `cdquality_conferences_720` | `36xx` (3600-3699) | `video-mcu-stereo-720` | 720p 立体声视频 MCU；会议室名为不带域名的分机号码。 |
+| `cdquality_conferences_480` | `37xx` (3700-3799) | `video-mcu-stereo-480` | 480p 立体声视频 MCU；会议室名为不带域名的分机号码。 |
+| `cdquality_conferences_320` | `38xx` (3800-3899) | `video-mcu-stereo-320` | 320p 立体声视频 MCU；会议室名为不带域名的分机号码。 |
+| `dynamic_conference` | `5001` | 不适用 | 桥接模式：创建 `mydynaconf`，立即桥接到 `1234@conference.freeswitch.org`。 |
+
+**窄带会议拨号计划分机（已核对）：**
+
+```xml
+<extension name="nb_conferences">
+  <condition field="destination_number" expression="^(30\d{2})$">
+    <action application="answer"/>
+    <action application="conference" data="$1-${domain_name}@default"/>
+  </condition>
+</extension>
+```
+
+**1080p 立体声视频 MCU 分机（已核对）：**
+
+```xml
+<extension name="cdquality_conferences">
+  <condition field="destination_number" expression="^(35\d{2})$">
+    <action application="answer"/>
+    <action application="conference" data="$1@video-mcu-stereo"/>
+  </condition>
+</extension>
+```
+
+注意：视频 MCU 分机（`35xx`–`38xx`）不会在会议室名后追加 `${domain_name}`，因此名称就是分机号码。纯音频会议分机（`30xx`–`33xx`）则追加 `-${domain_name}`，以便按域隔离会议室。
+
+---
+
+## conference API {#the-conference-api}
+
+`mod_conference` 注册一个 `conference` API 命令。可以从 FreeSWITCH CLI（`fs_cli`）、`mod_event_socket`，或通过拨号计划的 `api`/`bgapi` 调用，用于检查和控制运行中的会议。所有控制操作采用以下格式：
+
+```
+conference <conf_name> <subcommand> [args]
+```
+
+其中 `<conf_name>` 是会议室名称。少数全局子命令（`list`、`xml_list`、`json_list`）可不指定会议名称，对所有会议室生效。下表列出 `conference_api_sub_commands[]` 中注册的完整子命令集合。
+
+很多针对成员的子命令可以用成员选择器代替数字成员 ID：
+
+| 选择器 | 含义 |
+|----------|---------|
+| `<member_id>` | 按数字 ID 指定某位成员。 |
+| `all` | 会议中全部成员。 |
+| `last` | 最近加入的成员。 |
+| `non_moderator` | 全部非主持人成员。 |
+
+下列表格的参数列中，`\|` 表示可选项之间的分隔符，`[ ]` 表示可选参数，`< >` 表示占位符。
+
+### 成员管理、静音和状态 {#api-membership-mute}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `mute` | 将成员静音（停止混合其音频）。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `unmute` | 解除成员静音。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `tmute` | 切换成员的静音状态。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `vmute` | 将成员视频静音（停止将摄像头画面混入画布）。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `unvmute` | 解除成员视频静音。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `tvmute` | 切换成员的视频静音状态。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `vmute-snap` | 截取成员视频的静态图片，作为其视频静音占位画面。 | `<member_id\|all\|last\|non_moderator>` |
+| `vblind` | 禁止成员接收视频（视频 blind 状态）。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `unvblind` | 解除成员视频 blind 状态。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `tvblind` | 切换成员视频 blind 状态。 | `<member_id\|all\|last\|non_moderator> [quiet]` |
+| `deaf` | 禁止成员听到会议音频。 | `<member_id\|all\|last\|non_moderator>` |
+| `undeaf` | 恢复成员的会议音频接收。 | `<member_id\|all\|last\|non_moderator>` |
+| `hold` | 将成员置于保持状态，可选向其播放文件。 | `<member_id\|all\|last\|non_moderator> [file]` |
+| `unhold` | 解除成员保持状态。 | `<member_id\|all\|last\|non_moderator>` |
+| `kick` | 将成员踢出会议，可选播放告别音频。 | `<member_id\|all\|last\|non_moderator> [sound_file]` |
+| `hup` | 挂断成员通道（彻底断开呼叫）。 | `<member_id\|all\|last\|non_moderator>` |
+| `dtmf` | 向成员通道发送 DTMF 数字。 | `<member_id\|all\|last\|non_moderator> <digits>` |
+| `relate` | 设置成员之间的关系（单向静音/deaf 或清除关系）。 | `<member_id[,...]> <other_member_id[,...]> [nospeak\|nohear\|clear]` |
+| `transfer` | 将一名或多名成员移至其他会议室。 | `<conference_name> <member_id> [<member_id> ...]` |
+| `floor` | 将音频发言权授予指定成员。 | `<member_id\|last>` |
+
+### 音频：能量、AGC 和音量 {#api-audio-energy}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `energy` | 获取或设置成员的能量（讲话检测）阈值。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `auto-energy` | 获取或设置成员的自动能量追踪级别。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `max-energy` | 获取或设置成员的最大能量级别（抑制音量过高的成员）。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `agc` | 获取或设置成员的自动增益控制。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `volume_in` | 获取或设置成员的输入（发送）音量。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `volume_out` | 获取或设置成员的输出（接收）音量。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `position` | 设置成员的三维空间音频位置（要求支持空间音频）。 | `<member_id> <x>:<y>:<z>` |
+| `auto-3d-position` | 切换或设置会议的自动三维位置分配。 | `[on\|off]` |
+| `file-vol` | 设置当前正在播放文件的播放音量。 | `<vol#>` |
+
+### 声音与播放 {#api-sounds-playback}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `play` | 在会议中播放文件（全体成员、异步播放或指定某个成员）。 | `<file_path> [async\|<member_id> [nomux]]` |
+| `pause_play` | 暂停或继续当前播放的文件；实际注册名称为 `pause`。 | `[<member_id>]` |
+| `play_status` | 报告当前文件的播放状态。 | `[<member_id>]` |
+| `file_seek` | 在当前播放文件中定位。 | `[+-]<val> [<member_id>]` |
+| `stop` | 停止文件播放。 | `<current\|all\|async\|last> [<member_id>]` |
+| `moh` | 控制保持音乐播放。 | `<file_path>\|toggle\|[on\|off]` |
+| `say` | 在会议中播放 TTS 合成文字。 | `<text>` |
+| `saymember` | 仅向指定成员播放 TTS 合成文字。 | `<member_id> <text>` |
+| `enter_sound` | 控制每名成员的入会提示音。 | `on\|off\|none\|file <filename>` |
+| `exit_sound` | 控制每名成员的离会提示音。 | `on\|off\|none\|file <filename>` |
+
+### 视频 {#api-video}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `vid-floor` | 将视频发言权授予成员，可选择强制分配。 | `<member_id\|last> [force]` |
+| `clear-vid-floor` | 清除当前视频发言权持有者。 | 无 |
+| `vid-layout` | 为画布设置视频布局或布局组。 | `<layout_name>\|group <group_name> [<canvas_id>]` |
+| `vid-canvas` | 获取或设置成员被渲染到哪块画布上。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `vid-watching-canvas` | 获取或设置成员观看哪块画布。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `vid-layer` | 获取或设置成员所在的画布图层。 | `<member_id\|all\|last\|non_moderator> [<newval>]` |
+| `vid-res-id` | 将成员分配到指定保留槽位 ID（具名布局位置）。 | `<member_id>\|all <val>\|clear [force]` |
+| `vid-role-id` | 为成员分配视频角色 ID。 | `<member_id\|last> <val>\|clear` |
+| `vid-flip` | 垂直翻转成员的入站视频。 | `<member_id\|all\|last\|non_moderator>` |
+| `vid-filter` | 对成员应用视频滤镜字符串。 | `<member_id\|all\|last\|non_moderator> <string>` |
+| `vid-border` | 循环切换成员槽位的视频边框。 | `<member_id\|all\|last\|non_moderator>` |
+| `vid-banner` | 设置成员槽位上的横幅文字覆盖层。 | `<member_id\|last> <text>` |
+| `vid-mute-img` | 设置或清除成员的视频静音占位图片。 | `<member_id\|last> [<path>\|clear]` |
+| `vid-logo-img` | 设置或清除叠加到成员槽位的 Logo 图片。 | `<member_id\|last> [<path>\|clear]` |
+| `vid-codec-group` | 设置或清除成员的视频编解码器组。 | `<member_id\|last> [<group>\|clear]` |
+| `vid-fps` | 设置画布输出帧率。 | `<fps>` |
+| `vid-res` | 设置画布输出分辨率。 | `<WxH>` |
+| `vid-bandwidth` | 设置视频编码器目标带宽。 | `<BW>` |
+| `vid-fgimg` | 设置或清除画布前景图片。 | `<file>\|clear [<canvas_id>]` |
+| `vid-bgimg` | 设置或清除画布背景图片。 | `<file>\|clear [<canvas_id>]` |
+| `vid-write-png` | 将当前画布写入 PNG 文件。 | `<path>` |
+| `vid-personal` | 切换会议的个人画布（每成员独立）模式。 | `[on\|off]` |
+| `cam` | 调整图层相机设置（缩放、平移及相关图层属性）。 | `<canvas_id> <layer_id> <attr>=<val> [...]` |
+| `canvas-auto-clear` | 开启或关闭自动清空画布。 | `<canvas_id> <true\|false>` |
+| `get-uuid` | 返回成员通道的 UUID。 | `<member_id\|last>` |
+
+### 录音 {#api-recording}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `record` | 开始将会议录制到文件。 | `<filename>` |
+| `norecord` | 停止指定录音或全部录音。 | `<filename\|all>` |
+| `chkrecord` | 查询会议的录音状态。 | `<confname>` |
+| `pause` | 暂停活动录音。 | `<filename>` |
+| `resume` | 继续已暂停的录音。 | `<filename>` |
+| `recording` | 组合录音控制命令（开始、停止、检查、暂停、继续）。 | `[start\|stop\|check\|pause\|resume] [<filename>\|all]` |
+
+### 出站拨号 {#api-outbound-dial}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `dial` | 发起出站呼叫，接听后让被叫加入会议（阻塞）。 | `<endpoint_module>/<destination> <callerid_number> <callerid_name>` |
+| `bgdial` | 与 `dial` 相同，但后台发起，不阻塞。 | `<endpoint_module>/<destination> <callerid_number> <callerid_name>` |
+
+### 锁定、PIN 与变量 {#api-locking-pin-vars}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `lock` | 锁定会议，拒绝新成员。 | 无 |
+| `unlock` | 解锁会议。 | 无 |
+| `pin` | 设置会议入会 PIN。 | `<pin#>` |
+| `nopin` | 清除会议入会 PIN。 | 无 |
+| `getvar` | 读取会议变量。 | `<varname>` |
+| `setvar` | 设置会议变量。 | `<varname> <value>` |
+| `get` | 读取内置会议参数。 | `<parameter-name>` |
+| `set` | 设置内置会议参数。 | `<max_members\|sound_prefix\|caller_id_name\|caller_id_number\|endconference_grace_time> <value>` |
+
+### 列表与状态 {#api-listing-status}
+
+| 子命令 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `list` | 以文本列出会议及成员；可不指定会议名称执行。 | `[delim <string>]\|[count]` |
+| `xml_list` | 以 XML 列出会议及成员。 | 无 |
+| `json_list` | 以 JSON 列出会议及成员。 | `[compact]` |
+| `count` | 报告会议的成员数。 | 无 |
+
+**调用示例：**
+
+```
+conference 3001-example.com mute all
+conference 3001-example.com play conference/welcome.wav async
+conference 3001-example.com vid-layout group:grid
+conference 3001-example.com bgdial sofia/internal/2000@example.com 2000 "Conf Dial"
+conference list
+```

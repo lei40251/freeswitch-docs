@@ -1,0 +1,127 @@
+---
+sidebar_position: 3
+id: mod_xml_ldap
+slug: /module-reference/xml-interfaces/mod_xml_ldap
+title: "mod_xml_ldap——基于 LDAP 的 XML 配置"
+description: "通过 LDAP/Active Directory 提供 FreeSWITCH XML 用户目录和配置查询。"
+sidebar_label: "mod_xml_ldap"
+---
+# mod_xml_ldap——基于 LDAP 的 XML 配置 {#mod_xml_ldap-—-ldap-backed-xml-configuration}
+
+`mod_xml_ldap` 是 `src/mod/xml_int` 分类下的 XML 接口模块。它向 FreeSWITCH 的 XML 获取系统注册搜索回调，使用户目录与配置查询由 LDAP 服务器响应，而不是读取平面 XML 文件。当 FreeSWITCH 请求 `directory`、`configuration`、`dialplan` 或 `phrases` 等配置节时，该模块连接到所配置的 LDAP URL，执行带参数的过滤查询，并在内存中构造结果 XML 文档。
+
+如果用户账号已保存在 LDAP/Active Directory 目录树中，并且希望 FreeSWITCH 直接从该权威数据源读取 SIP 凭据、语音信箱设置及主叫号码，而不将数据导出或复制到 `directory/*.xml` 平面文件，可以采用此模块。
+
+## 加载模块 {#loading-the-module}
+
+`modules.conf.xml` 和 `fs_cli` 中使用的模块名为 `mod_xml_ldap`。默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，需要手动添加：
+
+```xml
+<load module="mod_xml_ldap"/>
+```
+
+模块在编译时依赖 OpenLDAP 客户端库（`lber.h`、`ldap.h`）。构建前可向 `./configure` 传入 `--enable-mod_xml_ldap`，或将模块加入 `modules.conf`。
+
+## 配置：`xml_ldap.conf.xml` {#configuration-xml_ldapconfxml}
+
+`mod_xml_ldap` 加载时读取 `autoload_configs/xml_ldap.conf.xml`。文件包含 `<bindings>` 块，其中可有一个或多个 `<binding>` 元素。每个绑定指定其服务的 FreeSWITCH 配置节、LDAP 连接凭据，以及（对于 `directory` 绑定）属性转换规则。
+
+### 绑定参数 {#binding-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `filter`（带 `bindings` 属性） | LDAP 搜索过滤条件；`%s` 替换为分机号（目录查询）或键名/键值（配置查询）。响应哪个 FreeSWITCH 节由 `<binding>` 的 `name` 属性决定（通过 `switch_xml_parse_section_string` 解析）；此参数上的 `bindings` 属性只设置内部查询类型。 | 任意有效 LDAP 过滤表达式；`bindings` 可为 `directory`、`configuration`、`dialplan`、`phrases` | 无，必需 |
+| `basedn` | LDAP 搜索的基础 DN；`%s` 替换为域名（目录）或标签名称（配置）。 | 任意 LDAP DN 字符串 | 无，必需 |
+| `url` | LDAP 服务器 URL。 | `ldap://host`、`ldaps://host`，或 `ldap_initialize(3)` 接受的任意 URI | 无，必需 |
+| `binddn` | 绑定到 LDAP 服务器时使用的 DN。 | 任意 LDAP DN 字符串 | 无（省略时使用匿名绑定） |
+| `bindpass` | 绑定 DN 的密码。 | 明文字符串 | 无 |
+
+### 目录属性转换（`<trans>`） {#directory-attribute-translation}
+
+对于 `directory` 绑定，`<trans>` 块用于将 LDAP 属性名映射到 FreeSWITCH 用户字段。每个 `<tran>` 元素包含：
+
+- `name`：FreeSWITCH 字段名称（见下表）。
+- `mapfrom`：要读取其值的 LDAP 属性。
+
+可识别的 `name` 值及其在生成 XML 中的作用如下：
+
+| `name` | 在 FreeSWITCH 用户目录 XML 中的作用 |
+|--------|----------------------------------|
+| `id` | 用户的 `id` 属性 |
+| `cidr` | 用户的 `cidr` 属性 |
+| `number-alias` | 用户的 `number-alias` 参数 |
+| `dial-string` | 用户的 `dial-string` 参数 |
+| `password` | 用户的 `password` 参数 |
+| `a1-hash` | 用户的 `a1-hash` 参数 |
+| `reverse-auth-user` | 用户的 `reverse-auth-user` 参数 |
+| `reverse-auth-pass` | 用户的 `reverse-auth-pass` 参数 |
+| `vm-password` | 用户的 `vm-password` 参数 |
+| `vm-enabled` | 用户的 `vm-enabled` 参数 |
+| `vm-mailfrom` | 用户的 `vm-mailfrom` 参数 |
+| `vm-mailto` | 用户的 `vm-mailto` 参数 |
+| `vm-notify-mailto` | 用户的 `vm-notify-mailto` 参数 |
+| `vm-attach-file` | 用户的 `vm-attach-file` 参数 |
+| `vm-message-ext` | 用户的 `vm-message-ext` 参数 |
+| `vm-email-all-messages` | 用户的 `vm-email-all-messages` 参数 |
+| `vm-keep-local-after-mail` | 用户的 `vm-keep-local-after-mail` 参数 |
+| `vm-notify-email-all-messages` | 用户的 `vm-notify-email-all-messages` 参数 |
+| `vm-skip-instructions` | 用户的 `vm-skip-instructions` 参数 |
+| `vm-cc` | 用户的 `vm-cc` 参数 |
+| `vm-disk-quota` | 用户的 `vm-disk-quota` 参数 |
+| `accountcode` | 用户的 `accountcode` 变量 |
+| `user_context` | 用户的 `user_context` 变量 |
+| `vm_mailbox` | 用户的 `vm_mailbox` 变量 |
+| `callgroup` | 用户的 `callgroup` 变量 |
+| `toll_allow` | 用户的 `toll_allow` 变量 |
+| `effective_caller_id_number` | 用户的 `effective_caller_id_number` 变量 |
+| `effective_caller_id_name` | 用户的 `effective_caller_id_name` 变量 |
+| `outbound_caller_id_number` | 用户的 `outbound_caller_id_number` 变量 |
+| `outbound_caller_id_name` | 用户的 `outbound_caller_id_name` 变量 |
+
+### 配置示例 {#example-configuration}
+
+下列内容摘自随附的 `xml_ldap.conf.xml`，展示了一个 `directory` 绑定：
+
+```xml
+<configuration name="xml_ldap.conf" description="XML LDAP Gateway">
+  <bindings>
+    <binding name="directory">
+      <!-- %s in filter is replaced with the extension being looked up -->
+      <param name="filter" value="(&amp;(objectClass=FSAccount)(fsuid=%s))" bindings="directory"/>
+      <!-- %s in basedn is replaced with the SIP domain -->
+      <param name="basedn" value="ou=%s,ou=customers,o=example" />
+      <param name="url" value="ldap://1.2.3.4" />
+      <param name="binddn" value="cn=admin,o=example" />
+      <param name="bindpass" value="secret" />
+      <trans>
+        <tran name="id"                          mapfrom="fsUid" />
+        <tran name="password"                    mapfrom="fsPassword" />
+        <tran name="a1-hash"                     mapfrom="fsA1Hash" />
+        <tran name="dial-string"                 mapfrom="fsDialString" />
+        <tran name="vm-enabled"                  mapfrom="fsVmEnabled" />
+        <tran name="vm-password"                 mapfrom="fsVmPassword" />
+        <tran name="effective_caller_id_number"  mapfrom="fsEffectiveCallerIDNumber" />
+        <tran name="effective_caller_id_name"    mapfrom="fsEffectiveCallerIDName" />
+      </trans>
+    </binding>
+  </bindings>
+</configuration>
+```
+
+随附文件中还包含被注释的 `configuration` 绑定示例；可取消注释并调整，用 LDAP 响应 `configuration` 节的查询。
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `xml_ldap` | 已注册的 API 存根；目前返回 `SWITCH_STATUS_FALSE`，不执行任何操作。 | `xml_ldap` |
+
+```
+freeswitch@> xml_ldap
+```
+
+## 依赖项 {#dependencies}
+
+`mod_xml_ldap` 依赖 **OpenLDAP** 客户端库（`libldap` 和 `liblber`）。编译前请安装发行版对应的开发包，例如 Debian/Ubuntu 上的 `libldap2-dev`、RHEL/CentOS 上的 `openldap-devel`。
+
+**源码：** `src/mod/xml_int/mod_xml_ldap`、`src/mod/xml_int/mod_xml_ldap/conf/autoload_configs/xml_ldap.conf.xml`

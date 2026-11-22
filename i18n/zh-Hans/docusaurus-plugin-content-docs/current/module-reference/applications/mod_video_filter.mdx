@@ -1,0 +1,186 @@
+---
+sidebar_position: 38
+id: mod_video_filter
+slug: /module-reference/applications/mod_video_filter
+title: "mod_video_filter——色度抠像与视频叠加"
+description: "实时视频色度抠像、背景替换、视频覆盖层与 UUID 视频替换。"
+sidebar_label: "mod_video_filter"
+---
+# mod_video_filter——色度抠像与视频叠加 {#mod_video_filter-—-chroma-key-and-video-overlay}
+
+`mod_video_filter` 为 FreeSWITCH 视频呼叫提供实时色度抠像合成和视频替换功能。它为通道附加媒体钩子，处理每一帧出站或入站视频：去除指定的背景颜色，再以静态 PNG 图片、循环播放的视频文件，或通过另一个通道 UUID 获取的实时视频流替换背景。还可以在主体上方合成前景 PNG 和前景视频覆盖层。另一个独立的 `video_replace` 应用及 API 命令可用文件替换整条视频流，而不执行色度抠像。
+
+需要实现视频会议虚拟背景、会议桥接中的绿幕合成，或直播视频上的透明水印叠加时，可使用此模块。它位于 `src/mod/applications`，完全依靠媒体钩子工作，不会启动额外的媒体处理线程。
+
+## 加载模块 {#loading-the-module}
+
+模块加载名为 `mod_video_filter`。默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，必须手动添加。请在 `modules.conf.xml` 的 Applications 部分加入：
+
+```xml
+<load module="mod_video_filter"/>
+```
+
+然后在运行时加载：
+
+```
+load mod_video_filter
+```
+
+除了 FreeSWITCH 核心之外，不需要外部库（核心已提供 `switch_chromakey_*` 和 `switch_img_*`）；该模块只使用 FreeSWITCH 内部视频处理原语。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `chromakey` | 将色度抠像合成媒体钩子附加到通道 | `<color>[+thresh][:<color>[+thresh]...] [threshold] [#bg_color\|path/to/file\|uuid:<uuid>] [filter:<filters>] [fgvid:<file>] [fg:<file.png>] [bg:<file.png>] [patch]` |
+| `video_replace` | 使用文件替换整条入站或出站视频流 | `[read\|write] <file>` 或 `stop` |
+
+---
+
+### `chromakey`
+
+等待通道出现 `CF_VIDEO_READY`（最多 10 秒），随后安装用于合成每帧视频的媒体钩子。只传入 `stop` 即可移除正在运行的钩子。
+
+**参数（按位置、以空格分隔）：**
+
+| 位置 | 值 | 用途 |
+|---|---|---|
+| 1 | `<color>[+thresh][:color[+thresh]...]` | 要抠除的颜色列表，以冒号分隔。每个条目可以是 HTML 十六进制颜色（`#RRGGBB`），或 `switch_chromakey_str2shade` 识别的色调名称。追加 `+N` 可为每种颜色设置独立的整数阈值。 |
+| 2 | `<threshold>` | 色度检测的全局默认阈值（整数；未指定单色阈值时使用），编译默认值为 `300`。 |
+| 3 | `#bg_color` \| `path/to/image.png` \| `path/to/video` \| `uuid:<uuid>` | 抠像主体后显示的背景。十六进制颜色生成纯色填充；`.png` 路径加载静态图片；其他路径作为视频文件打开；`uuid:<uuid>` 从其他通道获取实时视频。文件视频背景默认播放一次并在文件结束时停止；通过 `{loop=true}` 打开后会回到开头循环播放，而不是关闭。 |
+| 4+ | 关键字选项 | 下文列出的一个或多个选项。 |
+
+**关键字选项（第 4 个及后续位置）：**
+
+| 选项 | 用途 |
+|---|---|
+| `filter:<name>` | 应用具名视频滤镜。名称由 `switch_core_video_parse_filter_string` 解析，支持 `bg-sepia`、`bg-gray`、`fg-sepia`、`fg-gray` 和 `fg-8bit` 等。 |
+| `fgvid:<file>` | 在前景主体上叠加的视频文件路径。默认播放到文件结束；使用 `{loop=true}` 可循环播放。 |
+| `fg:<file.png>` | 叠加于前景主体上的 PNG 路径（底部居中对齐）。 |
+| `bg:<file.png>` | 叠加于背景上的 PNG 路径（底部居中对齐）。 |
+| `patch` | 将媒体钩子切换到 `SMBF_VIDEO_PATCH` 模式（直接修改视频帧，而不是 ping 处理）。 |
+
+**循环视频文件输入（`{loop=true}`）：**
+
+第 3 个参数中的视频文件背景和 `fgvid:` 前景视频都支持 `{loop=true}` 文件打开参数。默认情况下，文件到达 EOF 后会关闭句柄；使用 `{loop=true}` 时则定位到文件开头继续循环播放。将参数作为文件路径前缀，例如 `{loop=true}/usr/local/freeswitch/videos/bg.mp4`。
+
+**拨号计划示例：**
+
+抠除绿色，使用纯深色背景：
+
+```xml
+<action application="chromakey" data="#00ff00 300 #1a1a2e"/>
+```
+
+抠除绿色，使用 PNG 背景图片：
+
+```xml
+<action application="chromakey" data="#00ff00 300 /usr/local/freeswitch/images/office.png"/>
+```
+
+抠除绿色，并将另一个实时通道用作背景：
+
+```xml
+<action application="chromakey" data="#00ff00 300 uuid:7f3e9abc-1234-5678-abcd-ef0123456789"/>
+```
+
+为前景应用灰度滤镜并添加 PNG 水印：
+
+```xml
+<action application="chromakey" data="#00ff00 300 /images/bg.png filter:fg-gray fg:/images/logo.png"/>
+```
+
+停止正在运行的 chromakey 钩子：
+
+```xml
+<action application="chromakey" data="stop"/>
+```
+
+---
+
+### `video_replace`
+
+以文件中读取的帧替换入站（`read`）或出站（`write`）视频流。文件中的音频默认丢弃，除非通过 API 使用带 `:sound` 后缀的方向参数启动。传入 `stop` 可移除活动钩子。
+
+参数按位置解析：提供两个或更多标记时，第一个表示方向，第二个表示文件；只提供单个标记时，将其视为文件，方向默认为 `write`。因此同时接受 `<file>` 和 `[read\|write] <file>`。
+
+**参数：**
+
+| 参数 | 用途 |
+|---|---|
+| `read\|write` | 要替换的视频流方向。可选；仅提供文件时默认 `write`。 |
+| `<file>` | FreeSWITCH 文件格式子系统支持的视频文件路径。默认只播放一次，EOF 时关闭钩子；通过 `{loop=true}` 打开时会从头循环播放。 |
+| `stop` | 移除活动的 `video_replace` 钩子。 |
+
+```xml
+<action application="video_replace" data="write /usr/local/freeswitch/videos/hold.mp4"/>
+```
+
+只提供文件的简写形式（方向默认 `write`）：
+
+```xml
+<action application="video_replace" data="/usr/local/freeswitch/videos/hold.mp4"/>
+```
+
+循环播放替换视频，而不是在 EOF 停止：
+
+```xml
+<action application="video_replace" data="write {loop=true}/usr/local/freeswitch/videos/hold.mp4"/>
+```
+
+```xml
+<action application="video_replace" data="stop"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `chromakey` | 通过 UUID 为通道启动、更新或停止色度抠像钩子 | `chromakey <uuid> <start\|stop> [same args as app]` |
+| `uuid_video_replace` | 通过 UUID 为通道启动或停止视频替换钩子 | `uuid_video_replace <uuid> <start\|stop> [read\|write[:sound]] <file>` |
+
+### `chromakey` API
+
+在实时呼叫上启动或重新配置色度抠像合成：
+
+```
+chromakey <uuid> start #00ff00 300 /images/office.png
+```
+
+更新运行中钩子的背景（以新的参数调用 `start`）：
+
+```
+chromakey <uuid> start #00ff00 300 uuid:other-channel-uuid
+```
+
+停止活动钩子：
+
+```
+chromakey <uuid> stop
+```
+
+### `uuid_video_replace` API
+
+将写入方向的视频替换为文件（使用 `:sound` 时包含文件音频）：
+
+```
+uuid_video_replace <uuid> start write:sound /usr/local/freeswitch/videos/hold.mp4
+```
+
+替换读取方向的视频（不包含音频）：
+
+```
+uuid_video_replace <uuid> start read /usr/local/freeswitch/videos/hold.mp4
+```
+
+停止视频替换：
+
+```
+uuid_video_replace <uuid> stop
+```
+
+## 通道变量 {#channel-variables}
+
+`mod_video_filter` 不直接调用 `switch_channel_set_variable` 或 `switch_channel_get_variable`。所有运行时配置都由应用参数或 API 命令参数提供。
+
+**源码：** `src/mod/applications/mod_video_filter`

@@ -1,0 +1,130 @@
+---
+sidebar_position: 14
+id: mod_easyroute
+slug: /module-reference/applications/mod_easyroute
+title: "mod_easyroute——基于数据库的 DID 路由"
+description: "通过 ODBC 数据库执行 DID 路由、网关查找和按号码限制并发。"
+sidebar_label: "mod_easyroute"
+---
+# mod_easyroute——基于数据库的 DID 路由 {#mod_easyroute-—-database-did-routing}
+
+`mod_easyroute` 是 `src/mod/applications` 下的应用模块，通过 ODBC 查询关系型数据库来执行 DID（直接拨入）路由查找。给定入站号码后，它会查询 `numbers`/`gateways` 表结构（或者执行自定义 SQL 查询），然后将得到的拨号字符串、呼叫限额、组和计费账号代码写入通道变量，供后续拨号计划动作使用。
+
+需要通过中心数据库驱动运营商级 DID 路由时，可以选用此模块。例如，对各 DID 限制最大并发通道数、填充计费账号代码，或在不同 SIP 网关之间分流，而无需将路由硬编码在拨号计划中。
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 中使用的名称为 `mod_easyroute`。在默认配置中，该模块**不会自动加载**，对应条目已被注释：
+
+```xml
+<!--<load module="mod_easyroute"/>-->
+```
+
+要启用，请取消 `conf/vanilla/autoload_configs/modules.conf.xml` 中该行的注释（或添加等效条目）并重启 FreeSWITCH。无需特殊构建标志；只要构建环境支持 ODBC，就可以编译此模块。
+
+## 配置：`easyroute.conf.xml` {#configuration-easyrouteconfxml}
+
+模块加载时读取 `conf/autoload_configs/easyroute.conf.xml`。所有参数都位于 `<settings>` 块中。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `db-username` | ODBC 数据库用户名 | 字符串 | `root` |
+| `db-password` | ODBC 数据库密码 | 字符串 | `password` |
+| `db-dsn` | ODBC DSN 名称 | 字符串（取自 `odbc.ini` 的 DSN） | `easyroute` |
+| `default-techprofile` | 数据库没有返回 `techprofile` 时，用于构造拨号字符串的技术前缀 | 字符串（如 `sofia/default`） | `sofia/default` |
+| `default-gateway` | 数据库没有返回网关或查询失败时使用的网关主机 | IP 或主机名 | `192.168.1.1` |
+| `odbc-retries` | ODBC 连接失败时的重试次数 | 整数 | `120` |
+| `custom-query` | 自定义 SQL 查询；`%q` 将替换为所拨号码。必须按以下顺序返回列：`gateway`、`group`、`call_limit`、`tech_prefix`、`acctcode`、`destination_number` | SQL 字符串 | *（未设置，使用内置联表查询）* |
+
+随附配置中的示例片段：
+
+```xml
+<configuration name="easyroute.conf" description="EasyRoute Module">
+  <settings>
+    <param name="db-username" value="root"/>
+    <param name="db-password" value="password"/>
+    <param name="db-dsn" value="easyroute"/>
+    <param name="default-techprofile" value="sofia/default"/>
+    <param name="default-gateway" value="192.168.66.6"/>
+    <param name="odbc-retries" value="120"/>
+    <!-- <param name="custom-query" value="call  FS_GET_SIP_LOCATION(%s);"/> -->
+  </settings>
+</configuration>
+```
+
+未设置 `custom-query` 时，模块会对 `numbers` 和 `gateways` 两张表执行内置 JOIN 查询：
+
+```sql
+SELECT gateways.gateway_ip, gateways.group, gateways.limit,
+       gateways.techprofile, numbers.acctcode, numbers.translated
+FROM   gateways, numbers
+WHERE  numbers.number = '%q'
+  AND  numbers.gateway_id = gateways.gateway_id
+LIMIT  1;
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `easyroute` | 从数据库查询所拨号码，并设置结果通道变量 | `<number> [noat \| separator <sep>]` |
+
+**参数说明**
+
+- `<number>`：要查询的 DID（必需）。
+- `noat`：将拨号字符串构造为 `<techprofile>/<translated><gateway>`，而非 `<techprofile>/<translated>@<gateway>`。
+- `separator <sep>`：使用 `<sep>` 作为转换后号码和网关之间的分隔符，而不是 `@`。
+
+**示例——标准查询并执行限额检查：**
+
+```xml
+<extension name="easyroute">
+  <condition field="destination_number" expression="^1?(\d{10})$" break="on-true">
+    <action application="easyroute" data="$1"/>
+    <action application="limit" data="db easyroute ${easy_group} ${easy_limit} LE-$1"/>
+    <action application="bridge" data="${easy_dialstring}"/>
+  </condition>
+</extension>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `easyroute` | 查询号码并输出路由结果，也可以仅返回指定字段 | `easyroute <number> [dialstring\|translated\|limit\|group\|acctcode\|noat\|separator <sep>]` |
+
+只传入 `<number>` 时，命令会输出包含所有字段的格式化表格。第二个参数指定单个字段关键字时，仅返回该字段的值。`translated` 返回数据库查询中 `numbers.translated` 列的转换后号码；与其他字段不同，`easyroute` 应用不会设置与之对应的通道变量。
+
+**`fs_cli` 示例：**
+
+```
+freeswitch@> easyroute 18005551212
+Number      Limit     Group     AcctCode  Dialstring
+18005551212 9999                          sofia/default/18005551212@192.168.66.6
+
+freeswitch@> easyroute 18005551212 dialstring
+sofia/default/18005551212@192.168.66.6
+
+freeswitch@> easyroute 18005551212 limit
+9999
+```
+
+注意：此 API 命令不能在拨号计划上下文中调用（必须通过 `fs_cli` 或 ESL 执行）。
+
+## 通道变量 {#channel-variables}
+
+`easyroute` 拨号计划应用成功查询后设置以下通道变量：
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `easy_destnum` | 写入 | 传给应用的所拨号码 |
+| `easy_dialstring` | 写入 | 已构造完成、可直接供 `bridge` 使用的拨号字符串 |
+| `easy_group` | 写入 | 来自 `gateways` 表的组名（可能为空） |
+| `easy_limit` | 写入 | 此 DID 允许的最大并发呼叫数；数据库无返回值时默认 `9999` |
+| `easy_acctcode` | 写入 | 来自 `numbers` 表的账号代码，用于 CDR 计费 |
+
+## 依赖项 {#dependencies}
+
+`mod_easyroute` 编译时需要 ODBC 支持。构建主机安装 `unixODBC`（或同类 ODBC 驱动管理器）及其开发头文件后，FreeSWITCH 构建系统会启用该支持。无需其他非标准外部库。
+
+**源码：** `src/mod/applications/mod_easyroute`、`conf/vanilla/autoload_configs/easyroute.conf.xml`

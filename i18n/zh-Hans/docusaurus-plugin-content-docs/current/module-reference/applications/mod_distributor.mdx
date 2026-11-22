@@ -1,0 +1,143 @@
+---
+sidebar_position: 12
+id: mod_distributor
+slug: /module-reference/applications/mod_distributor
+title: "mod_distributor——加权呼叫分配"
+description: "使用 mod_distributor 配置按权重分配呼叫的网关和节点列表。"
+sidebar_label: "mod_distributor"
+---
+# mod_distributor——加权呼叫分配 {#mod_distributor-—-weighted-call-distribution}
+
+`mod_distributor` 按权重、有状态地将呼叫分配到具名的目标（节点）列表中。每个节点带有一个整数权重；模块按节点维护运行计数器，使每一轮流量都按比例分散到整个列表，而不是先把所有呼叫都送往一个目标，再切换到下一个。
+
+例如，需要将 10% 的流量送到一个网关、90% 送到另一个网关，或将负载按任意比例分配给多个 SIP 中继时，可以使用 `mod_distributor`。它既不是简单轮询路由器，也不是最低成本路由器，而是基于比例的流量分配器；还可以在单次呼叫时通过排除列表跳过指定节点。
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 中的模块名为 `mod_distributor`。
+
+在默认的 FreeSWITCH 发行版中，`autoload_configs/modules.conf.xml` 里的对应条目**默认被注释**：
+
+```xml
+<!--<load module="mod_distributor"/>-->
+```
+
+取消该行的注释（或从 `fs_cli` 执行 `load mod_distributor`）即可启用。无需特殊构建标志；标准 FreeSWITCH 构建中会编译该模块。
+
+## 配置：`distributor.conf.xml` {#configuration-distributorconfxml}
+
+`mod_distributor` 从 FreeSWITCH 自动加载配置路径读取 `distributor.conf`。文件包含一个或多个具名 `<list>` 元素，每个列表中有带有相对权重的 `<node>` 条目。
+
+### 参数 {#parameters}
+
+#### `<list>` 属性 {#attributes}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `name` | 列表的唯一标识符，作为应用或 API 的参数传入 | 任意字符串 | （必需） |
+| `total-weight` | 已弃用——引擎不再使用；如果仍提供则记录警告 | 整数 | — |
+
+#### `<node>` 属性 {#attributes-1}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `name` | 选中该节点时返回的值，通常为网关名称或目标字符串 | 任意字符串 | （必需） |
+| `weight` | 节点的相对权重，必须是大于 0 的正整数 | 整数 ≥ 1 | （必需） |
+
+引擎以列表总权重减去节点自身权重得到的差值作为计数器上限，计算各节点的分配份额。在总权重为 10 的列表中，`weight="1"` 的节点大约每 10 次选择中被选中 1 次；`weight="9"` 的节点大约被选中 9 次。
+
+### 示例 {#example}
+
+```xml
+<configuration name="distributor.conf" description="Distributor Configuration">
+  <lists>
+    <!-- every 10 calls to 'test': foo1 is chosen once, foo2 nine times -->
+    <list name="test">
+      <node name="foo1" weight="1"/>
+      <node name="foo2" weight="9"/>
+    </list>
+  </lists>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `distributor` | 从具名列表中选择一个节点并存入 `${DISTRIBUTOR}` | `<list-name> [exception1 exceptionN ...]` |
+
+### `distributor`
+
+查找具名列表，运行加权选择算法，并将所选节点名称写入通道变量 `DISTRIBUTOR`。可在参数后追加一个或多个以空格分隔的节点名称作为例外，在本次选择中跳过这些节点。应用支持 `SAF_SUPPORT_NOMEDIA` 和 `SAF_ROUTING_EXEC`，因此可在媒体建立之前的拨号计划阶段运行。
+
+**语法：**
+
+```
+distributor <list-name> [exception1 [exception2 ...]]
+```
+
+**拨号计划示例——通过加权选择的网关桥接呼叫：**
+
+```xml
+<extension name="weighted gateway distribution">
+  <condition field="destination_number" expression="^(.*)$">
+    <action application="distributor" data="test"/>
+    <action application="bridge" data="sofia/gateway/${DISTRIBUTOR}/$1"/>
+  </condition>
+</extension>
+```
+
+随附的拨号计划示例直接在 `bridge` 的 `data` 字符串中使用内联 API 形式 `${distributor(test)}`，作用相同：
+
+```xml
+<action application="bridge" data="sofia/gateway/${distributor(test)}/$1"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `distributor` | 返回指定列表下一次选中的节点名称 | `distributor <list-name>[ exception1 exceptionN]` |
+| `distributor_ctl` | 运行时管理列表：重新加载配置、输出列表状态或调整节点权重 | `distributor_ctl reload \| dump <list> \| modify <list> <node>=<weight> ...` |
+
+### `distributor`
+
+以纯字符串返回被选中的节点名称；列表不存在或无法选中节点时返回 `-err`。
+
+```
+freeswitch@> distributor test
+foo2
+```
+
+### `distributor_ctl`
+
+**子命令：**
+
+| 子命令 | 描述 |
+|------------|-------------|
+| `reload` | 重新读取 `distributor.conf`，替换内存中的列表；返回 `+OK reloaded.` |
+| `dump <list-name>` | 输出具名列表中每个节点当前的名称和权重 |
+| `modify <list-name> <node>=<weight> [...]` | 运行时调整具名列表中一个或多个节点的权重，并重新计算及重置分配计数器 |
+
+```
+freeswitch@> distributor_ctl dump test
+list: name=test
+node: name=foo1 weight=1
+node: name=foo2 weight=9
+
+freeswitch@> distributor_ctl modify test foo2=4
+list: name=test
+node: name=foo1 weight=1
+node: name=foo2 weight=4
+
+freeswitch@> distributor_ctl reload
++OK reloaded.
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `DISTRIBUTOR` | 写入 | 接收 `distributor` 拨号计划应用选中的节点名称 |
+
+**源码：** `src/mod/applications/mod_distributor`、`conf/vanilla/autoload_configs/distributor.conf.xml`

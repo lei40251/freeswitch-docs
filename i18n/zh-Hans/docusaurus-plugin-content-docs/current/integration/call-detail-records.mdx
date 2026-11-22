@@ -1,0 +1,294 @@
+---
+sidebar_position: 3
+id: call-detail-records
+slug: /integration/cdr
+title: "第 27 章：通话详单"
+description: "针对每条呼叫腿生成一条 CDR，可独立配置 mod_cdr_csv、mod_xml_cdr、mod_cdr_sqlite 进行交付。"
+sidebar_label: "27. 通话详单"
+---
+
+# 第 27 章：通话详单 {#chapter-27-call-detail-records}
+
+FreeSWITCH 在每条呼叫腿挂机时为其生成一条通话详单（Call Detail Record，CDR）。本章介绍三种最常部署的 CDR 模块：`mod_cdr_csv` 将记录写入分隔符文本文件；`mod_xml_cdr` 通过 HTTP POST 向远程端点发送 XML 文档；`mod_cdr_sqlite` 将记录插入本地 SQLite 数据库。各模块独立配置，也可以同时加载。FreeSWITCH 还内置其他 CDR 后端，详见第 9 部分（参见下文[其他 CDR 后端](#other-cdr-backends)）。
+
+<SignalWireCallout
+  title="通过 API 查询 CDR"
+  href="https://signalwire.com/docs/apis"
+  page="cdr"
+  linkText="查看 REST API">
+
+SignalWire 通过 REST API 提供可查询的呼叫、消息和传真日志，并使用 Webhook 实时通知呼叫事件。无需维护 CDR 模板、传送日志，也不必托管接收服务。
+
+</SignalWireCallout>
+
+## CDR 如何生成 {#how-cdrs-are-produced}
+
+各 CDR 模块都会注册 `on_reporting` 状态处理回调，CDR 的生成由该回调触发。通道完成挂机处理并立即进入 reporting 状态时，每条呼叫腿只会触发一次该回调。
+
+桥接呼叫产生两条呼叫腿：A 腿（发起侧通道）和 B 腿（被发起的通道）。每个 CDR 模块都提供 `legs` 参数，用于控制记录哪些呼叫腿。`mod_cdr_csv` 与 `mod_cdr_sqlite` 默认只记录 A 腿。
+
+通道变量在生成记录时展开。挂机时可以从会话读取的任何通道变量，都能通过 `${variable_name}` 语法在模板中引用。
+
+---
+
+## mod_cdr_csv {#mod_cdr_csv}
+
+`mod_cdr_csv` 将每条呼叫腿的详单追加为 CSV 文件中的一行。vanilla 默认配置会加载该模块。
+
+配置文件：`conf/autoload_configs/cdr_csv.conf.xml`
+
+### 配置参数 {#configuration-parameters}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `log-base` | CDR 输出的父目录；实际目录路径还会固定追加 `cdr-csv`。 | 绝对路径 | FreeSWITCH 日志目录 |
+| `default-template` | 没有命中账号代码专用模板时使用的模板名称。 | 任意已命名模板 | `default` |
+| `legs` | 记录哪些呼叫腿。 | `a`、`b` 或 `ab` | `a` |
+| `rotate-on-hup` | 为 `true` 时进程收到 SIGHUP 会轮转所有已打开日志文件；为 `false` 时仍关闭并重新打开文件，但不改名。 | `true`、`false` | `false`（源码默认；vanilla conf.xml 设置为 `true`） |
+| `master-file-only` | 为 `true` 时禁止生成每个账号代码的 CSV 文件，只写入 `Master.csv`。 | `true`、`false` | `false` |
+| `debug` | 每次 CDR 事件都以 INFO 级别在 FreeSWITCH 日志中记录完整的通道变量集合。 | `true`、`false` | `false` |
+
+### 模板 {#templates}
+
+模板是一段字符串，通过 `${variable_name}` 引用通道变量。通话结束时，模块根据实际通道展开全部变量，并将得到的文本追加到输出文件中。
+
+模板定义在配置文件的 `<templates>` 块中：
+
+```xml
+<templates>
+  <template name="my_template">"${caller_id_name}","${caller_id_number}","${destination_number}"</template>
+</templates>
+```
+
+模板名称 `default` 为保留名称。如果没有 `<template name="default">` 元素，模块使用编译内置的默认模板（见第 2.3 节）。
+
+按账号代码路由：当通道变量 `ACCOUNTCODE` 被设置后，模块会查找名称与账号代码相同的模板。如果找到，除写入 `Master.csv` 之外，还会将该通道的记录写入 `<accountcode>.csv`。如果没有找到，则两个文件都使用 `default-template` 指定的模板。
+
+vanilla 配置附带以下命名模板：
+
+| 模板名 | 用途 |
+|---|---|
+| `example` | 通用模板，包含编解码器信息。 |
+| `sql` | 可直接导入数据库的 INSERT 语句。 |
+| `snom` | 适用于 Snom SIP 电话，添加 User-Agent 和 RTP 统计信息。 |
+| `linksys` | 适用于 Linksys / Cisco ATA 设备。 |
+| `asterisk` | 字段与 Asterisk CDR 输出兼容。 |
+| `opencdrrate` | OpenCDRate 计费系统格式。 |
+
+### 编译内置的默认模板 {#the-built-in-default-template}
+
+模块启动时，会以 `default` 为键，将一个模板预先注册到模板哈希表中：
+
+```
+"${caller_id_name}","${caller_id_number}","${destination_number}","${context}","${start_stamp}","${answer_stamp}","${end_stamp}","${duration}","${billsec}","${hangup_cause}","${uuid}","${bleg_uuid}", "${accountcode}"
+```
+
+注意 `"${accountcode}"` 前存在空格——这是编译内置字符串中的实际空格，因此 CSV 输出中的该字段会显示为 ` "${accountcode}"`，带一个前导空格。
+
+如果 `default-template` 指向的名称在生成呼叫记录时无法从模板哈希表找到，模块会替换为第二个编译内置的 Asterisk 兼容备用模板：
+
+```
+"${accountcode}","${caller_id_number}","${destination_number}","${context}","${caller_id}","${channel_name}","${bridge_channel}","${last_app}","${last_arg}","${start_stamp}","${answer_stamp}","${end_stamp}","${duration}","${billsec}","${hangup_cause}","${amaflags}","${uuid}","${userfield}"
+```
+
+这个包含 18 个字段的 Asterisk 兼容模板只在指定模板无法解析时使用，并不等同于前面预注册的 `default` 模板。
+
+vanilla 配置将 `default-template` 设为 `example`，因此正常情况下实际启用的是 `cdr_csv.conf.xml` 中的 `example` 模板，而不是任一个编译内置备用模板。
+
+### 文件输出 {#file-output}
+
+模块在 `log-base` / `cdr-csv` 目录下写入两类文件：
+
+- `Master.csv`：不论账号代码为何，均接收所有 CDR，使用 `default-template` 选定的模板。
+- `<accountcode>.csv`：接收设置了 `ACCOUNTCODE` 的呼叫记录；若存在同名账号代码模板则使用该模板，否则使用默认模板。`master-file-only` 为 `true` 时不生成此类文件。
+
+通道变量 `cdr_csv_base` 可以在单个通道上覆盖全局 `log-base`。如果会话设置了 `cdr_csv_base`，该呼叫的全部 CDR 文件将写入指定目录，而非全局 `log-base` / `cdr-csv` 目录。
+
+### 日志轮转 {#log-rotation}
+
+`rotate-on-hup` 为 `true` 时，向 FreeSWITCH 进程发送 SIGHUP，会为每个打开的文件追加 `YYYY-MM-DD-HH-MM-SS` 时间戳后缀并改名，然后在原路径重新打开新文件。也可以使用 API 命令 `cdr_csv rotate` 触发同样的轮转，而无需发送信号。
+
+`rotate-on-hup` 为 `false` 时，SIGHUP 只会让文件就地关闭并重新打开（例如适合外部日志工具已经移动文件的情况）。
+
+### 自定义 CSV 模板示例 {#custom-csv-template-example}
+
+```xml
+<configuration name="cdr_csv.conf" description="CDR CSV Format">
+  <settings>
+    <param name="default-template" value="my_billing"/>
+    <param name="legs" value="a"/>
+    <param name="rotate-on-hup" value="true"/>
+    <param name="log-base" value="/var/log/freeswitch"/>
+  </settings>
+  <templates>
+    <template name="my_billing">"${uuid}","${caller_id_number}","${destination_number}","${start_stamp}","${answer_stamp}","${end_stamp}","${billsec}","${hangup_cause}","${accountcode}"</template>
+  </templates>
+</configuration>
+```
+
+使用该配置时，`mod_cdr_csv` 为每条 A 腿使用 `my_billing` 模板，并将结果写入 `/var/log/freeswitch/cdr-csv/Master.csv`。
+
+---
+
+## mod_xml_cdr {#mod_xml_cdr}
+
+`mod_xml_cdr` 为每条呼叫腿生成结构化 XML 文档，并通过 HTTP POST 发送到一个或多个配置的 URL。未指定 URL 时，或者 HTTP POST 失败需要回退时，会将 XML 写入磁盘。默认不会加载 `mod_xml_cdr`，需要在 `conf/autoload_configs/modules.conf.xml` 中启用。
+
+配置文件：`conf/autoload_configs/xml_cdr.conf.xml`
+
+模块源码位于 `src/mod/xml_int/mod_xml_cdr`，而不是 `event_handlers` 目录。
+
+### 配置参数 {#configuration-parameters}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `url` | POST 发送记录的 HTTP 或 HTTPS 端点。最多指定 20 个 URL，发送失败时依次尝试；省略此项即禁用 HTTP 投递。 | URL 字符串 | 无 |
+| `cred` | `user:password` 形式的 HTTP 凭据。 | 字符串 | 无 |
+| `retries` | 第一次失败后的额外 POST 重试次数。若设置了重试次数但未设置 `delay`，会强制将 `delay` 设为 5。 | 整数 | `0` |
+| `delay` | 重试间隔秒数，同时用作每次尝试的 TCP 连接超时；当 `delay` 为 `0` 时，连接超时默认 5 秒。 | 整数 | `0`（若 `retries` 已配置且 `delay` 为 `0`，强制改为 `5`） |
+| `timeout` | 整个 HTTP 事务的总超时（秒）；`0` 表示不设置超时。 | 整数 | `0` |
+| `log-dir` | 本地 XML 记录目录。空字符串解析为 `${prefix}/logs/xml_cdr`；相对路径以 `${prefix}/logs` 为基准；绝对路径按原样使用。完全省略此参数时禁用磁盘日志（除非 HTTP 失败）。 | 路径或空字符串 | 未设置 |
+| `err-log-dir` | HTTP 投递失败的 XML 记录保存目录。省略时默认与 `log-dir` 相同；路径形式与 `log-dir` 相同。 | 路径或空字符串 | 与 `log-dir` 相同 |
+| `log-http-and-disk` | 为 `true` 时，即使 HTTP POST 成功，仍将每条记录写入磁盘。 | `true`、`false` | `false` |
+| `log-b-leg` | 为 `false` 时不生成 B 腿 CDR，除非通道变量 `force_process_cdr` 为 `true`。 | `true`、`false` | `true`（源码默认；vanilla conf.xml 设为 `false`） |
+| `prefix-a-leg` | 为 `true` 时本地文件名的 A 腿记录增加 `a_` 前缀。会话上的通道变量 `prefix-a-leg` 可以覆盖该全局设置。 | `true`、`false` | `false`（源码默认；vanilla conf.xml 设为 `true`） |
+| `encode` | POST 前对 XML 负载应用的编码。`true` 使用 URL 编码（`application/x-www-form-urlencoded`）；`base64` 使用 Base64；`textxml` 将原始 XML 以 `text/xml` 发送；`false` 以 `Content-Type: application/x-www-form-plaintext` 发送未编码文本。 | `true`、`false`、`base64`、`textxml` | `false`（源码默认；vanilla conf.xml 设为 `true`） |
+| `rotate` | 为 `true` 时，收到 SIGHUP 后将日志目录轮转到带时间戳的子目录。 | `true`、`false` | `false` |
+| `disable-100-continue` | 为 `true` 时禁止发送 `Expect: 100-continue` 头；某些 lighttpd 配置需要此设置。 | `true`、`false` | `false` |
+| `auth-scheme` | 用于传递凭据的 HTTP 认证方案。 | `basic`、`digest`、`NTLM`、`GSS-NEGOTIATE`、`any` | `basic` |
+| `cookie-file` | 用于跨请求保存 Cookie 的文件路径。 | 绝对路径 | 无 |
+
+### TLS 与认证参数 {#tls-and-authentication-parameters}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `enable-cacert-check` | 指示 libcurl 根据系统 CA 证书包验证服务器证书，默认关闭。 | `true`、`false` | `false` |
+| `enable-ssl-verifyhost` | 验证服务器主机名与证书 CN 是否一致。 | `true`、`false` | `false` |
+| `ssl-cert-path` | PEM 编码的客户端公钥证书路径。 | 绝对路径 | 无 |
+| `ssl-key-path` | PEM 编码的客户端私钥路径。 | 绝对路径 | 无 |
+| `ssl-key-password` | 私钥加密时使用的口令。 | 字符串 | 无 |
+| `ssl-version` | 强制使用指定的 SSL/TLS 版本。 | `SSLv3`、`TLSv1` | 由 libcurl 自动协商 |
+| `ssl-cacert-file` | 用于对端证书验证的自定义 PEM CA 证书路径。仅当 `enable-cacert-check` 为 `true` 时有效。 | 绝对路径 | 无 |
+
+### URL 绑定示例 {#example-url-binding}
+
+```xml
+<configuration name="xml_cdr.conf" description="XML CDR CURL logger">
+  <settings>
+    <param name="url" value="https://billing.example.com/cdr"/>
+    <param name="cred" value="fsuser:secret"/>
+    <param name="retries" value="2"/>
+    <param name="delay" value="5"/>
+    <param name="encode" value="textxml"/>
+    <param name="log-dir" value="/var/log/freeswitch/xml_cdr"/>
+    <param name="err-log-dir" value="/var/log/freeswitch/xml_cdr_err"/>
+    <param name="log-b-leg" value="false"/>
+    <param name="prefix-a-leg" value="true"/>
+    <param name="enable-cacert-check" value="true"/>
+    <param name="auth-scheme" value="basic"/>
+  </settings>
+</configuration>
+```
+
+`encode` 设为 `textxml` 时，模块使用 `Content-Type: text/xml` 头发送原始 XML 文档。`encode` 设为 `true` 时，使用 `Content-Type: application/x-www-form-urlencoded` 发送 URL 编码数据。设为 `false` 时，则使用 `Content-Type: application/x-www-form-plaintext` 发送纯文本。所有非 `textxml` 情况下，正文都包装为 `cdr=<payload>`。
+
+会话 UUID 会作为查询参数附加到配置的 URL：`uuid=<uuid>`；启用 `prefix-a-leg` 且为 A 腿时则使用 `uuid=a_<uuid>`。如果 URL 已有 `?`，则用 `&` 追加参数。
+
+所有 HTTP 尝试均失败时，模块把 XML 写到 `err-log-dir`，文件名为 `<uuid>.cdr.xml`（或启用 `prefix-a-leg` 后的 A 腿 `a_<uuid>.cdr.xml`）。
+
+会话上的通道变量 `xml_cdr_base` 可以为单通呼叫覆盖本地写入使用的全局 `log-dir`。
+
+---
+
+## mod_cdr_sqlite {#mod_cdr_sqlite}
+
+`mod_cdr_sqlite` 将每条呼叫腿的 CDR 作为一行插入 SQLite 数据库表中。如果数据库文件或表不存在，模块会自动创建，并使用默认表结构。`mod_cdr_sqlite` 默认不加载，需要在 `conf/autoload_configs/modules.conf.xml` 中启用。
+
+配置文件：`conf/autoload_configs/cdr_sqlite.conf.xml`
+
+### 配置参数 {#configuration-parameters}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|---|---|---|---|
+| `db-name` | SQLite 数据库文件的基本名称；FreeSWITCH DSN 层会自动追加 `.db` 后缀。 | 字符串 | `cdr` |
+| `db-table` | 数据库中接收 CDR 记录的表名。 | 字符串 | `cdr` |
+| `legs` | 记录哪些呼叫腿。 | `a`、`b` 或 `ab` | `a` |
+| `default-template` | 生成各条 INSERT 语句 VALUES 子句的模板名称。 | 任意命名模板 | `default` |
+| `debug` | 每次 CDR 事件都以 INFO 级别记录完整通道变量。 | `true`、`false` | `false` |
+
+### 默认表结构 {#default-table-schema}
+
+当启动时指定的表尚不存在，模块会使用以下结构创建：
+
+```sql
+CREATE TABLE cdr (
+    caller_id_name   VARCHAR,
+    caller_id_number VARCHAR,
+    destination_number VARCHAR,
+    context          VARCHAR,
+    start_stamp      DATETIME,
+    answer_stamp     DATETIME,
+    end_stamp        DATETIME,
+    duration         INTEGER,
+    billsec          INTEGER,
+    hangup_cause     VARCHAR,
+    uuid             VARCHAR,
+    bleg_uuid        VARCHAR,
+    account_code     VARCHAR
+);
+```
+
+其中的表名 `cdr` 会被 `db-table` 的值替代。模块在挂机时执行 `INSERT INTO <db-table> VALUES (...)`，其 VALUES 子句通过展开当前模板得到。模板中的列顺序必须与表结构顺序相同，否则插入会失败。
+
+注意：自动创建的表最后一列名为 `account_code`（带下划线），而编译内置默认模板引用的通道变量为 `${accountcode}`（不带下划线）。二者表示相同的呼叫数据，差异只在于表列名与通道变量名。
+
+### 模板 {#templates}
+
+`mod_cdr_sqlite` 的模板同样使用 `${variable_name}` 展开语法，但结果作为 SQL INSERT 的 VALUES 子句，而不是 CSV 文本行。模板中的数值字段（`duration`、`billsec`）不应加引号；字符串字段应加引号。
+
+编译内置的 `default` 模板：
+
+```
+"${caller_id_name}","${caller_id_number}","${destination_number}","${context}",
+"${start_stamp}","${answer_stamp}","${end_stamp}",${duration},${billsec},
+"${hangup_cause}","${uuid}","${bleg_uuid}","${accountcode}"
+```
+
+自定义模板在 `<templates>` 块中定义，再通过 `default-template` 引用名称：
+
+```xml
+<configuration name="cdr_sqlite.conf" description="SQLite CDR">
+  <settings>
+    <param name="db-name" value="freeswitch_cdr"/>
+    <param name="db-table" value="cdr"/>
+    <param name="legs" value="ab"/>
+    <param name="default-template" value="example"/>
+  </settings>
+  <templates>
+    <template name="example">"${caller_id_name}","${caller_id_number}","${destination_number}","${context}","${start_stamp}","${answer_stamp}","${end_stamp}",${duration},${billsec},"${hangup_cause}","${uuid}","${bleg_uuid}","${accountcode}"</template>
+  </templates>
+</configuration>
+```
+
+---
+
+## 模块默认加载状态 {#module-load-status}
+
+| 模块 | vanilla 配置中默认加载 |
+|---|---|
+| `mod_cdr_csv` | 是 |
+| `mod_xml_cdr` | 否 |
+| `mod_cdr_sqlite` | 否 |
+
+要启用默认未加载的模块，在 `conf/autoload_configs/modules.conf.xml` 中取消注释或添加对应 `<load module="..."/>`，再重新加载模块或重启 FreeSWITCH。多个 CDR 模块可以同时运行；每个模块独立执行自己的 `on_reporting` 回调。
+
+---
+
+## 其他 CDR 后端 {#other-cdr-backends}
+
+除前面三种模块之外，FreeSWITCH 还包含面向其他存储和交付机制的 CDR 后端，详情见第 9 部分模块参考：
+
+- [`mod_json_cdr`](/module-reference/event-handlers/mod_json_cdr)：通过 HTTP 将各条 CDR 作为 JSON 文档发送。
+- [`mod_format_cdr`](/module-reference/event-handlers/mod_format_cdr)：按可配置格式（JSON 或 XML）输出 CDR，并支持 HTTP POST。
+- [`mod_odbc_cdr`](/module-reference/event-handlers/mod_odbc_cdr)：通过 ODBC 向数据库插入 CDR 记录。
+- [`mod_cdr_pg_csv`](/module-reference/event-handlers/mod_cdr_pg_csv)：直接将 CDR 写入 PostgreSQL。

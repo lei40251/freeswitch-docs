@@ -1,0 +1,155 @@
+---
+sidebar_position: 1
+id: mod_dialplan_asterisk
+slug: /module-reference/dialplans/mod_dialplan_asterisk
+title: "mod_dialplan_asterisk——Asterisk extensions.conf 拨号计划"
+description: "使用 mod_dialplan_asterisk 解析 Asterisk extensions.conf 并映射拨号计划应用。"
+sidebar_label: "mod_dialplan_asterisk"
+---
+# mod_dialplan_asterisk——Asterisk extensions.conf 拨号计划 {#mod_dialplan_asterisk-—-asterisk-extensionsconf-dialplan}
+
+`mod_dialplan_asterisk` 是位于 `src/mod/dialplans/` 的拨号计划解析器。它读取使用 Asterisk 拨号计划语法的纯文本 `extensions.conf` 文件，并在呼叫时将匹配条目转换为 FreeSWITCH 应用调用。无需掌握 XML 拨号计划即可使用。
+
+从现有 Asterisk 部署迁移到 FreeSWITCH、又不希望一次性重写整个拨号计划时，可以使用此模块。对于已习惯 Asterisk `exten =>` 写法、希望保留现有风格并使用 FreeSWITCH 媒体能力的团队也很适合。
+
+<SignalWireCallout
+  title="两种语法，一套托管引擎"
+  href="https://signalwire.com/docs/compatibility-api"
+  page="mod-dialplan-asterisk"
+  linkText="查看兼容 API">
+
+如果团队使用不止一种语法路由呼叫，SignalWire 的托管平台支持两种：基于 JSON/YAML 的呼叫控制语言 SWML，以及兼容 Twilio 标记语言的 cXML。两者运行在同一引擎上。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 中的模块名称为 `mod_dialplan_asterisk`。它包含在默认的加载集合中：原始文档给出的 `/Users/brian/workdir/freeswitch-docs/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml` 文件包含未注释的 `<load module="mod_dialplan_asterisk"/>` 条目，因此标准构建中会自动加载。
+
+不需要特殊构建标志或外部库。模块只链接 `libfreeswitch`。
+
+## 选择拨号计划 {#selecting-the-dialplan}
+
+FreeSWITCH 从入站 SIP 配置实例或网关的 `dialplan` 属性（或参数），以及通道上的上下文属性选择拨号计划引擎。若要使用 Asterisk 解析器，而不是默认的 XML 拨号计划，请在配置通道或配置实例的位置将 `dialplan` 设为 `asterisk`。
+
+示例——内联发起呼叫：
+
+```
+originate sofia/internal/1000@pbx.example.com &park() asterisk default
+```
+
+示例——SIP 配置实例片段（`sofia.conf.xml`）：
+
+```xml
+<param name="dialplan" value="asterisk"/>
+<param name="context" value="default"/>
+```
+
+`dialplan` 设为 `asterisk` 后，FreeSWITCH 将控制权交给 `mod_dialplan_asterisk`；它打开 `extensions.conf`（见下文），查找与呼叫者上下文匹配的节，并根据所有匹配的 `exten`（或字段匹配）行构建扩展。
+
+## 配置：`extensions.conf` {#configuration-extensionsconf}
+
+没有 `mod_dialplan_asterisk.conf.xml`。模块读取独立的纯文本文件 `extensions.conf`，位于 FreeSWITCH 配置目录（也就是搜索其他配置文件的目录）。可以通过拨号计划 `arg` 指定自定义路径；不提供时默认读取 `extensions.conf`。
+
+文件使用标准 Asterisk INI 风格语法：方括号中的节标题定义上下文，每个节中的条目与呼叫匹配。
+
+### 条目格式 {#entry-formats}
+
+模块可以识别上下文中的三种行格式：
+
+| 格式 | 匹配的字段 | 说明 |
+|---|---|---|
+| `exten => pattern,priority,App(args)` | `destination_number`（DNIS） | 标准 Asterisk exten 关键字。接受优先级字段但会忽略；该上下文中所有匹配的行依次运行。 |
+| `caller_id_number => value,priority,App(args)` | 按名称匹配主叫资料字段（`caller_id_number`） | `exten` 可替换为主叫资料中的任意字段名。 |
+| `${variable} => value,priority,App(args)` | 展开后的通道变量 | 包含 `$` 的表达式在比较前先展开。 |
+
+### 模式语法 {#pattern-syntax}
+
+| 前缀 | 含义 |
+|---|---|
+| （字面量） | 与字段进行精确字符串匹配 |
+| `_` | Asterisk 风格模式：`X`、`Z`、`N`、`[range]`、`.` 占位符；匹配时由 `switch_ast2regex` 转换为 PCRE 正则表达式 |
+| `~` | 原生 PCRE 正则表达式，无需转换，直接使用 |
+
+可以通过 `/` 分隔符为 `exten` 模式附加 `cid` 守卫：
+
+```
+exten => 2137991400/1000,n,Goto(default|music)
+```
+
+只有主叫号码为 `2137991400` 时才匹配目标 `1000`。`/` 前面的部分与 `caller_id_number` 比较；后面的部分是目标号码模式。
+
+### `extensions.conf` 示例 {#example-extensionsconf}
+
+下面是该模块在 `conf/` 目录中随附的文件：
+
+```ini
+[default]
+
+; Standard exten matching destination number
+exten => music,n,Dial(SIP/1234@conference.freeswitch.org|120)
+
+; Asterisk-style pattern (converted to PCRE internally)
+exten => _1XXXXX,n,set(cool=${EXTEN})
+exten => _1XXXXX,n,set(myvar=true)
+exten => _1XXXXX,n,Goto(default|music)
+
+; Exact destination with CID guard
+exten => 2137991400/1000,n,Goto(default|music)
+
+; Raw PCRE regex (prefix ~)
+exten => ~^(18(0{2}|8{2}|7{2}|6{2})\d{7})$,n,enum($1)
+exten => ~^(18(0{2}|8{2}|7{2}|6{2})\d{7})$,n,bridge(${enum_auto_route})
+
+; Match on caller_id_number field instead of destination
+caller_id_number => 2137991400,n,Goto(default|music)
+
+; Match on an expanded channel variable
+${sip_from_user} => bill,n,Goto(default|music)
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+`mod_dialplan_asterisk` 注册三个兼容应用，用来模拟 Asterisk 中的对应应用。`extensions.conf` 使用的其他应用名称，均按名称直接交给 FreeSWITCH 自身的应用注册表。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `Dial` | 使用 Asterisk 拨号字符串格式桥接 SIP 或 IAX2 端点 | `endpoint\|timeout_seconds` |
+| `Goto` | 将会话转接到某个上下文的其他扩展 | `context\|extension` |
+| `AvoidingDeadlock` | 空操作存根：仅用于避免引用该 Asterisk 应用时崩溃 | （无） |
+
+### `Dial`
+
+接收 Asterisk 风格的拨号字符串。以 `&` 分隔的目标（`SIP/100&SIP/101`）会转换为 FreeSWITCH 以逗号分隔的桥接字符串。可选的第二字段在桥接前设置 `call_timeout` 通道变量。
+
+```
+exten => 1000,n,Dial(SIP/1000@10.0.0.1|30)
+```
+
+`SIP/` 前缀由兼容端点外观处理：它在前面加上 `sip_profile` 通道变量的值（默认 `default`），然后通过 `mod_sofia` 路由。`IAX2/` 前缀由相似的兼容外观处理，通过 `iax` 端点（即 `mod_iax2`）路由。
+
+### `Goto`
+
+使用 `switch_ivr_session_transfer`，通过 `asterisk` 拨号计划将当前会话转接到新的上下文和扩展。
+
+```
+exten => _1XXXXX,n,Goto(default|music)
+```
+
+### `AvoidingDeadlock`
+
+这是一个用于接收 Asterisk 死锁规避机制引用的存根。它会记录五次警告（每次之间让出 100 毫秒），随后记录该应用不应被调用的提示。该应用仅用于占位，实际拨号计划不应将呼叫路由到这里。
+
+## 通道变量 {#channel-variables}
+
+该模块为每个匹配的扩展设置以下通道变量，以模拟 Asterisk 常见的环境变量：
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `EXTEN` | 写入 | 匹配时主叫资料中的 `destination_number` |
+| `CHANNEL` | 写入 | 通道名称（`switch_channel_get_name`） |
+| `UNIQUEID` | 写入 | 会话 UUID（`switch_core_session_get_uuid`） |
+| `call_timeout` | 写入 | `Dial` 应用将拨号字符串中的超时值写入该变量 |
+| `sip_profile` | 读取 | `SIP` 兼容端点读取它以选择出站呼叫腿的 Sofia 配置实例 |
+
+**源码：** `src/mod/dialplans/mod_dialplan_asterisk`

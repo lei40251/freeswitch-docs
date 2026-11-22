@@ -1,0 +1,139 @@
+---
+sidebar_position: 2
+id: events-catalog
+slug: /programming/events-catalog
+title: "第 45 章：事件目录"
+description: "FreeSWITCH 事件参考：触发时机、主要头字段以及内置事件与 CUSTOM 子类的区别。"
+sidebar_label: "45. 事件目录"
+---
+
+# 第 45 章：事件目录 {#chapter-45-events-catalog}
+
+FreeSWITCH 持续发布*事件*流，用来描述交换机内部发生的操作：创建和销毁通道、执行应用程序、开始和停止媒体、接收注册请求，以及系统自身的启动与关闭。任何消费者——事件套接字、脚本语言或已加载的模块——都可以订阅这些事件并作出响应。本目录与[通道变量目录](/reference/channel-variables)互为补充：后者介绍按通道*读取*的数据，而本章介绍应用程序需要*消费*的事件。
+
+每条事件都有名称及一组头字段（字符串形式的名称/值键值对）。本章事件分为两类：
+
+- **内置事件（first-class events）**：在 `switch_types.h` 的 `switch_event_types_t` 枚举中有专门条目，并与 `switch_event.c` 的 `EVENT_NAMES[]` 表中某个字符串相对应。可以直接按名称订阅，例如 `CHANNEL_ANSWER`。
+- **CUSTOM 子类**：属于 `SWITCH_EVENT_CUSTOM` 事件，并携带 `Event-Subclass` 头字段，供模块发布核心尚未定义的事件。订阅时使用 `CUSTOM <subclass>`，例如 `CUSTOM sofia::register`。下文出现的子类字符串在 `mod_sofia.h` 中定义，并在模块加载时保留。
+
+与通道相关的事件会带有由 `switch_channel.c` 中的 `switch_channel_event_set_data()` 添加的通用通道头字段，其中最重要的是 `Unique-ID`（通道 UUID），此外还包括 `Channel-State`、`Channel-Call-State`、`Answer-State`、`Caller-Caller-ID-Number`、`Caller-Destination-Number`，以及完整的 `Caller-*` 和 `variable_*` 字段。下表重点列出各事件的**专有或特别重要的**头字段，而不重复通用集合。
+
+事件标识符已经与 `src/include/switch_types.h`（`SWITCH_EVENT_*` 枚举，第 2084–2177 行）和 `src/switch_event.c`（`EVENT_NAMES[]` 表，第 137 行起）核对。
+
+<SignalWireCallout
+  title="事件更精简，类型已定义"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="events-catalog"
+  linkText="查看 RELAY 实时 SDK">
+
+SignalWire 的托管平台通过 RELAY（实时 WebSocket API）和 Webhook 发布呼叫、消息与传真事件；事件按资源定义类型并提供文档。应用程序只需要处理自己订阅的事件目录。
+
+</SignalWireCallout>
+
+## 通道生命周期 {#channel-lifecycle}
+
+以下内置事件追踪呼叫腿从创建到销毁的过程。它们都会带有通用通道头字段（`Unique-ID` 及 `Caller-*` 字段）；表格列出每种事件最有用的特定字段。
+
+| 事件 | 触发时机 | 重要头字段 |
+| --- | --- | --- |
+| `CHANNEL_CREATE` | 创建新的通道对象，尚未应答。 | `Unique-ID`, `Channel-State`, `Call-Direction` |
+| `CHANNEL_OUTGOING` | 创建了出站通道（呼叫发起过程中的 B 腿）。 | `Unique-ID`, `Caller-Destination-Number` |
+| `CHANNEL_ORIGINATE` | 通过 originate API 或应用发起通道。 | `Unique-ID`, `Caller-Destination-Number` |
+| `CHANNEL_PROGRESS` | 通道开始振铃（180 Ringing，无媒体）。 | `Unique-ID`, `Channel-State` |
+| `CHANNEL_PROGRESS_MEDIA` | 通道开始传输早期媒体（183 Session Progress）。 | `Unique-ID`, `Channel-State` |
+| `CHANNEL_ANSWER` | 通道已应答。 | `Unique-ID`, `Answer-State` |
+| `CHANNEL_EXECUTE` | 某个拨号计划应用开始在通道上执行。 | `Application`, `Application-Data`, `Application-UUID` |
+| `CHANNEL_EXECUTE_COMPLETE` | 某个拨号计划应用执行完成。 | `Application`, `Application-Data`, `Application-Response` |
+| `CHANNEL_BRIDGE` | 通道与另一个通道桥接。 | `Bridge-A-Unique-ID`, `Bridge-B-Unique-ID`, `Other-Leg-Unique-ID` |
+| `CHANNEL_UNBRIDGE` | 通道与对端解除桥接。 | `Bridge-A-Unique-ID`, `Bridge-B-Unique-ID` |
+| `CHANNEL_PARK` | 通道进入驻留状态。 | `Unique-ID`, `Channel-State` |
+| `CHANNEL_UNPARK` | 通道退出驻留状态。 | `Unique-ID`, `Channel-State` |
+| `CHANNEL_HOLD` | 通道进入保持状态。 | `Unique-ID` |
+| `CHANNEL_UNHOLD` | 通道解除保持状态。 | `Unique-ID` |
+| `CHANNEL_STATE` | 通道内部状态变化（`CS_NEW`、`CS_ROUTING`、`CS_EXECUTE` 等）。 | `Channel-State`, `Channel-State-Number`, `Channel-Call-State` |
+| `CHANNEL_CALLSTATE` | 通道呼叫状态变化（`DOWN`、`RINGING`、`ACTIVE`、`HELD` 等）。 | `Channel-Call-State`, `Original-Channel-Call-State`, `Channel-Call-UUID` |
+| `CHANNEL_HANGUP` | 通道开始挂机处理。 | `Hangup-Cause`, `Unique-ID` |
+| `CHANNEL_HANGUP_COMPLETE` | 挂机处理全部完成，媒体及计时数据已最终确定。 | `Hangup-Cause`, `Unique-ID` |
+| `CHANNEL_DESTROY` | 通道对象正在销毁和释放。 | `Unique-ID`, `Hangup-Cause` |
+
+`CHANNEL_STATE` 中的 `Channel-State` 反映底层状态机状态，而 `CHANNEL_CALLSTATE` 中的 `Channel-Call-State` 反映多数应用更关注的上层呼叫状态。对于一般呼叫追踪，重点关注 `CHANNEL_ANSWER`、`CHANNEL_BRIDGE` 和 `CHANNEL_HANGUP_COMPLETE`。用于 CDR 处理时，应优先选 `CHANNEL_HANGUP_COMPLETE` 而非 `CHANNEL_HANGUP`，因为前者触发时所有计时器和计数器均已确定。
+
+## DTMF
+
+| 事件 | 触发时机 | 重要头字段 |
+| --- | --- | --- |
+| `DTMF` | 在通道上接收或发送 DTMF 按键。 | `DTMF-Digit`, `DTMF-Duration`, `DTMF-Source` |
+
+`DTMF-Source` 指明按键来源，例如 `RTP`、`INBAND` 或 `APP`。该事件也包含通用通道头字段，可通过 `Unique-ID` 判断按键属于哪条呼叫腿。
+
+## 媒体与录音 {#media-and-recording}
+
+这些内置事件表示录音与播放的开始、停止，以及检测到的音频状态。它们同样包含通用通道头字段。
+
+| 事件 | 触发时机 | 重要头字段 |
+| --- | --- | --- |
+| `RECORD_START` | 通道开始录音。 | `Record-File-Path`, `Unique-ID` |
+| `RECORD_STOP` | 通道停止录音。 | `Record-File-Path`, `Record-Completion-Cause`, `Unique-ID` |
+| `PLAYBACK_START` | 通道开始播放文件。 | `Playback-File-Path`, `Unique-ID` |
+| `PLAYBACK_STOP` | 通道播放停止（正常完成或被中断）。 | `Playback-File-Path`, `Playback-Status`, `Unique-ID` |
+| `DETECTED_TONE` | 检测到通道正在监听的指定音调。 | `Detected-Tone`, `Unique-ID` |
+| `TALK` | 在通道中检测到语音活动。 | `Unique-ID` |
+| `NOTALK` | 通道语音活动停止（静音）。 | `Unique-ID` |
+
+当播放正常结束时，`Playback-Status` 为 `done`；被中断（例如主叫按键）时为 `break`。录音因特定原因结束时，`RECORD_STOP` 中会携带 `Record-Completion-Cause`。`TALK` 和 `NOTALK` 由 RTP 层的语音活动检测器生成，需要在通道上启用 VAD。
+
+## 系统与任务 {#system-and-jobs}
+
+以下内置事件描述 FreeSWITCH 实例本身，而不是某条特定通道。
+
+| 事件 | 触发时机 | 重要头字段 |
+| --- | --- | --- |
+| `STARTUP` | 系统完成启动且已就绪。 | `Event-Info`（`System Ready`）、`Up-Time` |
+| `SHUTDOWN` | 系统正在关闭。 | `Event-Info` |
+| `HEARTBEAT` | 系统运行期间定期发出（大约每 20 秒）。 | `Event-Info`, `Up-Time`, `FreeSWITCH-Version`, `Session-Count`, `Session-Per-Sec`, `Idle-CPU` |
+| `BACKGROUND_JOB` | `bgapi` 后台任务完成，API 执行结果放在正文中。 | `Job-UUID`, `Job-Command`, `Job-Command-Arg` |
+| `API` | 某个 API 命令已执行。 | `API-Command`, `API-Command-Argument` |
+| `MODULE_LOAD` | 模块（或模块的某个接口）已加载。 | `type`, `name`, `key`, `filename` |
+| `MODULE_UNLOAD` | 模块已卸载。 | `type`, `name`, `key` |
+| `RELOADXML` | XML 注册表已重新加载。 | — |
+| `TRAP` | 因系统级条件触发内部陷阱事件（如主机名变化、网络地址变化、网络故障）。 | `condition`，以及条件相关的特定字段 |
+
+`BACKGROUND_JOB` 是入站事件套接字 `bgapi` 工作流的关键事件：提交命令后立即收到 `Job-UUID`，稍后收到具有相同 `Job-UUID` 的 `BACKGROUND_JOB` 事件，命令结果位于正文中。`MODULE_LOAD` 会针对模块注册的每个接口触发，因此一个模块可能产生多条 `MODULE_LOAD` 事件，它们的 `type` 分别为 `endpoint`、`codec`、`dialplan`、`application` 等。
+
+## 注册与在线状态 {#registration-and-presence}
+
+注册及在线状态事件分为两类：由 `mod_sofia` 发布的 **CUSTOM 子类**，以及由核心定义的**内置**在线状态和消息事件。订阅 `mod_sofia` 的事件时，使用 `CUSTOM <subclass>`；这些子类字符串定义在 `src/mod/endpoints/mod_sofia/mod_sofia.h`，由 `sofia_reg.c` 触发。
+
+### mod_sofia 的 CUSTOM 子类 {#mod_sofia-custom-subclasses}
+
+| 事件（子类） | 触发时机 | 重要头字段 |
+| --- | --- | --- |
+| `sofia::register` | SIP 端点成功注册。 | `profile-name`, `from-user`, `from-host`, `contact`, `call-id`, `expires`, `network-ip`, `user-agent` |
+| `sofia::unregister` | 端点发送 `Expires: 0` 的 REGISTER 请求注销。 | `profile-name`, `from-user`, `from-host`, `contact`, `call-id` |
+| `sofia::expire` | 注册过期，系统清除该注册记录。 | `profile-name`, `user`, `host`, `contact`, `call-id`, `expires`, `network-ip` |
+| `sofia::gateway_state` | 网关注册状态或 Ping 状态改变。 | `Gateway`, `State`, `Ping-Status`, `Register-Network-IP` |
+
+`sofia::register` 还会合并注册过程中收集的变量。如果对应已知 Contact 的再次注册（而非新注册），还会将 `update-reg` 设置为 `true`。对于 `sofia::gateway_state`，`State` 表示网关生命周期状态，例如 `REGED`、`UNREGED` 或 `FAIL_WAIT`；`Ping-Status` 反映 OPTIONS 保活检测情况。
+
+### 内置在线状态和消息事件 {#first-class-presence-and-messaging-events}
+
+| 事件 | 触发时机 | 重要头字段 |
+| --- | --- | --- |
+| `PRESENCE_IN` | 发布用户收到的在线状态更新。 | `proto`, `login`, `from`, `status`, `rpid`, `event_type` |
+| `PRESENCE_OUT` | 发出在线状态更新。 | `proto`, `from`, `status` |
+| `MESSAGE` | 基础聊天或即时消息经过交换机。 | `proto`, `from`, `to` |
+
+`PRESENCE_IN` 和 `PRESENCE_OUT` 是与具体传输方式无关的在线状态事件：`mod_sofia` 既会根据注册及 SUBSCRIBE/NOTIFY 流量生成这些事件，也会消费事件以驱动 BLF / dialog NOTIFY。`proto` 用于识别来源协议或聊天插件；SIP 通常使用 `sip`。`MESSAGE` 则是跨协议聊天基础设施使用的通用即时消息事件。
+
+## 速查：内置事件与 CUSTOM 事件 {#quick-reference-first-class-vs-custom}
+
+| 名称 | 类型 | 来源 |
+| --- | --- | --- |
+| 上述全部 `CHANNEL_*` | 内置事件 | `switch_types.h` 枚举 / `EVENT_NAMES[]` |
+| `DTMF` | 内置事件 | `switch_types.h` 枚举 / `EVENT_NAMES[]` |
+| `RECORD_*`, `PLAYBACK_*`, `DETECTED_TONE`, `TALK`, `NOTALK` | 内置事件 | `switch_types.h` 枚举 / `EVENT_NAMES[]` |
+| `STARTUP`, `SHUTDOWN`, `HEARTBEAT`, `BACKGROUND_JOB`, `API`, `MODULE_LOAD`, `MODULE_UNLOAD`, `RELOADXML`, `TRAP` | 内置事件 | `switch_types.h` 枚举 / `EVENT_NAMES[]` |
+| `PRESENCE_IN`, `PRESENCE_OUT`, `MESSAGE` | 内置事件 | `switch_types.h` 枚举 / `EVENT_NAMES[]` |
+| `sofia::register`, `sofia::unregister`, `sofia::expire`, `sofia::gateway_state` | CUSTOM 子类 | `mod_sofia.h` / `sofia_reg.c` |
+
+如需在本机查看任何事件的实际头字段，可以在 `fs_cli` 中使用 `/event plain <NAME>`（或 `/event plain CUSTOM <subclass>`）进行订阅，再触发相应条件。事件产生时将打印完整的头字段集合。

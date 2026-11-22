@@ -1,0 +1,141 @@
+---
+sidebar_position: 3
+id: mod_cdr_pg_csv
+slug: /module-reference/event-handlers/mod_cdr_pg_csv
+title: "mod_cdr_pg_csv——PostgreSQL CDR（CSV 模式）"
+description: "配置 PostgreSQL CDR 模块、列映射和数据库故障后的文件暂存。"
+sidebar_label: "mod_cdr_pg_csv"
+---
+# mod_cdr_pg_csv——PostgreSQL CDR（CSV 模式） {#mod_cdr_pg_csv-—-postgresql-cdr-csv-schema}
+
+`mod_cdr_pg_csv` 是事件处理模块（位于 `src/mod/event_handlers`），在每次呼叫结束时将呼叫详细记录直接写入 PostgreSQL 数据库表。列集合完全可配置：配置文件中的 `<schema>` 块将 FreeSWITCH 通道变量映射到数据库列，因此无需重新编译，就可以适配任意表结构。
+
+如果需要将 CDR 直接存入关系型数据库，以供报表、计费或合规使用，而又不想增加中间件层，可以选择此模块。当数据库故障时，它会自动把记录暂存到本地平面文件（CSV 值或完整 SQL 语句），避免记录在无提示的情况下丢失。
+
+## 加载模块 {#loading-the-module}
+
+默认的 `autoload_configs/modules.conf.xml` **不包含**该模块，需要手动添加。在 `modules.conf.xml` 的 `event_handlers` 组中加入以下行，然后重新加载或重启 FreeSWITCH：
+
+```xml
+<load module="mod_cdr_pg_csv"/>
+```
+
+模块链接到 `libpq`（PostgreSQL C 客户端库）。构建之前请确保安装 PostgreSQL 开发包（Debian/Ubuntu 为 `libpq-dev`，RHEL/CentOS 为 `postgresql-devel`）。
+
+## 配置：`cdr_pg_csv.conf.xml` {#configuration-cdr_pg_csvconfxml}
+
+`mod_cdr_pg_csv` 在加载及重新加载时读取 `cdr_pg_csv.conf`。文件包含连接和行为参数的 `<settings>` 块，以及定义列映射的 `<schema>` 块。
+
+### 设置参数 {#settings-parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `db-info` | 原样传给 `PQconnectdb()` 的 PostgreSQL 连接字符串 | 任意 libpq 连接字符串（key=value 对） | `dbname=cdr` |
+| `db-table` | 要插入记录的 PostgreSQL 表名 | 任意有效表名 | `cdr` |
+| `legs` | 要记录的呼叫腿 | `a`、`b`、`ab` | `a` |
+| `spool-dir` | 数据库插入失败时的本地暂存目录 | 可写目录路径 | `$${log_dir}/cdr-pg-csv` |
+| `spool-format` | 暂存记录的文件格式 | `csv`（仅值）或 `sql`（完整 INSERT 语句） | `csv` |
+| `rotate-on-hup` | 收到 SIGHUP 时，是否使用时间戳重命名暂存文件，而不是仅重新打开文件 | `true` / `false` | `false` |
+| `debug` | 每次呼叫都在 `INFO` 级别输出完整通道变量，在 `NOTICE` 级别输出生成的 SQL INSERT | `true` / `false` | `false` |
+
+### 模式字段 {#schema-fields}
+
+`<schema>` 中的每个 `<field>` 元素将一个 FreeSWITCH 通道变量映射到一个数据库列。三个可选属性控制引号与空值处理：
+
+| 属性 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|--------|---------|
+| `var` | 要读取的 FreeSWITCH 通道变量名（必需） | 任意通道变量名 | — |
+| `column` | 要写入的 PostgreSQL 列名；省略时默认使用 `var` | 任意有效列名 | 与 `var` 相同 |
+| `quote` | 在 INSERT 语句中用单引号包裹字段值 | `true` / `false` | `true` |
+| `not-null` | 变量未设置时插入空字符串，而不是 SQL `NULL` | `true` / `false` | `false` |
+
+### 配置示例 {#example-configuration}
+
+```xml
+<configuration name="cdr_pg_csv.conf" description="CDR PG CSV Format">
+  <settings>
+    <param name="db-info" value="host=localhost dbname=cdr connect_timeout=10" />
+    <param name="legs" value="a"/>
+    <param name="spool-format" value="csv"/>
+    <param name="rotate-on-hup" value="true"/>
+  </settings>
+  <schema>
+    <field var="local_ip_v4"/>
+    <field var="caller_id_name"/>
+    <field var="caller_id_number"/>
+    <field var="destination_number"/>
+    <field var="context"/>
+    <field var="start_stamp"/>
+    <field var="answer_stamp"/>
+    <field var="end_stamp"/>
+    <field var="duration" quote="false"/>
+    <field var="billsec" quote="false"/>
+    <field var="hangup_cause"/>
+    <field var="uuid"/>
+    <field var="bleg_uuid"/>
+    <field var="accountcode"/>
+    <field var="read_codec"/>
+    <field var="write_codec"/>
+  </schema>
+</configuration>
+```
+
+## 呼叫腿与记录触发时机 {#call-legs-and-recording-trigger}
+
+模块通过 `on_reporting` 状态处理器工作；通道在挂机后进入报告状态时，每个会话会触发一次该处理器。`legs` 参数按以下方式筛选呼叫腿：
+
+- `a`：只记录发起方（A）呼叫腿；具有 originator caller profile 的会话会被跳过。
+- `b`：只记录 B 呼叫腿（由系统发起的会话）；具有 originatee caller profile 的会话会被跳过。
+- `ab`：同时记录两侧呼叫腿。
+
+## 数据库模式 {#database-schema}
+
+随附的 `scripts/create.sql` 定义了一个 PostgreSQL 示例表，与默认 `<schema>` 块相匹配：
+
+```sql
+create table cdr (
+    id                        serial primary key,
+    local_ip_v4               inet not null,
+    caller_id_name            varchar,
+    caller_id_number          varchar,
+    destination_number        varchar not null,
+    context                   varchar not null,
+    start_stamp               timestamp with time zone not null,
+    answer_stamp              timestamp with time zone,
+    end_stamp                 timestamp with time zone not null,
+    duration                  int not null,
+    billsec                   int not null,
+    hangup_cause              varchar not null,
+    uuid                      uuid not null,
+    bleg_uuid                 uuid,
+    accountcode               varchar,
+    read_codec                varchar,
+    write_codec               varchar,
+    sip_hangup_disposition    varchar,
+    ani                       varchar
+);
+```
+
+默认模式将 `duration` 和 `billsec` 配置为 `quote="false"`，因此会以不带引号的整数形式插入。时间戳列（`start_stamp`、`answer_stamp`、`end_stamp`）以带引号的字符串形式插入，依赖 PostgreSQL 将文本隐式转换为 `timestamp with time zone`。
+
+## 磁盘暂存回退 {#disk-spool-fallback}
+
+当数据库无法建立连接或 INSERT 失败时，记录会写入 `spool-dir` 下的平面文件：
+
+- `spool-format csv`：将原始逗号分隔值字符串写入 `cdr-spool.csv`。
+- `spool-format sql`：将完整的 `INSERT INTO ...` 语句写入 `cdr-spool.sql`。
+
+每个暂存文件持续增长，直至达到平台 `UINT_MAX` 字节限制，此时自动轮转。收到 SIGHUP 时，如果 `rotate-on-hup` 为 `true`，所有打开的暂存文件会重命名为 `<filename>.<YYYY-MM-DD-HH-MM-SS>`，随后打开新文件；数据库连接也会关闭，并在下次呼叫时重新建立。
+
+## 依赖项 {#dependencies}
+
+`mod_cdr_pg_csv` 依赖 PostgreSQL 客户端库 `libpq`。启用模块并构建 FreeSWITCH 前，请安装发行版对应的 PostgreSQL 开发包：
+
+- Debian/Ubuntu：`apt-get install libpq-dev`
+- RHEL/CentOS/Rocky：`dnf install postgresql-devel`
+
+## 相关文档 {#see-also}
+
+- [第 27 章：呼叫详细记录](../../integration/call-detail-records.mdx)
+
+**源码：** `src/mod/event_handlers/mod_cdr_pg_csv`、`conf/vanilla/autoload_configs/cdr_pg_csv.conf.xml`

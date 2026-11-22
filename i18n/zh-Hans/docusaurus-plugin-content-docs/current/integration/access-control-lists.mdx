@@ -1,0 +1,275 @@
+---
+sidebar_position: 5
+id: access-control-lists
+slug: /integration/acls
+title: "第 29 章：访问控制列表"
+description: "定义基于 CIDR、主机掩码或域名匹配的 IP 允许与拒绝规则，可用于 SIP Profile、事件套接字等。"
+sidebar_label: "29. 访问控制列表"
+---
+
+# 第 29 章：访问控制列表 {#chapter-29-access-control-lists}
+
+FreeSWITCH 中的访问控制列表（ACL）是一组有名称的网络规则，按照指定顺序检查某个 IP 地址是否符合允许或拒绝条件。规则可以通过 CIDR 前缀、主机地址与掩码组合，或用户目录中的域成员关系进行匹配；最终结果供 SIP Profile、事件套接字和其他子系统决定是否接受入站连接。
+
+<SignalWireCallout
+  title="不请自来的流量在到达前就被阻挡"
+  href="https://signalwire.com/docs/platform/voice/sip/trunking"
+  page="acl"
+  linkText="查看托管 SIP 服务">
+
+公开的 SIP 端口往往会不断遭到扫描；自建部署需要依靠 ACL 应对这些流量。使用 SignalWire 托管服务时，平台边缘负责吸收这些流量，你只需配置哪些端点与运营商可以访问自己的资源。
+
+</SignalWireCallout>
+
+## 配置文件 {#configuration-file}
+
+ACL 定义在 `conf/autoload_configs/acl.conf.xml` 中。FreeSWITCH 核心会在启动和显式重新加载时读取该文件。根元素为 `<configuration name="acl.conf">`，其中一个 `<network-lists>` 父元素包含一个或多个 `<list>` 子元素。
+
+```xml
+<configuration name="acl.conf" description="Network Lists">
+  <network-lists>
+
+    <list name="trusted-carriers" default="deny">
+      <node type="allow" cidr="203.0.113.0/24"/>
+      <node type="allow" cidr="198.51.100.5/32"/>
+    </list>
+
+    <list name="internal-phones" default="deny">
+      <node type="allow" cidr="10.10.0.0/16"/>
+    </list>
+
+  </network-lists>
+</configuration>
+```
+
+---
+
+## 列表结构 {#list-structure}
+
+每个 `<list>` 元素定义一个带名称的 ACL，其属性如下：
+
+| 属性 | 用途 | 可接受值 | 默认值 |
+|-----------|---------|--------|---------|
+| `name` | 列表的唯一标识，在引用 ACL 的位置使用此名称。 | 任意字符串 | 必填，无默认值 |
+| `default` | 候选 IP 未匹配任何节点时返回的判定结果。 | `allow`、`deny` | `allow` |
+
+一个列表可以包含零个或多个 `<node>` 子元素。如果列表中没有节点，所有 IP 地址的判定结果都取自 `default`。
+
+---
+
+## 节点属性 {#node-attributes}
+
+每个 `<node>` 元素表示一条规则。`type` 属性决定匹配该节点时的判定结果。匹配条件通过 `cidr`、同时指定的 `host` 和 `mask`，或者 `domain` 提供。每个节点必须且只能使用其中一种匹配形式。
+
+基于端口的过滤属性（`port`、`ports`、`port-min`、`port-max`）是可选的，并且可以与任意一种地址匹配条件结合使用。
+
+### 匹配属性 {#match-attributes}
+
+| 属性 | 用途 | 可接受值 | 说明 |
+|-----------|---------|--------|-------|
+| `type` | 节点命中时返回的判定结果。 | `allow`、`deny` | 省略时使用列表的 `default`。 |
+| `cidr` | CIDR 格式的 IPv4 或 IPv6 前缀，匹配前缀范围内的任意地址。 | 例如 `192.168.0.0/16`、`2001:db8::/32` | 不能与 `host` / `mask` 或 `domain` 同时使用。 |
+| `host` | 与 `mask` 组合，用于非 CIDR 形式的子网匹配。 | IPv4 地址字符串 | 必须同时指定 `mask`。 |
+| `mask` | 与 `host` 配套的子网掩码。 | IPv4 掩码字符串，例如 `255.255.255.0` | 必须同时指定 `host`。 |
+| `domain` | 用户目录域名。加载时读取该域内各用户 `<user>` 元素的 `cidr` 属性，展开为单独的 CIDR 条目。参见第 29.6 节。 | 域字符串，例如 `$${domain}` | 不能与 `cidr` 或 `host` / `mask` 同时使用。 |
+
+### 端口过滤属性 {#port-filter-attributes}
+
+| 属性 | 用途 | 可接受值 |
+|-----------|---------|--------|
+| `port` | 仅当来源端口等于此值时匹配。 | 整数端口号 |
+| `ports` | 仅当来源端口属于逗号分隔的列表时匹配。 | 例如 `5060,5061` |
+| `port-min` | 端口范围下限（包含）。 | 整数端口号 |
+| `port-max` | 端口范围上限（包含）。 | 整数端口号 |
+
+只有调用 ACL 检查的子系统传入非零端口时，端口过滤才会生效。Sofia SIP Profile 通过 `use-port-for-acl-check` 启用基于端口的 ACL 检查。
+
+**CIDR 节点示例：**
+
+```xml
+<node type="allow" cidr="10.0.0.0/8"/>
+<node type="deny"  cidr="10.99.0.0/24"/>
+```
+
+**主机/掩码节点示例：**
+
+```xml
+<node type="allow" host="192.168.1.0" mask="255.255.255.0"/>
+```
+
+**域节点示例：**
+
+```xml
+<node type="allow" domain="$${domain}"/>
+```
+
+---
+
+## 规则评估顺序与默认行为 {#evaluation-order-and-default-behavior}
+
+FreeSWITCH 按照文档中的节点顺序（从上到下）逐条检查。候选 IP 一旦匹配某个节点，就立即返回该节点的 `type`，不再检查后续节点。若没有节点匹配，则使用列表的 `default`。
+
+实际配置时，应把**更精确的规则放在更宽泛的规则前面**。例如，先设置 `/32` 拒绝规则、后设置 `/16` 允许规则，就能禁止某台主机通过后面的宽泛允许规则。
+
+**示例：允许一个子网，但排除某个地址**
+
+```xml
+<list name="lan" default="allow">
+  <node type="deny"  cidr="192.168.42.0/24"/>
+  <node type="allow" cidr="192.168.42.42/32"/>
+</list>
+```
+
+上例中，`192.168.42.42` 先匹配第一条 `deny`，因此被拒绝，第二条规则永远没有机会执行。如果希望单独允许该地址，需要把 `allow` 放到前面：
+
+```xml
+<list name="lan" default="allow">
+  <node type="allow" cidr="192.168.42.42/32"/>
+  <node type="deny"  cidr="192.168.42.0/24"/>
+</list>
+```
+
+这样，`192.168.42.42` 匹配第一条规则并被允许；`192.168.42.0/24` 中的其他地址匹配第二条规则并被拒绝；范围外的地址则落到默认的 `allow`。
+
+---
+
+## 自动创建的内置 ACL {#automatic-built-in-lists}
+
+FreeSWITCH 在启动时、处理 `acl.conf.xml` 之前，自动创建下列列表。任何支持 ACL 名称的配置均可以引用它们。如果在 `acl.conf.xml` 中定义了同名 `<list>`，则会替换自动生成的列表。
+
+### 自动列表参考 {#auto-list-reference}
+
+| 列表名 | 默认值 | 拒绝的前缀（显式 deny 节点） | 允许的前缀（显式 allow 节点） |
+|-----------|---------|--------------------------------------|----------------------------------------|
+| `loopback.auto` | `deny` | 无 | `127.0.0.0/8`, `::1/128` |
+| `rfc1918.auto` | `deny` | 无 | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fe80::/10` |
+| `rfc6598.auto` | `deny` | 无 | `100.64.0.0/10` |
+| `localnet.auto` | `deny` | 无 | 启动时检测到的主机本地子网（IPv4 地址及掩码） |
+| `nat.auto` | `deny` | 主机检测到的本地子网（拒绝） | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` |
+| `wan.auto` | `allow` | `0.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `fe80::/10` | 无 |
+| `wan_v4.auto` | `allow` | `0.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `::/0` | 无 |
+| `wan_v6.auto` | `allow` | `0.0.0.0/0`, `fe80::/10` | 无 |
+| `any_v4.auto` | `allow` | `::/0` | 无 |
+| `any_v6.auto` | `allow` | `0.0.0.0/0` | 无 |
+
+### 特定列表说明 {#notes-on-specific-lists}
+
+**`nat.auto`** 旨在识别 NAT，而不是用于访问控制。它首先为主机本地检测出的 IP 和子网添加拒绝规则，然后添加允许 RFC 1918 私有地址空间及 RFC 6598 共享地址空间（`100.64.0.0/10`）的规则。因为本地子网的拒绝条目优先于范围较大的允许条目，所以同时属于本地子网和 RFC 1918 的地址（常见情况）会被拒绝。Sofia SIP Profile 通过 `apply-nat-acl` 使用此列表判断对端是否位于 NAT 后面。
+
+**`localnet.auto`** 只包含一条允许规则，根据主机启动（或重新加载）时检测到的主要 IPv4 地址及子网掩码生成。对于多网卡主机，该列表只代表一个接口，因此不一定适用。
+
+**`wan_v4.auto`** 在 `wan.auto` 的基础上额外拒绝 `::/0`，从而阻止全部 IPv6 地址。
+
+**`wan_v6.auto`** 拒绝 `0.0.0.0/0`（全部 IPv4）以及 `fe80::/10`（IPv6 链路本地地址），适用于只应接受全局 IPv6 地址的场景。
+
+**`any_v4.auto`** 只拒绝 `::/0`，因而允许全部 IPv4 地址。
+
+**`any_v6.auto`** 只拒绝 `0.0.0.0/0`，因而允许全部 IPv6 地址。
+
+---
+
+## domains 列表 {#the-domains-list}
+
+vanilla `acl.conf.xml` 中的 `domains` 列表是一项约定配置，并非内置列表。它使用 `domain` 节点，在加载时从 FreeSWITCH 用户目录动态生成成员规则。
+
+```xml
+<list name="domains" default="deny">
+  <!-- domain= scans the directory to build the ACL -->
+  <node type="allow" domain="$${domain}"/>
+  <!-- use cidr= to allow additional IP ranges -->
+  <!-- <node type="allow" cidr="192.168.0.0/24"/> -->
+</list>
+```
+
+FreeSWITCH 加载此列表时，会打开指定域的用户目录并遍历每个用户。只要用户 `<user>` 元素带有 `cidr` 属性，就在列表中增加一条允许规则，保存对应的 CIDR 以及形如 `user@domain` 的身份令牌。没有 `cidr` 的用户不会加入。用户组中的用户处理方式相同。
+
+Sofia SIP Profile 通过 `apply-inbound-acl` 使用 `domains` 列表时，如果入站请求来源 IP 匹配某个用户的 CIDR 规则，FreeSWITCH 会将请求关联到该用户身份令牌，并像 Digest 认证成功一样应用该用户的变量和参数。
+
+列表在 ACL 加载时（启动或执行 `reloadacl`）生成；此后修改用户目录中的 `cidr` 属性，必须重新加载 ACL 才会生效。
+
+---
+
+## 在 Sofia SIP Profile 中应用 ACL {#applying-acls-in-a-sofia-sip-profile}
+
+Sofia SIP Profile 在 `<settings>` 中支持多个 ACL 参数。同名参数可以重复配置，最多累计 100 个条目。将参数值设为 `none` 则清空该参数此前累计的全部条目。
+
+### Sofia ACL 参数参考 {#sofia-acl-parameter-reference}
+
+| 参数 | 何时评估 | 失败时的处理 |
+|-----------|---------------|-------------------|
+| `apply-inbound-acl` | 每个入站 SIP 请求。 | 返回 403 拒绝请求；如指定了 `fail-context`，则路由到该上下文。 |
+| `apply-register-acl` | 仅在 `REGISTER` 请求时。 | 拒绝注册。 |
+| `apply-proxy-acl` | 识别可信代理 IP；当 `apply-inbound-acl` 检查失败时执行。 | 允许信任代理转发的 IP；见下文。 |
+| `apply-nat-acl` | 根据来源 IP 识别 NAT。 | 影响 NAT 穿越行为，而非访问控制。 |
+| `apply-candidate-acl` | 检查 ICE Candidate。 | 拒绝该 Candidate。 |
+
+### `apply-inbound-acl` 的扩展上下文语法 {#extended-context-syntax-for-apply-inbound-acl}
+
+`apply-inbound-acl` 支持扩展语法，可根据 ACL 通过或失败的结果选择拨号计划上下文：
+
+```
+<param name="apply-inbound-acl" value="list-name:pass-context:fail-context"/>
+```
+
+来源 IP 通过命名 ACL 时，呼叫进入 `pass-context`；不通过时，呼叫进入 `fail-context` 而不是立即返回 403。两个上下文名称都可省略，对应结果下保持原路由不变。若 `apply-inbound-acl` 的 `fail-context` 为空，且启用了 `auth-calls`，ACL 失败时会回退到 Digest 身份认证。
+
+### 代理信任：`apply-proxy-acl` {#proxy-trust-apply-proxy-acl}
+
+来源 IP 的 `apply-inbound-acl` 检查失败后，Sofia 会判断该 IP 是否被任一 `apply-proxy-acl` 列表允许。如果通过，则读取 `X-AUTH-IP` 头字段中的真实客户端 IP，并使用该值重新执行 `apply-inbound-acl` 检查。启用 `use-port-for-acl-check` 时，端口检查使用 `X-AUTH-PORT` 头字段。
+
+### 与 ACL 相关的其他 Profile 参数 {#additional-profile-parameters-related-to-acl}
+
+| 参数 | 用途 | 可接受值 | 默认值 |
+|-----------|---------|--------|---------|
+| `apply-inbound-acl-x-token` | 入站 ACL 匹配但列表中没有令牌时，从指定 SIP 头字段读取 ACL 令牌。 | 头字段名称字符串 | 无 |
+| `apply-proxy-acl-x-token` | 来源 IP 通过代理 ACL 时，从指定 SIP 头字段读取 ACL 令牌。接受令牌后无需进一步检查 IP 即可授权呼叫。 | 头字段名称字符串 | 无 |
+| `auth-calls-acl-only` | 设为 `true` 时，即便已启用 `auth-calls`，仍拒绝所有 ACL 检查失败的呼叫，不回退到 Digest 认证。 | `true`、`false` | `false` |
+| `use-port-for-acl-check` | 设为 `true` 时，在 ACL 检查中纳入来源端口，可使用带端口限定的 ACL 规则。 | `true`、`false` | `false` |
+
+### 配置示例 {#configuration-example}
+
+```xml
+<profile name="internal">
+  <settings>
+    <param name="apply-inbound-acl" value="trusted-carriers"/>
+    <param name="apply-inbound-acl" value="internal-phones"/>
+    <param name="apply-register-acl" value="internal-phones"/>
+    <param name="apply-nat-acl"      value="nat.auto"/>
+  </settings>
+</profile>
+```
+
+完整的 Sofia Profile 配置参见 [Sofia SIP Profile 章节](../users-endpoints/sip-profiles-sofia.mdx)。
+
+---
+
+## 在事件套接字中应用 ACL {#applying-acls-in-the-event-socket}
+
+事件套接字模块（`mod_event_socket`）从 `conf/autoload_configs/event_socket.conf.xml` 读取配置。`apply-inbound-acl` 限制哪些 IP 地址能够连接到套接字。
+
+```xml
+<configuration name="event_socket.conf" description="Socket Client">
+  <settings>
+    <param name="listen-ip"          value="::"/>
+    <param name="listen-port"        value="8021"/>
+    <param name="password"           value="ClueCon"/>
+    <param name="apply-inbound-acl"  value="loopback.auto"/>
+  </settings>
+</configuration>
+```
+
+当存在一个或多个 `apply-inbound-acl` 条目时，每个连接的来源 IP 按顺序接受所有命名 ACL 检查。如果任一 ACL 不允许该地址，则立即返回 `text/rude-rejection` 并关闭连接，不再检查其他列表。
+
+如果没有配置 `apply-inbound-acl`，模块默认采用 `loopback.auto`，只允许从本机环回接口连接。重复配置的 `apply-inbound-acl` 会累加生效。完整设置见[事件套接字章节](./event-socket.mdx)。
+
+---
+
+## 重新加载 ACL {#reloading-acls}
+
+无需重启 FreeSWITCH，也可以从 `fs_cli` 或事件套接字执行以下 API 命令重新加载 ACL：
+
+```
+reloadacl
+```
+
+该命令先重新加载 XML 配置（`reloadxml`），然后重建全部网络列表。`acl.conf.xml` 中的自定义列表会重建，并再次扫描用户目录域以取得用户的 `cidr` 属性。内置自动列表（`rfc1918.auto`、`loopback.auto` 等）也会根据当前网络状态重新创建。

@@ -1,0 +1,24 @@
+---
+sidebar_position: 8
+id: mod_event_socket
+slug: /module-reference/event-handlers/mod_event_socket
+title: "mod_event_socket — 事件套接字"
+description: "mod_event_socket：事件套接字。详见第 25 章：事件套接字。"
+sidebar_label: "mod_event_socket"
+---
+
+# mod_event_socket — 事件套接字 {#mod_event_socket--the-event-socket}
+
+`mod_event_socket` 通过 TCP 对外提供 FreeSWITCH 事件系统和 API（`fs_cli` 使用的就是这个接口）。
+
+<SignalWireCallout
+  title="托管式事件控制"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="mod_event_socket"
+  linkText="查看 RELAY 客户端指南">
+
+由 FreeSWITCH 团队创立的 SignalWire 提供 [RELAY](https://signalwire.com/docs/server-sdks/guides/relay-client?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=mod_event_socket)，这是一套实时 WebSocket API，并提供强类型的 Python 和 TypeScript SDK。
+
+</SignalWireCallout>
+
+详细说明见 **[第 25 章：事件套接字](../../integration/event-socket.mdx)** 以及 **[第 46 章：入站事件套接字](../../programming/esl-inbound.mdx)**。本页仅为模块索引条目；配置、参数及实际用法请参阅上述章节。

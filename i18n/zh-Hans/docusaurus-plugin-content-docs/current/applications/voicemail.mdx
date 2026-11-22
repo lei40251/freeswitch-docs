@@ -1,0 +1,527 @@
+---
+sidebar_position: 1
+id: voicemail
+slug: /applications/voicemail
+title: "第 19 章：语音信箱"
+description: "配置 mod_voicemail 的信箱、用户认证、DTMF 菜单、邮件通知和留言存储。"
+sidebar_label: "19. 语音信箱"
+---
+
+# 第 19 章：语音信箱 {#chapter-19-voicemail}
+
+`mod_voicemail` 模块为 FreeSWITCH 提供集成式语音信箱，支持在用户目录中定义每个用户的信箱、由来电者录制留言、由信箱用户收听留言和使用配置菜单，以及通过电子邮件发送留言（可选附加录音文件）。
+
+<SignalWireCallout
+  title="无需自行管理存储的语音信箱"
+  href="https://signalwire.com/docs/call-flow-builder"
+  page="voicemail"
+  linkText="查看 Call Flow Builder">
+
+SignalWire 的无代码 Call Flow Builder 提供可拖入流程的语音信箱节点；录音保存在项目中，可通过 API 获取。托管 AI 坐席还可以接收留言、回答常见问题，并向你发送转写文本。
+
+</SignalWireCallout>
+
+## 开始使用 {#getting-started}
+
+**前提条件：** 必须加载 `mod_voicemail`。确认其已列入 `autoload_configs/modules.conf.xml`。该模块从 `autoload_configs/voicemail.conf.xml` 加载配置。
+
+**可运行的最小配置步骤：**
+
+1. 确认 `voicemail.conf.xml` 中包含名为 `default` 的配置实例（标准配置已提供）。
+2. 确保用户目录中的每个用户都设置了 `vm-password` 参数（见第 19.3 节）。
+3. 确认拨号计划中存在分机 `4000` 和 `*98`（或等效分机），用于将呼叫路由到信箱查询（见第 19.6 节）。
+4. 如需邮件投递，请在 FreeSWITCH 主机上配置可用的邮件传输代理（MTA），并在配置实例的 `<email>` 中设置 `email-from`。
+
+当呼叫到达忙线或无人应答的分机时，可以桥接到：
+
+```xml
+<action application="bridge" data="loopback/app=voicemail:default ${domain_name} ${dialed_extension}"/>
+```
+
+此操作调用 `default` 配置实例中与 `${dialed_extension}` 对应的信箱，并让 `voicemail` 应用以留言模式运行。
+
+---
+
+## 配置实例 {#profile-configuration}
+
+配置实例定义在 `autoload_configs/voicemail.conf.xml` 中。每个配置实例是一组有名称的参数，用于控制录音行为、DTMF 菜单、存储路径与邮件投递。可以并存多个配置实例；每次在拨号计划中调用 `voicemail` 时均指定要使用的实例。
+
+```xml
+<configuration name="voicemail.conf" description="Voicemail">
+  <settings>
+  </settings>
+  <profiles>
+    <profile name="default">
+      <param name="file-extension" value="wav"/>
+      <param name="terminator-key" value="#"/>
+      <param name="max-login-attempts" value="3"/>
+      <param name="digit-timeout" value="10000"/>
+      <param name="min-record-len" value="3"/>
+      <param name="max-record-len" value="300"/>
+      <param name="max-retries" value="3"/>
+      <param name="tone-spec" value="%(1000, 0, 640)"/>
+      <param name="callback-dialplan" value="XML"/>
+      <param name="callback-context" value="default"/>
+      <param name="play-new-messages-key" value="1"/>
+      <param name="play-saved-messages-key" value="2"/>
+      <param name="login-keys" value="0"/>
+      <param name="main-menu-key" value="0"/>
+      <param name="config-menu-key" value="5"/>
+      <param name="record-greeting-key" value="1"/>
+      <param name="choose-greeting-key" value="2"/>
+      <param name="change-pass-key" value="6"/>
+      <param name="record-name-key" value="3"/>
+      <param name="record-file-key" value="3"/>
+      <param name="listen-file-key" value="1"/>
+      <param name="save-file-key" value="2"/>
+      <param name="delete-file-key" value="7"/>
+      <param name="undelete-file-key" value="8"/>
+      <param name="email-key" value="4"/>
+      <param name="pause-key" value="0"/>
+      <param name="restart-key" value="1"/>
+      <param name="ff-key" value="6"/>
+      <param name="rew-key" value="4"/>
+      <param name="skip-greet-key" value="#"/>
+      <param name="previous-message-key" value="1"/>
+      <param name="next-message-key" value="3"/>
+      <param name="skip-info-key" value="*"/>
+      <param name="repeat-message-key" value="0"/>
+      <param name="record-silence-threshold" value="200"/>
+      <param name="record-silence-hits" value="2"/>
+      <param name="web-template-file" value="web-vm.tpl"/>
+      <param name="db-password-override" value="false"/>
+      <param name="allow-empty-password-auth" value="true"/>
+      <param name="operator-extension" value="operator XML default"/>
+      <param name="operator-key" value="9"/>
+      <param name="vmain-extension" value="vmain XML default"/>
+      <param name="vmain-key" value="*"/>
+      <email>
+        <param name="template-file" value="voicemail.tpl"/>
+        <param name="notify-template-file" value="notify-voicemail.tpl"/>
+        <param name="date-fmt" value="%A, %B %d %Y, %I %M %p"/>
+        <param name="email-from" value="${voicemail_account}@${voicemail_domain}"/>
+      </email>
+      <!--<param name="storage-dir" value="$${storage_dir}"/>-->
+      <!--<param name="odbc-dsn" value="dsn:user:pass"/>-->
+    </profile>
+  </profiles>
+</configuration>
+```
+
+### 配置实例参数参考 {#profile-parameter-reference}
+
+**录音与音频格式：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `file-extension` | 录制留言和欢迎语的音频格式。 | 已安装编解码器模块支持的格式字符串，如 `wav`、`mp3` | `wav` |
+| `terminator-key` | 结束录音的 DTMF 按键。 | 单个 DTMF 数字 | `#` |
+| `min-record-len` | 录音最短时长（秒），低于该值的录音会丢弃。 | 大于等于 0 的整数 | `3` |
+| `max-record-len` | 留言录音最长时长（秒）。 | 大于等于 0 的整数 | `300` |
+| `tone-spec` | 留言录制前播放的提示音，其格式为 TGML 音调描述。 | TGML 字符串 | `%(1000, 0, 640)` |
+| `record-silence-threshold` | 录音期间低于此能量阈值的音频被视为静音。 | 整数（0–10000） | `200` |
+| `record-silence-hits` | 停止录音所需的连续静音帧数。 | 整数 | `2` |
+| `record-sample-rate` | 覆盖录音文件采样率；适用于编解码器支持有限的播放器（例如部分邮件客户端需要 `11025`）。 | 整数（Hz）；`0` 表示使用通道原生采样率 | `0`（原生） |
+| `record-title` | 嵌入录音文件的类 ID3 标题标签。 | 字符串 | `FreeSWITCH Voicemail` |
+| `record-comment` | 嵌入录音文件的类 ID3 注释标签。 | 字符串 | `FreeSWITCH Voicemail` |
+| `record-copyright` | 嵌入录音文件的类 ID3 版权标签。 | 字符串 | `http://www.freeswitch.org` |
+| `convert-cmd` | 作为邮件附件前，将录音文件转换为另一种格式的 shell 命令；与 `convert-ext` 配合使用。 | 命令字符串 | 无 |
+| `convert-ext` | `convert-cmd` 生成的文件扩展名；转换后的文件用作邮件附件。 | 扩展名字符串 | 无 |
+| `auto-playback-recordings` | 为 `true` 时，新录制的欢迎语或姓名录音会在录制后立即回放。 | `true`、`false` | `false` |
+
+**会话与菜单行为：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `digit-timeout` | 菜单导航期间等待 DTMF 数字的毫秒数。 | 整数（毫秒） | `10000` |
+| `max-login-attempts` | 允许的 PIN 验证失败次数，达到后终止信箱查询会话。 | 整数 | `3` |
+| `max-retries` | 菜单输入允许的最大重试次数，达到后结束会话。 | 整数 | `3` |
+| `play-new-messages-lifo` | 为 `true` 时，新留言按后进先出顺序（最新优先）播放。 | `true`、`false` | `false` |
+| `play-saved-messages-lifo` | 为 `true` 时，已保存留言按后进先出顺序（最新优先）播放。 | `true`、`false` | `false` |
+| `play-date-announcement` | 控制播放留言时在何时播报消息日期/时间。 | `first`、`last`、`never` | `first` |
+| `db-password-override` | 为 `true` 时，语音信箱数据库中的密码优先于用户目录中的 `vm-password`。 | `true`、`false` | `false` |
+| `allow-empty-password-auth` | 为 `true` 时，未设置密码的用户可以不输入密码进行认证。 | `true`、`false` | `true` |
+
+**回呼与转移目标：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `callback-dialplan` | 用户在收听留言时按回呼键，所使用的拨号计划类型。 | `XML`、`ENUM` 或其他已配置的拨号计划类型 | `XML` |
+| `callback-context` | 回呼使用的拨号计划上下文。 | 上下文名称字符串 | `default` |
+| `operator-extension` | 来电者按接线员键时转移的目标，格式为 `dest [dialplan] [context]`。 | 目标字符串 | 空（禁用接线员键） |
+| `operator-key` | 播放欢迎语时，用于转移到 `operator-extension` 的 DTMF 数字。 | 单个 DTMF 数字 | 空 |
+| `vmain-extension` | 用户按 vmain 键时转移的目标，格式为 `dest [dialplan] [context]`。 | 目标字符串 | 空 |
+| `vmain-key` | 查询信箱时跳转到 `vmain-extension` 的 DTMF 数字。 | 单个 DTMF 数字 | 空 |
+
+**存储与数据库：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `storage-dir` | 留言文件存储的根目录；为空时使用 FreeSWITCH 全局存储目录。 | 绝对路径 | 空（使用全局存储目录） |
+| `storage-dir-shared` | 为 `true` 时，在 `storage-dir` 下的信箱路径中包含 `voicemail/` 目录段，便于跨域使用共享存储根。 | `true`、`false` | `false` |
+| `odbc-dsn` | 用于将留言元数据存到外部数据库的 ODBC 数据源名，格式为 `dsn:user:pass`。 | DSN 字符串 | 无（使用 SQLite） |
+| `dbname` | 覆盖 SQLite 数据库文件名（不含路径）；仅在未设置 `odbc-dsn` 时生效。 | 字符串 | `voicemail_<profile_name>` |
+
+**MWI（消息等待指示）：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `send-full-vm-header` | 为 `true` 时，MWI SIP `Voice-Message` 头采用 `new/saved (new-urgent/saved-urgent)` 格式，包含紧急留言数，而不只是 `new/saved`。 | `true`、`false` | `false` |
+
+**邮件投递（配置实例中的内联参数，而非 `<email>` 内）：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `notify-email-body` | 未使用模板文件时，纯通知邮件的字面量正文；作为配置实例中的 `<param>` 设置（位于 `<email>` 之外）。 | 字符串 | 无 |
+| `notify-email-headers` | 纯通知邮件的字面量 RFC 2822 头字段；作为配置实例中的 `<param>` 设置（位于 `<email>` 之外）。 | 字符串 | 无 |
+
+**Web 界面：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `web-template-file` | 用于生成基于 Web 的语音信箱界面响应的模板文件路径。 | 相对于 FreeSWITCH 配置目录的文件名 | `web-vm.tpl` |
+
+### DTMF 按键绑定 {#dtmf-key-bindings}
+
+这些参数将 DTMF 按键分配给菜单操作。每个参数都接受单个 DTMF 数字（`0`–`9`、`*`、`#`）。
+
+**主菜单（查询信箱）：**
+
+| 参数 | 操作 | 默认值 |
+|---|---|---|
+| `login-keys` | 查询会话开始时提示输入信箱 ID 的按键。 | `0` |
+| `main-menu-key` | 返回主菜单。 | `0` |
+| `play-new-messages-key` | 播放新留言。 | `1` |
+| `play-saved-messages-key` | 播放已保存留言。 | `2` |
+| `config-menu-key` | 进入配置菜单。 | `5` |
+
+**播放留言期间：**
+
+| 参数 | 操作 | 默认值 |
+|---|---|---|
+| `listen-file-key` | 收听当前留言。 | `1` |
+| `save-file-key` | 保存留言（移到已保存文件夹）。 | `2` |
+| `delete-file-key` | 删除留言。 | `7` |
+| `undelete-file-key` | 恢复删除的留言。 | `8` |
+| `email-key` | 将留言通过邮件发送给信箱用户。 | `4` |
+| `callback-key` | 向留言发送者发起回呼。 | `5` |
+| `forward-key` | 将留言转发给其他信箱。 | `8` |
+| `prepend-key` | 转发前为留言添加一段前置录音。 | `1` |
+| `urgent-key` | 录制留言时标记为紧急。 | `*` |
+| `previous-message-key` | 跳转到上一条留言。 | `1` |
+| `next-message-key` | 跳转到下一条留言。 | `3` |
+| `repeat-message-key` | 重复当前留言。 | `0` |
+| `skip-info-key` | 跳过信封信息。 | `*` |
+| `pause-key` | 暂停/继续播放。 | `0` |
+| `restart-key` | 从头重新播放留言。 | `1` |
+| `ff-key` | 快进。 | `6` |
+| `rew-key` | 倒退。 | `4` |
+
+**播放欢迎语期间（来电者）：**
+
+| 参数 | 操作 | 默认值 |
+|---|---|---|
+| `skip-greet-key` | 跳过欢迎语，直接进入录音提示音。 | `#` |
+| `operator-key` | 转移到 `operator-extension`。 | 空（禁用） |
+
+**配置菜单：**
+
+| 参数 | 操作 | 默认值 |
+|---|---|---|
+| `record-greeting-key` | 录制新的欢迎语。 | `1` |
+| `choose-greeting-key` | 从已录制欢迎语中选择一条。 | `2` |
+| `record-name-key` | 录制用户姓名。 | `3` |
+| `change-pass-key` | 修改信箱 PIN。 | `6` |
+
+**录音子菜单（录制欢迎语时）：**
+
+| 参数 | 操作 | 默认值 |
+|---|---|---|
+| `record-file-key` | 开始录音。 | `3` |
+| `listen-file-key` | 收听录音。 | `1` |
+| `save-file-key` | 保存录音。 | `2` |
+
+### `<email>` 子元素 {#email-sub-element}
+
+邮件投递参数位于配置实例下的 `<email>` 子元素中。`<email>` 块支持 `<param>` 元素和两个存放原始文本的特殊子元素 `<body>`、`<headers>`：
+
+```xml
+<email>
+  <param name="template-file" value="voicemail.tpl"/>
+  <param name="notify-template-file" value="notify-voicemail.tpl"/>
+  <param name="date-fmt" value="%A, %B %d %Y, %I:%M %p"/>
+  <param name="email-from" value="${voicemail_account}@${voicemail_domain}"/>
+  <!-- Optional: inline body and headers instead of template files -->
+  <!-- <body>Voicemail from ${voicemail_caller_id_name}</body> -->
+  <!-- <headers>X-Custom-Header: value</headers> -->
+</email>
+```
+
+**`<email>` 中的 `<param>` 参数参考：**
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `template-file` | 发送带留言录音附件的邮件时使用的模板文件。 | 相对于 FreeSWITCH 配置目录的文件名 | `voicemail.tpl` |
+| `notify-template-file` | 仅发送通知、没有录音附件时使用的邮件模板文件。 | 相对于 FreeSWITCH 配置目录的文件名 | `notify-voicemail.tpl` |
+| `date-fmt` | 在模板中呈现 `${voicemail_time}` 时使用的 `strftime(3)` 格式字符串。 | strftime 格式字符串 | `%A, %B %d %Y, %I:%M %p` |
+| `email-from` | 发出语音信箱邮件时使用的发件地址；支持通道变量展开。 | 邮件地址或表达式 | `${voicemail_account}@${voicemail_domain}` |
+
+**`<email>` 的原始文本子元素：**
+
+| 元素 | 用途 |
+|---|---|
+| `<body>` | 发送留言投递邮件时，替代模板文件的字面量邮件正文。 |
+| `<headers>` | 追加到发出邮件的字面量 RFC 2822 头字段行。 |
+
+若存在 `<body>`，则它会覆盖留言投递邮件的 `template-file`；若存在 `<headers>`，其头字段行也会加入发出的邮件。两种元素都支持 `${variable}` 展开。
+
+模板文件位于 FreeSWITCH 配置根目录（与 `voicemail.conf.xml` 所在目录相同）。标准配置提供 `voicemail.tpl`（包含附件的留言投递）和 `notify-voicemail.tpl`（无附件的纯通知）。两者都是按 RFC 2822 格式组织、含纯文本和 HTML 部分的 MIME 多部分文档。
+
+### 存储与数据库选项 {#storage-and-database-options}
+
+默认情况下，`mod_voicemail` 使用 SQLite 保存留言元数据，并将录音文件存放在 FreeSWITCH 全局存储目录下的 `voicemail/` 子目录中，目录层次为 `voicemail/<domain>/<mailbox-id>/`。
+
+在配置实例中设置 `storage-dir` 可以覆盖存储根目录：
+
+```xml
+<param name="storage-dir" value="/var/lib/freeswitch/voicemail"/>
+```
+
+当 `storage-dir-shared` 为 `false`（默认）时，`storage-dir` 下的结构是 `<domain>/<mailbox-id>/`；为 `true` 时则是 `<domain>/voicemail/<mailbox-id>/`。
+
+若要通过 ODBC 保存留言元数据：
+
+```xml
+<param name="odbc-dsn" value="voicemail:fsuser:fspassword"/>
+```
+
+还可通过用户目录参数 `vm-storage-dir` 与 `vm-domain-storage-dir` 覆盖单个用户的存储位置（见第 19.3.1 节）。用户级 `vm-domain-storage-dir` 优先于配置实例级 `storage-dir`。旧的用户级 `storage-dir` 变量已弃用；应改用 `vm-domain-storage-dir`。
+
+---
+
+## 用户目录集成 {#user-directory-integration}
+
+每个语音信箱对应 FreeSWITCH XML 用户目录（通常位于 `directory/default/`）中的一条用户记录。信箱 ID 是用户的 `id` 属性，用户 `<params>` 块中的 `vm-password` 参数设置查询信箱时身份验证所需的 PIN。
+
+```xml
+<user id="1000">
+  <params>
+    <param name="password" value="$${default_password}"/>
+    <param name="vm-password" value="1000"/>
+  </params>
+</user>
+```
+
+当配置实例中的 `db-password-override` 为 `false`（默认）时，以目录中的 `vm-password` 为准；设为 `true` 时，语音信箱数据库中保存的密码（例如用户通过修改密码菜单设置的密码）优先。
+
+### 单个用户的参数 {#per-user-parameters}
+
+用户目录条目中的以下 `<param>` 可覆盖该信箱的配置实例级行为：
+
+| 参数 | 用途 |
+|---|---|
+| `vm-password` | 信箱 PIN。 |
+| `vm-mailto` | 带录音附件的留言投递邮件地址。 |
+| `vm-notify-mailto` | 仅通知、无录音附件的投递邮箱地址。 |
+| `vm-mailfrom` | 覆盖该用户语音信箱邮件的发件地址。 |
+| `vm-cc` | 加入留言投递邮件的抄送地址。 |
+| `vm-email-all-messages` | 设为 `true` 时自动通过邮件发送每条新留言。 |
+| `vm-notify-email-all-messages` | 设为 `true` 时每条新留言均发送通知邮件。 |
+| `vm-attach-file` | 设为 `true` 时附加录音文件。 |
+| `vm-keep-local-after-email` | 设为 `true` 时发送邮件后仍保留本地留言文件。 |
+| `vm-storage-dir` | 该用户的录音文件存储路径覆盖值。 |
+| `vm-domain-storage-dir` | 该用户的域级存储路径覆盖值。 |
+| `vm-message-ext` | 覆盖该用户留言的扩展名（音频格式）。 |
+| `vm-enabled` | 设为 `false` 时禁用该用户的语音信箱。 |
+| `vm-disk-quota` | 该信箱可使用的最大总存储字节数。 |
+| `vm-alternate-greet-id` | 向该用户留言时，使用另一信箱 ID 的欢迎语。 |
+| `vm-operator-extension` | 用户级接线员分机，覆盖配置实例级设置。 |
+| `vm-skip-instructions` | 设为 `true` 时跳过该用户欢迎语之后的录音操作说明。 |
+| `vm-convert-cmd` | 覆盖该用户的音频转换命令。 |
+| `vm-convert-ext` | 覆盖该用户转换后的文件扩展名。 |
+| `timezone` | 在邮件模板中渲染 `${voicemail_time}` 时使用的时区；可在 `<variables>` 或 `<params>` 中设置。 |
+
+---
+
+## voicemail 拨号计划应用 {#the-voicemail-dialplan-application}
+
+应用名称为 `voicemail`；[拨号计划工具参考](../dialplan/dptools-reference.mdx)也有概述。完整参数语法如下：
+
+```
+[check] [auth] [auth_only] <profile_name> <domain_name> [<id>] [uuid]
+```
+
+`profile_name` 与 `domain_name` 是必需项。`id` 为信箱标识；如果省略，模块会读取通道变量 `voicemail_id`。如果参数字符串缺少 `profile_name` 或 `domain_name`，模块会分别读取通道变量 `voicemail_profile_name` 和 `voicemail_domain_name`。
+
+可选关键字 `check`、`auth`、`auth_only` 会按顺序在位置参数之前解析，不区分大小写，也可以组合使用（例如 `check auth`）。
+
+### 留言模式 {#leave-message-mode}
+
+未指定 `check` 或 `auth_only` 时，应用在留言模式下运行：播放信箱所有者的欢迎语、录制来电者的留言并保存。
+
+```xml
+<!-- Leave a message in mailbox 1001, profile "default", domain "example.com" -->
+<action application="voicemail" data="default example.com 1001"/>
+```
+
+典型用法是在被叫分机不可用时，作为桥接失败后的后备处理：
+
+```xml
+<action application="bridge" data="user/1001@example.com"/>
+<action application="voicemail" data="default ${domain_name} 1001"/>
+```
+
+### 查询信箱模式 {#check-mailbox-mode}
+
+存在 `check` 时，应用进入信箱查询模式：提示用户输入信箱 ID（如果参数中未提供）及 PIN，然后显示留言播放菜单。
+
+```xml
+<!-- Prompt for mailbox ID and PIN -->
+<action application="voicemail" data="check default ${domain_name}"/>
+
+<!-- Pre-supply the mailbox ID; subscriber still enters PIN -->
+<action application="voicemail" data="check default ${domain_name} 1001"/>
+```
+
+关键字 `auth` 会跳过 PIN 验证，视为来电者已完成认证。适用于用户从自己注册的分机呼入且拨号计划已验证身份的情况：
+
+```xml
+<action application="voicemail" data="check auth default ${domain_name} ${dialed_extension}"/>
+```
+
+关键字 `auth_only` 会使会话进入查询模式，并在 PIN 验证成功后立即退出，而不显示留言菜单。这对双因素验证流程或 PIN 校验集成很有用。`auth_only` 本身隐含查询模式，因此无须同时指定 `check`。
+
+```xml
+<action application="voicemail" data="auth_only default ${domain_name} ${dialed_extension}"/>
+```
+
+可选的位置参数 `uuid`（位于信箱 `id` 后面）仅在查询模式中有意义；指定后会通过 UUID 直接打开特定留言。
+
+### 通道变量 {#channel-variables}
+
+**输入变量（执行前或执行期间读取）：**
+
+| 变量 | 用途 |
+|---|---|
+| `voicemail_profile_name` | 参数字符串未提供时使用的配置实例名称。 |
+| `voicemail_domain_name` | 参数字符串未提供时使用的域名。 |
+| `voicemail_id` | 参数字符串未提供时使用的信箱 ID。 |
+| `voicemail_authorized` | 设为 `true` 时，视用户为已认证（等同于 `auth` 关键字）。 |
+| `vm_auth_only` | 在活动查询模式会话中设为 `true` 时，认证成功后立即退出会话。 |
+| `skip_greeting` | 在调用留言模式前设为 `true`，可跳过信箱所有者欢迎语；使用后会清除。 |
+| `skip_instructions` | 在调用留言模式前设为 `true`，可跳过欢迎语后的录音说明；使用后会清除。 |
+| `skip_record_urgent_check` | 设为 `true` 时，禁止在留言录制结束时提示是否标记为紧急；使用后会清除。 |
+| `voicemail_skip_goodbye` | 设为 `true` 时，跳过留言模式结束时的告别提示；使用后会清除。 |
+| `vm_cc` | 以逗号分隔的额外信箱地址列表，用于投递后复制留言。 |
+
+**输出变量（模块执行后设置）：**
+
+| 变量 | 用途 |
+|---|---|
+| `voicemail_account` | 目标信箱的信箱 ID（用户 ID）。 |
+| `voicemail_domain` | 目标信箱所在域。 |
+| `voicemail_caller_id_name` | 留言者的主叫标识姓名。 |
+| `voicemail_caller_id_number` | 留言者的主叫标识号码。 |
+| `voicemail_formatted_caller_id_number` | 格式化（本地化）后的主叫标识号码。 |
+| `voicemail_file_path` | 录制留言文件的绝对路径。 |
+| `voicemail_message_len` | 留言录音时长（秒）。 |
+| `voicemail_read_flags` | 留言已读状态标志。 |
+| `voicemail_time` | 按配置实例 `date-fmt` 格式化的留言时间戳。 |
+| `voicemail_priority` | 留言优先级值（映射为邮件 `X-Priority` 头）。 |
+| `voicemail_email` | 信箱所有者的投递邮箱地址（`vm-mailto`）。 |
+| `voicemail_email_from` | 语音信箱投递邮件的发件地址。 |
+| `voicemail_notify_email` | 信箱所有者的通知邮箱地址（`vm-notify-mailto`）。 |
+| `voicemail_current_folder` | 当前留言文件夹名称（`new` 或 `saved`）。 |
+| `voicemail_total_new_messages` | 信箱中新（未读）留言的总数。 |
+| `voicemail_total_saved_messages` | 信箱中已保存留言的总数。 |
+| `voicemail_urgent_new_messages` | 信箱中紧急新留言的总数。 |
+| `voicemail_urgent_saved_messages` | 信箱中紧急已保存留言的总数。 |
+| `user_pin_authenticated` | 在 `auth_only` 模式成功通过 PIN 认证后设为 `true`。 |
+| `user_pin_authenticated_user` | 在 `auth_only` 模式中通过认证的用户信箱 ID。 |
+
+---
+
+## 邮件通知 {#email-notification}
+
+当来电者留下一条新留言，并且用户目录配置了 `vm-mailto` 或 `vm-notify-mailto` 时，`mod_voicemail` 会通过 FreeSWITCH 内部 `switch_simple_email` 函数生成并发送邮件。主机必须安装可用的 MTA（如 `sendmail`、`postfix`），且默认 PATH 可访问。
+
+支持两种投递模式：
+
+- **留言投递**（`vm-mailto` + `vm-attach-file true`）：使用配置实例的 `template-file` 渲染邮件，将录音作为 MIME 附件包含在内。
+- **仅通知**（`vm-notify-mailto`）：使用 `notify-template-file` 生成不带附件的邮件。`notify-voicemail.tpl` 与 `voicemail.tpl` 的主要区别是前者发送到 `${voicemail_notify_email}` 而不是 `${voicemail_email}`。
+
+用户设置 `vm-notify-email-all-messages true` 后，每条传入留言都会自动触发通知邮件，用户无须在交互菜单中配置转发。
+
+可通过 `vm-convert-cmd`、`vm-convert-ext`（或配置实例中的 `convert-cmd`、`convert-ext`）在附加录音前转换音频格式。转换命令以源文件路径为参数作为 shell 命令运行，生成的新扩展名文件被附到邮件中。
+
+### 邮件模板变量 {#email-template-variables}
+
+模板是带有 FreeSWITCH 变量替换（`${variable}`）的纯 RFC 2822 文本文件。模块会填充以下变量供模板使用：
+
+| 变量 | 内容 |
+|---|---|
+| `${voicemail_caller_id_name}` | 留言者的主叫标识姓名。 |
+| `${voicemail_caller_id_number}` | 留言者的主叫标识号码。 |
+| `${voicemail_domain}` | 信箱所在域。 |
+| `${voicemail_account}` | 信箱 ID（用户 ID）。 |
+| `${voicemail_email}` | 投递邮箱地址（`vm-mailto`）。 |
+| `${voicemail_email_from}` | 投递邮件发件地址（`vm-mailfrom` 或配置实例 `email-from`）。 |
+| `${voicemail_notify_email}` | 通知邮箱地址（`vm-notify-mailto`）。 |
+| `${voicemail_time}` | 按配置实例 `date-fmt` 格式化的留言时间戳。 |
+| `${voicemail_message_len}` | 留言录音时长（秒）。 |
+| `${voicemail_priority}` | 留言优先级值；映射到邮件 `X-Priority` 头。 |
+| `${voicemail_read_flags}` | 留言已读状态标志。 |
+| `${voicemail_total_new_messages}` | 信箱中新（未读）留言总数。 |
+| `${voicemail_total_saved_messages}` | 信箱中已保存留言总数。 |
+| `${RFC2822_DATE}` | RFC 2822 格式的当前日期时间。 |
+
+默认 `voicemail.tpl` 生成同时包含纯文本和 HTML 部分的 `multipart/alternative` 消息。HTML 部分包含主叫号码对应的 `tel:` URI 链接。`notify-voicemail.tpl` 则将邮件发送到 `${voicemail_notify_email}`（而非 `${voicemail_email}`），不附带录音。两个模板都随 FreeSWITCH 配置根目录提供，可以自由编辑。
+
+---
+
+## 默认拨号计划条目 {#default-dialplan-entries}
+
+标准配置的 `dialplan/default.xml` 包含两个与语音信箱有关的分机模式。
+
+**留言（桥接后的后备处理）：**
+
+当本地分机没有应答时，拨号计划通过 loopback 通道将呼叫桥接到留言模式的 `voicemail` 应用：
+
+```xml
+<action application="bridge" data="loopback/app=voicemail:default ${domain_name} ${dialed_extension}"/>
+```
+
+这一模式出现在 `Local_Extension` 与 `Local_Extension_Skinny` 分机定义中。
+
+**查询信箱（`vmain` 分机）：**
+
+```xml
+<extension name="vmain">
+  <condition field="destination_number" expression="^vmain$|^4000$|^\*98$">
+    <action application="answer"/>
+    <action application="sleep" data="1000"/>
+    <action application="voicemail" data="check default ${domain_name}"/>
+  </condition>
+</extension>
+```
+
+这个分机匹配目标号码 `vmain`、`4000` 及 `*98`。应答并短暂等待 1 秒后，以 `default` 配置实例在查询模式调用 `voicemail`。因为未提供信箱 ID，用户会被提示依次输入信箱号码及 PIN。
+
+若要限制用户仅能查询自己预先认证的分机信箱，可在调用应用前将通道变量 `voicemail_authorized` 设为 `true`，或在应用数据中包含 `auth` 关键字。
+
+---
+
+## 全局设置 {#global-settings}
+
+`voicemail.conf.xml` 顶层的 `<settings>` 块（位于所有配置实例之外）接受模块级参数：
+
+```xml
+<settings>
+  <param name="message-query-exact-match" value="false"/>
+</settings>
+```
+
+| 参数 | 用途 | 可接受的值 | 默认值 |
+|---|---|---|---|
+| `message-query-exact-match` | 为 `true` 时，`vm_count` API 及相关查询会精确匹配域字段。每个租户使用不同域名的管理员必须启用此项，并为每个域定义独立配置实例。 | `true`、`false` | `false` |
+| `debug` | 为模块启用额外的调试日志。 | 整数（0 表示关闭） | `0` |

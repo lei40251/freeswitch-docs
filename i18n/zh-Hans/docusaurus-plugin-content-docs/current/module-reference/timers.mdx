@@ -1,0 +1,117 @@
+---
+sidebar_position: 10
+id: timers
+slug: /module-reference/timers
+title: "定时器——mod_timerfd 与 mod_posix_timer"
+description: "使用 Linux timerfd 和 POSIX 定时器实现 FreeSWITCH RTP、流播放和会议媒体的定时调度。"
+sidebar_label: "Timers"
+---
+# 定时器——mod_timerfd 与 mod_posix_timer {#timers-—-mod_timerfd-and-mod_posix_timer}
+
+FreeSWITCH 使用**定时源**来调度媒体帧。无论是 RTP 数据包、保持音乐（MOH）分片、会议音频混音，还是文件流式播放，都依赖定时器以精确的时间间隔触发（通常为每 20 毫秒一次）。核心自带始终可用的 `soft` 软件定时器。`mod_timerfd` 和 `mod_posix_timer` 是可选的可加载模块，它们注册基于内核定时机制的额外定时器名称；在系统支持相关内核定时 API 时，可能比 `soft` 定时器提供更低的延迟和更小的抖动。
+
+这两个模块都没有单独的配置文件。它们分别注册一个具名定时器接口，供 FreeSWITCH 的其他子系统按名称调用。支持的时间间隔为 1～2000 毫秒。
+
+## mod_timerfd
+
+`mod_timerfd` 使用 Linux 的 `timerfd_create(2)` / `epoll(7)` API 实现定时器。一个 `epoll` 文件描述符监视所有活动的间隔定时器。当某个 `timerfd` 触发时，运行线程读取到期次数，并通知等待该时间间隔的所有会话。
+
+| 属性 | 取值或说明 |
+|---|---|
+| 模块名称 | `mod_timerfd` |
+| 定时器接口名称 | `timerfd` |
+| 内核 API | `timerfd_create(CLOCK_MONOTONIC)` + `epoll_wait` |
+| 适用平台 | 仅 Linux（`sys/timerfd.h`、`sys/epoll.h`） |
+| 同一时间间隔共享定时器 | 是。每种间隔值对应一个 `timerfd`，由使用该间隔的所有调用方共享 |
+| 最大并发间隔范围 | 1～2000 毫秒 |
+
+**默认不加载。** 要启用该模块，请取消 `autoload_configs/modules.conf.xml` 中对应条目的注释：
+
+```xml
+<!-- Timers -->
+<load module="mod_timerfd"/>
+```
+
+`mod_timerfd` 仅适用于 Linux。macOS、FreeBSD 或其他不提供 `sys/timerfd.h` 的平台无法编译或加载该模块。
+
+## mod_posix_timer
+
+`mod_posix_timer` 使用 POSIX `timer_create(2)` / `timer_settime(2)` API 实现定时器，采用 `CLOCK_MONOTONIC` 时钟和 `SIGEV_SIGNAL` 信号通知方式。每个启动的定时器向专用运行线程发送实时信号（`SIGRTMAX - 1`）；该线程从自管道读取定时器 ID，并通知等待的会话。每种间隔最多可同时启用 4 个 POSIX 定时器（`TIMERS_PER_INTERVAL = 4`），全部间隔合计最多有 256 个活动定时器（`MAX_ACTIVE_TIMERS = 256`）。
+
+| 属性 | 取值或说明 |
+|---|---|
+| 模块名称 | `mod_posix_timer` |
+| 定时器接口名称 | `posix` |
+| 内核 API | `timer_create(CLOCK_MONOTONIC, SIGEV_SIGNAL)` + 自管道上的 `select` |
+| 适用平台 | 支持 `timer_create` 的任意 POSIX 系统（Linux、Solaris 等） |
+| 每种间隔的定时器数量 | 最多 4 个（以轮询方式分配） |
+| 最大活动定时器数 | 256 |
+| 最大并发间隔范围 | 1～2000 毫秒 |
+
+**默认不加载。** 要启用该模块，请取消 `autoload_configs/modules.conf.xml` 中对应条目的注释：
+
+```xml
+<!-- Timers -->
+<load module="mod_posix_timer"/>
+```
+
+对于支持 `timer_create` 但不支持 `timerfd` 的非 Linux 系统，`mod_posix_timer` 是比 `mod_timerfd` 更具可移植性的替代方案。
+
+## 选择定时器 {#selecting-a-timer}
+
+需要定时源的 FreeSWITCH 子系统会按名称请求定时器。内置名称为 `soft`；加载 `mod_timerfd` 后可使用 `timerfd`；加载 `mod_posix_timer` 后可使用 `posix`。
+
+定时器名称在各使用位置分别设置，而不是通过一个全局设置指定：
+
+**Sofia SIP 配置实例——RTP 定时器（`rtp-timer-name`）**
+
+每个 Sofia SIP 配置实例通过 `rtp-timer-name` 参数指定其 RTP 定时器。默认配置实例采用 `soft`：
+
+```xml
+<param name="rtp-timer-name" value="soft"/>
+```
+
+将 `soft` 改为 `timerfd` 或 `posix`，即可让对应配置实例的 RTP 发送节奏使用相应可加载模块。
+
+**mod_local_stream——文件流播放（`timer-name`）**
+
+`local_stream.conf.xml` 中的每个 `<directory>` 块都使用 `timer-name` 参数指定定时器。默认配置采用 `soft`：
+
+```xml
+<directory name="default" path="$${sounds_dir}/music/8000">
+  <param name="rate"       value="8000"/>
+  <param name="shuffle"    value="true"/>
+  <param name="channels"   value="1"/>
+  <param name="interval"   value="20"/>
+  <param name="timer-name" value="soft"/>
+</directory>
+```
+
+**mod_verto——WebRTC 定时器（`timer-name`）**
+
+每个 Verto 配置实例都在其 `<settings>` 块中使用 `timer-name`（默认值为 `soft`）：
+
+```xml
+<param name="timer-name" value="soft"/>
+```
+
+**mod_conference——会议混音（`timer-name`）**
+
+每个会议配置实例通过 `timer-name` 指定混音定时器。未设置时，会议默认使用 `soft`：
+
+```xml
+<param name="timer-name" value="soft"/>
+```
+
+**各子系统的定时器名称汇总**
+
+| 子系统 | 参数 | 内置值 | 可加载的替代值 |
+|---|---|---|---|
+| Sofia SIP 配置实例（RTP） | `rtp-timer-name` | `soft` | `timerfd`、`posix` |
+| `mod_local_stream` 目录 | `timer-name` | `soft` | `timerfd`、`posix` |
+| `mod_verto` 配置实例 | `timer-name` | `soft` | `timerfd`、`posix` |
+| `mod_conference` 配置实例 | `timer-name` | `soft` | `timerfd`、`posix` |
+
+任何子系统引用可加载定时器的名称之前，必须先在 `modules.conf.xml` 中加载对应模块。若引用未知定时器名称，发起请求的子系统可能回退到 `soft`，也可能记录错误，取决于调用模块的实现。
+
+**源码：** `src/mod/timers/mod_timerfd`、`src/mod/timers/mod_posix_timer`

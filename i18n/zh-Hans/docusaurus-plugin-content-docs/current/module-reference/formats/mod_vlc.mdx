@@ -1,0 +1,126 @@
+---
+sidebar_position: 10
+id: mod_vlc
+slug: /module-reference/formats/mod_vlc
+title: "mod_vlc——VLC 媒体播放与流传输"
+description: "使用 libvlc 播放网络音视频流并将媒体推送至外部流媒体服务器。"
+sidebar_label: "mod_vlc"
+---
+# mod_vlc——VLC 媒体播放与流传输 {#mod_vlc-—-vlc-media-playback-and-streaming}
+
+`mod_vlc` 将 libvlc（VLC 媒体框架）作为文件格式模块和端点模块集成进 FreeSWITCH。它支持把本地文件或网络流（HTTP、RTMP、RTP、MMS、RTSP）中的音视频直接播放到呼叫中，也可以采集呼叫音视频，通过 VLC 的 sout（流输出）流水线推送到流媒体目的端。
+
+需要提供 MP4、MOV 等容器格式的媒体、将直播网络流作为播放源，或把录制媒体推送到外部流媒体服务器时，可选择 `mod_vlc`。对于简单的 WAV/原始音频播放，内置文件接口效率更高；只有需要 libvlc 丰富的编解码和协议支持时，`mod_vlc` 才是合适选择。
+
+## 加载模块 {#loading-the-module}
+
+加载时使用 `mod_vlc`。默认的 `autoload_configs/modules.conf.xml` 中**不包含**它，必须手动添加：
+
+```xml
+<load module="mod_vlc"/>
+```
+
+编译该模块前需要安装 libvlc 开发头文件。可以在 FreeSWITCH 的 `./configure` 阶段传入 `--enable-mod_vlc`，或者进入 `src/mod/formats/mod_vlc` 单独执行 `make && make install`。音频支持需要 libvlc ≥ 1.2，视频支持需要 libvlc ≥ 2.0.2。
+
+## 文件接口 {#file-interface}
+
+`mod_vlc` 注册文件接口，识别以下路径扩展名和协议前缀：
+
+| 扩展名/前缀 | 说明 |
+|--------------------|-------|
+| `vlc` | 通用 VLC URI 协议；使用 `vlc://` 传入 libvlc 支持的任意 URL |
+| `mp4` | MPEG-4 容器（音频与视频） |
+| `mov` | QuickTime/MOV 容器 |
+| `m4v` | iTunes 视频容器 |
+| `rtmp` | RTMP 流输出标识符 |
+| `youtube` | YouTube RTMP 流输出标识符 |
+
+### 播放（读取模式） {#playback-read-mode}
+
+在 FreeSWITCH 允许传入文件句柄的任意位置指定文件路径或 URL。模块根据路径前缀判断媒体类型：
+
+| 路径形式 | 行为 |
+|-----------|-----------|
+| `/absolute/path/to/file.mp4` | 打开本地文件 |
+| `http://host/stream.pls` | 打开 HTTP 网络地址 |
+| `rtp://…`、`mms://…`、`rtsp://…` | 打开网络路径 |
+| `vlc://ftp://host/file.mp3` | 移除 `vlc://` 前缀，将剩余内容交给 libvlc |
+
+结合 `playback` 的拨号计划示例：
+
+```xml
+<action application="playback" data="/tmp/promo.mp4"/>
+<action application="playback" data="http://streams.example.com:8000/on-hold.mp3"/>
+<action application="playback" data="vlc://ftp://media.example.com/greeting.ogg"/>
+```
+
+### 流输出（写入模式） {#stream-output-write-mode}
+
+写入时，`data` 参数直接作为 libvlc 的 `--sout` 参数。使用标准 VLC sout 语法：
+
+```xml
+<!-- Stream call audio to an Icecast/Ogg endpoint -->
+<action application="record" data="vlc://#transcode{acodec=vorb,channels=1,samplerate=16000}:standard{access=http,mux=ogg,dst=:8080/stream.ogg}"/>
+
+<!-- Record to a local MP4 file (video + audio) -->
+<action application="record" data="/tmp/recording.mp4"/>
+```
+
+目标路径以 `.mp4` 结尾且存在视频时，模块自动应用 `#transcode{vcodec=h264,acodec=mpga}:std{access=file,mux=mp4,dst=<path>}`。
+
+对于 `rtmp` 和 `youtube` 流名称，模块会自动构建 x264/MP3/FLV sout 流水线，并按分辨率选择视频比特率（240p → 400 kbps，360p → 750 kbps，480p → 1000 kbps，720p → 2500 kbps，1080p → 4500 kbps）。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `play_video` | 向通道播放视频文件或网络流（音频和视频） | `<path-or-URL>` |
+| `capture_video` | 采集通道音视频并推送到 VLC sout 目的端 | `<sout-string>` 或 `vlc://<sout-string>` |
+
+### `play_video`
+
+将视频文件或网络流播放到通道。音频写入写入呼叫腿，视频帧送往会话的视频写入路径。支持与文件接口相同的路径前缀（`http`、`rtp`、`mms`、`rtsp`、绝对路径），并遵循 `playback_terminators` DTMF 按键设置。
+
+```xml
+<action application="play_video" data="/tmp/intro.mp4"/>
+<action application="play_video" data="http://cdn.example.com/hold-video.mp4"/>
+```
+
+### `capture_video`
+
+从通道读取音视频并推送至 VLC 流输出目的端。参数为 VLC sout 流水线字符串；开头的 `vlc://` 前缀会自动移除。
+
+```xml
+<action application="capture_video" data="vlc://#transcode{venc=x264,vcodec=h264,acodec=mp3,ab=128,vb=1000,channels=1,samplerate=44100}:standard{access=avio,mux=flv,dst=rtmp://live.example.com/app/streamkey}"/>
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|----------|-----------|---------|
+| `vlc_force_width` | 读取 | `play_video` 中强制指定解码视频宽度（像素），必须是有效整数字符串。 |
+| `vlc_force_height` | 读取 | `play_video` 中强制指定解码视频高度（像素），必须是有效整数字符串。 |
+| `vlc_capture_offset` | 读取 | `capture_video` 和文件写入路径的音视频同步偏移，单位毫秒；默认 `250`。 |
+| `vlc_interval` | 读取 | 拨打出站 `vlc/` 端点时的数据包间隔（毫秒）；默认 `20`。 |
+| `vlc_rate` | 读取 | 拨打出站 `vlc/` 端点时的采样率；默认 `8000`。 |
+| `vlc_channels` | 读取 | 拨打出站 `vlc/` 端点时的声道数，限制在 1～2；默认 `1`。 |
+
+## 端点接口 {#endpoint-interface}
+
+`mod_vlc` 还注册一个名为 `vlc` 的端点接口。这样就可以发起由 VLC 媒体源供给媒体的呼叫腿，并将其接入桥接：
+
+```
+originate vlc/http://cdn.example.com/moh.mp4 &bridge(sofia/internal/1000@pbx.example.com)
+```
+
+如果发起呼叫的会话没有提供编解码器参数，则由 `vlc_interval`、`vlc_rate` 和 `vlc_channels` 通道变量控制。
+
+## 依赖项 {#dependencies}
+
+`mod_vlc` 需要 libvlc 运行库和开发头文件，它们不包含在 FreeSWITCH 源码树中，必须通过主机发行版单独安装（如 Debian/Ubuntu 的 `libvlc-dev`，RHEL/CentOS 的 `vlc-devel`）。音频支持需要 libvlc ≥ 1.2，视频需要 libvlc ≥ 2.0.2。
+
+## 相关文档 {#see-also}
+
+- [第 18 章：音频文件与流媒体源](../../media/audio-files-and-streaming.mdx)
+
+**源码：** `src/mod/formats/mod_vlc`

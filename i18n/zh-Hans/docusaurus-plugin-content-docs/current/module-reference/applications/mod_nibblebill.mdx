@@ -1,0 +1,142 @@
+---
+sidebar_position: 27
+id: mod_nibblebill
+slug: /module-reference/applications/mod_nibblebill
+title: "mod_nibblebill——实时预付费计费"
+description: "基于 ODBC 的预付费实时计费、账户余额阈值及呼叫控制。"
+sidebar_label: "mod_nibblebill"
+---
+# mod_nibblebill——实时预付费计费 {#mod_nibblebill-—-real-time-prepaid-billing}
+
+`mod_nibblebill` 是应用模块，可以在呼叫进行期间通过 ODBC 数据库按秒实时计费。它从通道变量读取计费费率和账户标识符，然后定期扣减账户余额；余额低于配置的阈值时执行指定动作，例如播放提醒音或挂断呼叫。
+
+需要提供预付费电话卡或批发 VoIP 计费服务，必须限制单次呼叫费用、在低余额时提醒来电者，并确保账户余额归零后不会无限期继续通话时，可以使用此模块。
+
+<SignalWireCallout
+  title="平台已计量使用情况"
+  href="https://signalwire.com/docs/apis"
+  page="mod-nibblebill"
+  linkText="查看 REST API">
+
+SignalWire 按资源计量每次呼叫和消息的使用情况，可通过 REST API 查询，并在账户上按分钟计价。余额控制可以放到应用程序代码中，由平台提供的使用记录驱动。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+模块名称为 `mod_nibblebill`。在默认 FreeSWITCH 安装的 `conf/vanilla/autoload_configs/modules.conf.xml` 中，对应条目**已被注释**，因此不会默认加载。要启用，请取消注释：
+
+```xml
+<load module="mod_nibblebill"/>
+```
+
+无需特殊编译标志；模块包含在标准 FreeSWITCH 源码树的 `src/mod/applications/mod_nibblebill` 中。
+
+## 配置：`nibblebill.conf.xml` {#configuration-nibblebillconfxml}
+
+请将配置文件放在 `conf/autoload_configs/nibblebill.conf.xml`。模块必须配置 ODBC DSN；未设置时不会写入计费事务。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `odbc-dsn` | 计费数据库的 ODBC 数据源名称（或 `database:user:password` 格式） | 字符串 | *（无，必须设置）* |
+| `db_dsn` | **已弃用**的 `odbc-dsn` 别名，为向后兼容保留，设置它会记录弃用警告。应改用 `odbc-dsn`。 | 字符串 | *（无）* |
+| `db_table` | 保存账户余额的数据表 | 字符串 | *（无）* |
+| `db_column_cash` | 存储货币余额的数据库列 | 字符串 | *（无）* |
+| `db_column_account` | 存储账户标识符的数据库列 | 字符串 | *（无）* |
+| `custom_sql_lookup` | 返回 `nibble_balance` 的自定义 SELECT，支持通道变量展开；覆盖列名参数。 | SQL 字符串 | *（无，使用列参数）* |
+| `custom_sql_save` | 用于扣费的自定义 UPDATE；通道变量 `nibble_bill` 存放扣减金额；覆盖列名参数。 | SQL 字符串 | *（无，使用列参数）* |
+| `global_heartbeat` | 通过会话心跳在通话中执行计费的间隔（秒）。`0` 禁用中途计费，仅在挂机时计费。 | 整数 ≥ 0 | `0`（默认配置文件提供 `60`） |
+| `lowbal_amt` | 余额不高于该值时触发低余额动作（每次呼叫仅一次），可以为负数。 | 浮点数 | `0`（默认配置文件提供 `5`） |
+| `lowbal_action` | 余额达到 `lowbal_amt` 时执行的拨号计划应用字符串 | 应用字符串 | `play ding` |
+| `nobal_amt` | 余额达到或低于该值时，终止或转接呼叫；可以为负数。 | 浮点数 | `0` |
+| `nobal_action` | 余额达到 `nobal_amt` 时执行的拨号计划应用或转接目标 | 应用字符串 | `hangup` |
+| `percall_max_amt` | 每次呼叫允许的最大总费用（防欺诈保护）。目前源码会解析并保存该值，但**并未实际执行限制**，相关执行逻辑尚未实现。 | 浮点数 | `0`（默认配置文件提供 `100`） |
+| `percall_action` | 达到单次呼叫费用上限时执行的操作。目前源码会解析并保存它，但**并未实际执行**。 | 应用字符串 | `hangup` |
+| `var_name_rate` | 用于读取计费费率的通道变量名（覆盖默认 `nibble_rate`） | 字符串 | `nibble_rate` |
+| `var_name_account` | 用于读取账户 ID 的通道变量名（覆盖默认 `nibble_account`） | 字符串 | `nibble_account` |
+
+随附配置中的精简示例：
+
+```xml
+<configuration name="nibblebill.conf" description="Nibble Billing">
+  <settings>
+    <param name="odbc-dsn" value="bandwidth.com"/>
+    <param name="db_table" value="accounts"/>
+    <param name="db_column_cash" value="cash"/>
+    <param name="db_column_account" value="id"/>
+    <param name="global_heartbeat" value="60"/>
+    <param name="lowbal_amt" value="5"/>
+    <param name="lowbal_action" value="play ding"/>
+    <param name="nobal_amt" value="0"/>
+    <param name="nobal_action" value="hangup"/>
+    <param name="percall_max_amt" value="100"/>
+    <param name="percall_action" value="hangup"/>
+  </settings>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `nibblebill` | 控制当前通道的计费状态或调度 | `pause \| resume \| reset \| adjust <amount> \| heartbeat <seconds> \| check \| flush` |
+
+**参数说明：**
+
+- `pause`：暂停计费；暂停期间经过的时间不收费。
+- `resume`：恢复计费；下一个计费周期会扣除暂停时段。
+- `reset`：将计费起始时间戳改为当前时刻，舍弃已经过但尚未计费的时长。
+- `adjust <amount>`：立即在数据库中向账户增加或扣减 `<amount>`（正值增加余额，负值扣减余额）。
+- `heartbeat <seconds>`：为当前通道启用指定时间间隔的会话心跳计费。
+- `check`：将当前通道迄今累计的计费金额记录到 INFO 日志。
+- `flush`：立即对已经过的时间执行一次计费周期。
+
+开始计费前，通道必须设置 `nibble_rate`（或配置的 `var_name_rate` 等效变量）和 `nibble_account`（或 `var_name_account`）。
+
+```xml
+<!-- Set billing parameters and start billing -->
+<action application="set" data="nibble_account=${accountcode}"/>
+<action application="set" data="nibble_rate=0.05"/>
+<action application="bridge" data="sofia/gateway/carrier/$1"/>
+
+<!-- Mid-call: pause billing while playing a menu -->
+<action application="nibblebill" data="pause"/>
+
+<!-- Resume billing after the menu -->
+<action application="nibblebill" data="resume"/>
+
+<!-- Enable per-channel heartbeat billing every 30 seconds -->
+<action application="nibblebill" data="heartbeat 30"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `nibblebill` | 根据 UUID 控制任意活动通道的计费状态 | `nibblebill <uuid> [pause \| resume \| reset \| adjust <amount> \| heartbeat <seconds> \| check \| flush]` |
+
+`fs_cli` 示例：
+
+```
+nibblebill 1234-abcd-5678-efgh pause
+nibblebill 1234-abcd-5678-efgh adjust -2.50
+nibblebill 1234-abcd-5678-efgh check
+nibblebill 1234-abcd-5678-efgh heartbeat 60
+```
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `nibble_rate` | 读取 | 美元/分钟计费费率。默认变量名，可由配置中的 `var_name_rate` 覆盖。 |
+| `nibble_account` | 读取 | 查询和扣减余额时使用的账户标识符。默认变量名，可由配置中的 `var_name_account` 覆盖。 |
+| `nibble_increment` | 读取 | 计费步长（秒）。设置后，费用按下一个完整步长向上取整，而不是按精确经过时间收费。 |
+| `nibble_rounding` | 读取 | 舍入精度指数。挂机时，累计费用向上舍入到 `nibble_rounding` 位小数（内部以 `10^nibble_rounding` 为舍入因子）。 |
+| `nibble_minimum` | 读取 | 最低费用（美元）；挂机时若累计费用低于此值则应用最低金额。 |
+| `nobal_amt` | 读取 | 当前通道对全局 `nobal_amt` 阈值的覆盖。 |
+| `lowbal_amt` | 读取 | 当前通道对全局 `lowbal_amt` 阈值的覆盖。 |
+| `nibble_bill` | 写入 | 执行 `custom_sql_save` 前设置为当前扣费金额，使 SQL 能引用 `${nibble_bill}`。 |
+| `nibble_total_billed` | 写入 | 每次成功计费后更新为本次呼叫累计收费金额。 |
+| `nibble_current_balance` | 写入 | 呼叫挂机时设置为账户剩余余额。 |
+
+**源码：** `src/mod/applications/mod_nibblebill`、`conf/vanilla/autoload_configs/nibblebill.conf.xml`

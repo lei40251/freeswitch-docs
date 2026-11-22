@@ -1,0 +1,168 @@
+---
+sidebar_position: 12
+id: commercial-modules
+slug: /module-reference/commercial-modules
+title: "商业模块与许可证"
+description: "FreeSWITCH 商业模块许可证购买、安装、激活、服务器和使用情况。"
+sidebar_label: "Commercial Modules and Licensing"
+---
+# 商业模块与许可证 {#commercial-modules-and-licensing}
+
+FreeSWITCH 有两个按通道许可证销售的商业模块，不包含在开源代码树中。两者均通过 SignalWire FreeSWITCH 软件包仓库以二进制包分发，并且都通过与 FreeSWITCH 运行在同一台机器上的许可证服务器获取许可。本页说明二者共用的许可证购买、软件包安装、许可证文件激活、许可证服务器运行和许可使用情况检查流程。每个模块的独立页面介绍其配置、应用与变量。
+
+| 模块 | 软件包 | 功能 | 许可产品 | 参考文档 |
+|---|---|---|---|---|
+| `mod_com_amd` | `freeswitch-mod-com-amd` | 应答机检测：将已应答呼叫识别为真人或机器 | `AMD` | [mod_com_amd](./applications/mod_com_amd.mdx) |
+| `mod_com_g729` | `freeswitch-mod-com-g729` | 提供获得授权的 G.729 Annex A 编码器和解码器，使 FreeSWITCH 能转码 G.729 | `G.729A` | [mod_com_g729](./codecs/mod_com_g729.mdx) |
+
+## 购买许可证 {#purchasing-licences}
+
+许可证按并发通道数在 [licensing.freeswitch.com](https://licensing.freeswitch.com/) 销售。每次购买都会获得销售激活码（sales code）。必须在实际运行 FreeSWITCH 的机器上激活该激活码，产生的许可证文件会绑定该机器（参见[许可证文件](#licence-files)），因此每台 FreeSWITCH 服务器都需要各自的激活码。
+
+单个许可通道所覆盖的工作因模块而异：
+
+- **`mod_com_amd`**：一个许可通道一次运行一项检测。检测开始时占用通道，一旦得出结果或停止检测就会释放。因此所需许可证数取决于**同时执行检测的峰值**，而非并发呼叫数。
+- **`mod_com_g729`**：一个许可通道包含一个编码器和一个解码器。仅当 FreeSWITCH 实际对 G.729 音频进行编码或解码时才占用许可证，协商出 G.729 并不意味着立即占用。
+
+## 安装软件包 {#installing-the-packages}
+
+软件包发布在安装 FreeSWITCH 本体所使用的同一个认证仓库。先按[第 2 章：通过软件包安装](../foundations/getting-started.mdx#installing-from-packages)配置该仓库。软件包支持 Debian 12（bookworm）和 13（trixie）的 amd64、arm64 架构。发行版支持遵循 Debian 的生命周期：Debian 版本生命周期结束后，停止为其构建软件包。
+
+根据购买的产品安装对应模块软件包：
+
+```bash
+apt-get install -y freeswitch-mod-com-amd
+apt-get install -y freeswitch-mod-com-g729
+```
+
+每个模块包都依赖 `freeswitch-license-server`，apt 会一并安装。以下是软件包安装的文件：
+
+| 文件 | 软件包 | 用途 |
+|---|---|---|
+| `/usr/lib/freeswitch/mod/mod_com_amd.so` | `freeswitch-mod-com-amd` | AMD 模块 |
+| `/etc/freeswitch/autoload_configs/amd.conf.xml` | `freeswitch-mod-com-amd` | AMD 检测设置（参见 [mod_com_amd](./applications/mod_com_amd.mdx#configuration-amdconfxml)） |
+| `/usr/lib/freeswitch/mod/mod_com_g729.so` | `freeswitch-mod-com-g729` | G.729 模块（无配置文件） |
+| `/usr/sbin/freeswitch-license-validator` | `freeswitch-license-server` | 激活销售码并下载许可证文件 |
+| `/usr/sbin/freeswitch-license-server` | `freeswitch-license-server` | 向模块分配许可通道 |
+
+这两个模块都不在标准 `modules.conf.xml` 的默认加载列表中。许可证激活后，按各模块页面说明添加 `<load>` 条目。
+
+## 激活许可证 {#activating-licences}
+
+激活操作会将销售激活码转换成 FreeSWITCH 主机上的签名许可证文件。
+
+1. **在 FreeSWITCH 主机上运行验证程序。** 以 root 身份在某个工作目录下运行，因为程序会将输出文件写入当前目录。验证程序必须能够通过 HTTPS 访问外部许可证服务器。
+
+   ```bash
+   cd /tmp
+   freeswitch-license-validator
+   ```
+
+   在提示符输入每个销售激活码，最后输入空行结束，并输入 `y` 确认：
+
+   ```text
+   freeswitch product licencing tool
+
+   You will require one or more sales codes to activate licences
+   Enter a sales code, or a blank line to end: 0abd19753bf28fbb88a5d74
+   Enter a sales code, or a blank line to end:
+
+   Sales codes to be activated:
+   0abd19753bf28fbb88a5d74
+
+   OK (Y/N)? y
+   Success. The file licences.zip contains valid licences.
+   Unzip this to /etc/freeswitch/
+   ```
+
+   如果失败，验证程序会输出 `ERROR [<reason>]`、`Failed with HTTP error <code>` 或传输错误，而不会显示成功消息。
+
+2. **将许可证文件解压至 `/etc/freeswitch/`。** 压缩包中每次激活对应一个 `.conf` 许可证文件；复制 `.conf` 文件，而不是 ZIP 文件：
+
+   ```bash
+   unzip licences.zip
+   cp 0abd19753bf28fbb88a5d74.conf /etc/freeswitch/
+   ```
+
+   `/etc/freeswitch/` 是编译到许可证服务器中的固定目录。即使 FreeSWITCH 本体使用其他配置目录，也必须将许可证放在这里。
+
+3. **让许可证服务器重新读取新文件。** 如果服务器正在运行，发送信号触发重新扫描：
+
+   ```bash
+   pkill -HUP -f freeswitch-license-server
+   ```
+
+   这里必须使用 `-f`：否则 `pkill` 仅匹配进程名的前 15 个字符，而 `freeswitch-license-server` 的名字超过此长度。若许可证服务器尚未运行，启动时会读取该目录（参见[许可证服务器](#the-license-server)）。
+
+4. **加载模块并确认许可证数量。** 按模块页面将 `<load>` 行添加到 `modules.conf.xml`，加载模块或重启 FreeSWITCH，然后通过模块的 `_info` 命令检查数量：
+
+   ```bash
+   fs_cli -x 'load mod_com_amd'
+   fs_cli -x amd_info
+   ```
+
+   ```text
+   AMD license available => 10
+   AMD license allocated => 0
+   ```
+
+## 许可证文件 {#licence-files}
+
+许可证文件是经过签名的文本文件。编辑会导致签名失效，许可证服务器随后忽略该文件。服务器读取以下字段：
+
+| 字段 | 含义 |
+|---|---|
+| `Product` | 获得授权的产品：`AMD` 或 `G.729A` |
+| `ConcurrentChannels` | 文件授予的通道数 |
+| `PurchaseCode` | 文件对应的一个或多个销售激活码。每个激活码只计数一次：如果后续文件包含服务器已经处理过的激活码，就会被忽略。 |
+| `HardwareID` | 运行验证程序的机器上的一个 MAC 地址 |
+| `ExpirationDate` | 可选字段，表示通道许可有效的最后一天，格式为 `YYYYMMDD`。没有该字段则不过期。 |
+
+只有当 `HardwareID` 与许可证服务器所在机器的某个网卡 MAC 地址一致时，文件才会计入许可总数。复制到另一台机器上的许可证文件，或网卡更换后原主机上的许可证文件，都不再提供通道。同一产品的多个有效许可证文件授予的通道数相加。
+
+## 许可证服务器 {#the-license-server}
+
+`freeswitch-license-server` 保存许可数量，并向商业模块分配通道。模块通过本地套接字与其通信，因此服务器总是在 FreeSWITCH 主机上运行。
+
+| 项目 | 行为 |
+|---|---|
+| 启动 | 商业模块无法连接许可证服务器时，会自行启动 `freeswitch-license-server`，等待两秒后重试。也可以 root 身份手动启动。 |
+| 进程 | 脱离终端在后台运行，并切换为 `freeswitch` 用户。 |
+| 许可证目录 | `/etc/freeswitch/`，构建时固定。启动时扫描，接到 `SIGHUP` 后重新扫描。 |
+| 重新扫描 | `pkill -HUP -f freeswitch-license-server` |
+| 过期 | 运行期间，来自已过期许可证文件的通道将从可用数量中移除。 |
+| 停止 | 收到 `SIGTERM` 或 `SIGINT` 时退出。 |
+
+从终端手动启动时，服务器会将扫描过程输出到标准错误：检查每个文件时输出 `Scanning <file> for licences`，读取每个销售码时输出 `Purchase code <code>`，接受每个许可证时输出 `<N> channels of <product>`（或 `<N> channels of <product> expiring YYYY/MM/DD hh:mm:ss`）。同一时刻只能运行一个许可证服务器；第二个实例会在开始扫描前退出。
+
+## 检查许可证使用情况 {#checking-licence-usage}
+
+每个模块注册三个查询许可证服务器的 API 命令。这些命令不需要参数，可以从 `fs_cli`、Event Socket 和拨号计划变量展开中使用。
+
+| `mod_com_amd` | `mod_com_g729` | 返回结果 |
+|---|---|---|
+| `amd_info` | `g729_info` | 两行：`<product> license available => <free>` 和 `<product> license allocated => <in use>`。检查失败时输出 `Can't contact licence server.`。 |
+| `amd_available` | `g729_available` | 有至少一个空闲通道时为 `true`，否则为 `false`；检查失败也返回 `false`。 |
+| `amd_count` | `g729_count` | 空闲通道数量；检查失败返回 `0`。 |
+
+`_info` 中的 “available” 数值与 `_count` 的返回值都表示空闲通道数（已许可减去已分配），并非许可总数。
+
+模块加载时会以 `INFO` 级别记录许可总数，形式为 `AMD license count => <N>` 或 `G.729A license count => <N>`。检查失败则以 `ERROR` 级别记录 `Couldn't contact license server`，但模块仍会加载。
+
+在拨号计划变量展开中，可以先调用 `_available` 检查空闲通道再启动需授权的操作。必须包含圆括号：圆括号表示调用 API 命令，而 `${amd_available}`（没有圆括号）只读取同名通道变量，该变量为空。
+
+```xml
+<condition field="${amd_available()}" expression="^true$">
+```
+
+## 故障排查 {#troubleshooting}
+
+| 现象 | 原因 | 解决办法 |
+|---|---|---|
+| `amd_info` 或 `g729_info` 输出 `Can't contact licence server.` | 许可证服务器未运行且无法启动，**或者**服务器正在运行但没有该产品的有效许可证。服务器拒绝对没有许可证的产品进行查询，模块会将其报告为与服务器不可达相同的错误。 | 确认 `.conf` 文件位于 `/etc/freeswitch/`、在本机激活（`HardwareID`）且未过期；执行 `pkill -HUP -f freeswitch-license-server` 重新扫描。 |
+| 许可总数少于购买数量 | 文件验证失败（被编辑、机器不匹配、已过期），或两个文件包含相同购买码 | 停止 FreeSWITCH，然后停止正在运行的许可证服务器，在终端手动启动它，查看实际接受了哪些许可。 |
+| 业务运行期间 `amd_available` 返回 `false` | 全部 AMD 通道都在使用中 | 购买更多许可通道，或通过 `voice_stop` 提前停止检测。 |
+| AMD 呼叫立即以 `DESTINATION_OUT_OF_ORDER` 挂断 | 检测未能取得许可通道，并且 `hangup_on_bug_fail` 已启用（默认） | 参见 [mod_com_amd：检测失败](./applications/mod_com_amd.mdx#detection-failures)。 |
+| G.729 呼叫接通但没有声音 | 呼叫开始转码时没有空闲的 G.729 编码器或解码器许可通道 | 参见 [mod_com_g729：许可证使用](./codecs/mod_com_g729.mdx#licence-use)。 |
+
+**来源：** `mod_com_amd.c` 与 `mod_com_g729.c`（商业模块源码，不包含在 FreeSWITCH 公共代码树中）、`freeswitch-license-server` 源码（验证程序、服务器和客户端库），以及模块打包配置。

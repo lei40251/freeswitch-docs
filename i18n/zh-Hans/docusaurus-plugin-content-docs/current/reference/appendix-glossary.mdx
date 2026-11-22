@@ -1,0 +1,176 @@
+---
+sidebar_position: 5
+id: appendix-glossary
+slug: /reference/glossary
+title: "附录 C：术语表"
+description: "FreeSWITCH 用户手册中的 SIP、VoIP 与 FreeSWITCH 专用术语定义。"
+sidebar_label: "附录 C：术语表"
+---
+
+# 附录 C：术语表 {#appendix-c-glossary}
+
+本术语表定义《FreeSWITCH 用户手册》中涉及 FreeSWITCH 配置与运行的术语。除 FreeSWITCH 赋予术语更具体含义的情况外，这些定义均与 SIP 和 VoIP 的标准用法一致。
+
+## A
+
+| 术语 | 定义 |
+|------|------|
+| **ACL** | 访问控制列表（Access Control List）。一种由 CIDR 网段或 IP 地址组成的命名列表，用于允许或拒绝访问 FreeSWITCH 服务。ACL 在 `autoload_configs/acl.conf.xml` 中定义，Sofia Profile 及其他模块可通过名称引用。 |
+| **Action** | 动作。拨号计划中的一条指令：在所属 Extension 的全部条件匹配后，执行应用程序或设置变量。`<condition>` 块内的动作按文档顺序依次求值。 |
+
+---
+
+## B
+
+| 术语 | 定义 |
+|------|------|
+| **Bridge** | 桥接。连接两个或多个呼叫腿，使媒体可以在它们之间流动。在拨号计划中，`bridge` 应用将当前通道连接到一个或多个目标端点。桥接并不会把多个通道合并为一个会话；每条呼叫腿仍保留自己的通道。 |
+| **Bypass media** | 媒体旁路。一种信令模式：FreeSWITCH 指示两个端点直接交换 RTP，使 FreeSWITCH 媒体服务器退出媒体路径。可对单次呼叫设置通道变量 `bypass_media=true` 启用，但 SIP 信令仍经过 FreeSWITCH。 |
+
+---
+
+## C
+
+| 术语 | 定义 |
+|------|------|
+| **Call** | 呼叫。由一条或多条呼叫腿组成的逻辑通信实例。双人通话有两条腿（A 腿和 B 腿）。呼叫在内部以会话表示，也可能跨越多个通道。 |
+| **CDR** | 呼叫详细记录（Call Detail Record）。呼叫结束时写入的结构化记录，包含主叫号码、目标号码、通话时长、结果状态和通道变量等元数据。FreeSWITCH 可通过 `mod_cdr_csv`、`mod_cdr_sqlite` 等模块生成 XML 或 JSON 格式的 CDR。 |
+| **Channel** | 通道。FreeSWITCH 中表示一条呼叫腿的基本单元。每个通道对应一个端点连接，并拥有独立的状态机、媒体流引用及通道变量集合。呼叫腿建立时创建通道，呼叫腿结束时销毁。 |
+| **Channel variable** | 通道变量。作用域限定于单个通道的键值对，用于控制呼叫行为（例如 `hangup_after_bridge`、`effective_caller_id_number`）、携带呼叫元数据，并且可在通道生命周期内通过拨号计划和应用程序读写。 |
+| **Codec** | 编解码器。一种规定音频（或视频）如何编码并通过 RTP 传输的编码／解码规范。FreeSWITCH 在 SDP 交换期间协商编解码器。支持的编解码器由模块注册，例如 `mod_opus`、`mod_g729`。 |
+| **Condition** | 条件。拨号计划中将当前通道的一个或多个属性（如 `destination_number`、`caller_id_name`）与正则表达式匹配的元素。只有所有测试均匹配时，其内部动作才会执行。 |
+| **Context** | 上下文。一组具名拨号计划 Extension。系统根据 SIP Profile 或用户目录配置为入站呼叫分配上下文（例如 `public` 或 `default`）；拨号计划引擎仅在分配的上下文内搜索 Extension。 |
+
+---
+
+## D
+
+| 术语 | 定义 |
+|------|------|
+| **Dialplan** | 拨号计划。决定 FreeSWITCH 收到呼叫后如何处理的路由引擎。默认拨号计划（XML Dialplan）由 Context、Extension、Condition 和 Action 组成层次结构，存放在 `dialplan/` 下的 XML 文件中。 |
+| **Directory** | 用户目录。FreeSWITCH（主要是 `mod_sofia`）使用的基于 XML 的用户和域数据库，用于定义域、用户、网关及各用户的参数。目录文件位于 `directory/`，在启动时或执行 `reloadxml` 后加载。 |
+| **Domain** | 域。FreeSWITCH 用户目录中的逻辑命名空间，通常对应 SIP 域（例如 `pbx.example.com`）。用户和网关定义在域内；同一 FreeSWITCH 实例可以托管多个域。 |
+| **DTLS** | 数据报传输层安全协议（Datagram Transport Layer Security）。在 WebRTC 等安全媒体场景中协商 SRTP 加密密钥的协议。DTLS 取代 SDES 密钥交换方式，是 WebRTC 的必需协议；在配置适当 TLS 设置后可通过 `mod_sofia` 支持。 |
+| **DTMF (RFC 2833)** | 双音多频信令（Dual-Tone Multi-Frequency）。通过 RFC 2833（后由 RFC 4733 取代）定义的 telephone-event 载荷，以带外方式通过 RTP 传输。FreeSWITCH 支持 RFC 2833、SIP INFO 或带内音频形式收发 DTMF，可按 Profile 或单次呼叫配置。 |
+
+---
+
+## E
+
+| 术语 | 定义 |
+|------|------|
+| **Early media** | 早期媒体。被叫端点在呼叫完全应答前（即 SIP 200 OK 之前）发送的音频或视频，通常伴随临时响应 183 Session Progress 到达。FreeSWITCH 可以通过 `pre_answer` 应用产生或透传早期媒体。 |
+| **Endpoint** | 端点。实现信令和媒体协议、让 FreeSWITCH 可以发起与终止呼叫的模块。`mod_sofia` 是 SIP 端点；`mod_verto` 是 Verto/WebRTC 端点。每个端点向 FreeSWITCH 核心注册，并管理各自的协议栈。 |
+| **Event Socket** | 事件套接字。`mod_event_socket` 提供的 TCP 接口，将 FreeSWITCH 的事件和命令开放给外部应用程序。支持入站模式（外部应用连接到 FreeSWITCH）或出站模式（FreeSWITCH 针对每次呼叫主动向外连接）。 |
+| **Extension** | 分机规则。拨号计划上下文中的一个元素，包含一个或多个条件及对应动作。FreeSWITCH 按顺序测试每个 Extension，直到某个规则匹配入站呼叫；匹配后便触发相应动作。 |
+
+---
+
+## F
+
+| 术语 | 定义 |
+|------|------|
+| **FIFO** | 先进先出队列（First In, First Out）。由 `mod_fifo` 实现，保存等待坐席接听的呼叫者。呼叫者使用 `fifo` 应用进入队列，坐席则通过同一应用的消费者模式从队列取出呼叫者。 |
+
+---
+
+## G
+
+| 术语 | 定义 |
+|------|------|
+| **Gateway** | 网关。FreeSWITCH 用户目录或 Sofia Profile 中的 SIP 中继定义，用于描述如何向上游 SIP 服务提供商注册或发送呼叫。网关指定代理地址、凭据和注册参数。 |
+
+---
+
+## I
+
+| 术语 | 定义 |
+|------|------|
+| **IVR** | 交互式语音应答（Interactive Voice Response）。一种呼叫流程，通过播放提示音和收集来电者的 DTMF 或语音输入，以程序化方式提供服务或转接呼叫。FreeSWITCH 可通过 XML IVR 菜单系统（`mod_ivr`）、Lua、JavaScript 或其他脚本模块实现 IVR。 |
+
+---
+
+## L
+
+| 术语 | 定义 |
+|------|------|
+| **Leg** | 呼叫腿。呼叫的一侧。标准双人通话包含 A 腿（发起端通道）和 B 腿（终止端通道），每条腿都是独立的通道，具有独立的信令和媒体。 |
+
+---
+
+## M
+
+| 术语 | 定义 |
+|------|------|
+| **MOH** | 保持音乐（Music on Hold）。向处于保持状态的呼叫者播放的音频流。在 FreeSWITCH 中，通常将呼叫者置于 `park` 或 `hold` 状态，使用本地音频文件或流作为音源，并通过 `hold_music` 通道变量或 Profile 参数配置。 |
+
+---
+
+## N
+
+| 术语 | 定义 |
+|------|------|
+| **NAT** | 网络地址转换（Network Address Translation）。路由器在私有网络与公网之间重写 IP 地址和端口的机制。FreeSWITCH 在 `mod_sofia` 中提供 NAT 穿越辅助功能（如 STUN、`ext-rtp-ip`、`ext-sip-ip`），确保 NAT 后端点的 SDP 地址正确。 |
+
+---
+
+## P
+
+| 术语 | 定义 |
+|------|------|
+| **Preprocessor variable** | 预处理器变量。在 `vars.xml` 或 `X-PRE-PROCESS` 指令中定义，在解析 XML 配置文件之前完成替换。使用 `$${variable_name}` 语法，加载时仅解析一次；与运行时有效的通道变量不同。 |
+| **Profile (Sofia profile)** | Sofia 配置实例（Profile）。在 `mod_sofia` 内配置的命名 SIP 协议栈实例，定义监听地址与端口、传输协议（UDP、TCP、TLS）、编解码器偏好、NAT 处理及其他 SIP 层参数。FreeSWITCH 可同时运行多个 Profile，例如 internal 和 external。 |
+| **proxy media** | 媒体代理。一种媒体处理模式：FreeSWITCH 在端点间转发 RTP，而不解码或重新编码音频。FreeSWITCH 仍在 RTP 路径上，但不执行转码。可设置通道变量 `proxy_media=true` 启用。与媒体旁路不同，FreeSWITCH 仍接收并转发每个 RTP 包。 |
+| **ptime** | 包时长（Packet time）。每个 RTP 包编码的音频时长，单位为毫秒，常见值为 20 ms 和 30 ms。端点的 `ptime` 不一致时，FreeSWITCH 可能需要重新打包音频；启用转码时会透明地处理这种情况。 |
+
+---
+
+## R
+
+| 术语 | 定义 |
+|------|------|
+| **Registration** | 注册。SIP 用户代理向 FreeSWITCH（经由 `mod_sofia`）发送 REGISTER 请求，将其当前 Contact 地址关联到 SIP 记录地址（AOR）的过程。已注册的 Contact 存储在 FreeSWITCH 注册数据库中，用于入站呼叫路由。 |
+| **RTP** | 实时传输协议（Real-time Transport Protocol）。在端点间传输音视频媒体、基于 UDP 的协议。RTP 包含序列号、时间戳和载荷类型，用于标识编解码器及数据包顺序。 |
+
+---
+
+## S
+
+| 术语 | 定义 |
+|------|------|
+| **SDP** | 会话描述协议（Session Description Protocol）。承载在 SIP 消息体中的文本格式，用于描述端点的媒体能力：IP 地址、端口、编解码器、`ptime` 及安全参数。FreeSWITCH 在呼叫建立期间生成并解析 SDP，以协商媒体会话。 |
+| **Session** | 会话。FreeSWITCH 内部对象，在单条呼叫腿的生命周期内持有通道及其相关状态。一个会话把一条呼叫腿的信令（端点）、媒体（RTP）和拨号计划执行上下文关联在一起。 |
+| **SRTP** | 安全实时传输协议（Secure Real-time Transport Protocol）。RTP 的加密扩展，为媒体流提供机密性和消息认证。FreeSWITCH 通过 SDES（使用 SDP）或 DTLS（用于 WebRTC）密钥交换支持 SRTP。 |
+
+---
+
+## T
+
+| 术语 | 定义 |
+|------|------|
+| **T.38** | 一项通过 IP 传输传真（FoIP）的 ITU 标准，使用 UDP 或 TCP，而不是通过 RTP 传输音频频带的调制解调器音调。检测到传真音时，`mod_sofia` 可以在通话中协商将音频 RTP 切换为 T.38，从而在有丢包的网络上可靠地传输传真。 |
+| **Transcoding** | 转码。将一种编解码器的音频解码，再编码为另一种格式的过程。当 A、B 两条呼叫腿协商使用不同编解码器时，FreeSWITCH 执行转码。转码消耗 CPU 资源；媒体旁路或媒体代理模式下不会执行转码。 |
+
+---
+
+## U
+
+| 术语 | 定义 |
+|------|------|
+| **User** | 用户。FreeSWITCH 目录中表示 SIP 订阅者的条目。用户定义在某个域中，可指定认证凭据、主叫号码、编解码器偏好和用户级变量。在 SIP 注册及入站呼叫路由时，可以通过拨号计划中的 `user` 目标引用用户。 |
+
+---
+
+## V
+
+| 术语 | 定义 |
+|------|------|
+| **Verto** | FreeSWITCH 原生的 JSON-RPC 信令协议，由 `mod_verto` 实现，面向 WebRTC 客户端。Verto 通过 WebSocket 连接工作，提供呼叫控制、媒体协商和会议能力，客户端无须实现 SIP 协议栈。 |
+
+---
+
+## W
+
+| 术语 | 定义 |
+|------|------|
+| **WebRTC** | Web 实时通信（Web Real-Time Communication）。一组浏览器 API 和协议（ICE、DTLS、SRTP、SDP），使浏览器能够进行点对点音视频通信。FreeSWITCH 通过 `mod_verto`（Verto 信令）以及基于 WebSocket 的 SIP（`mod_sofia` 的 WSS 传输）支持 WebRTC 客户端。 |

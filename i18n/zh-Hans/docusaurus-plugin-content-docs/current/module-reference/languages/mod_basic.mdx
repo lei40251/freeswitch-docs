@@ -1,0 +1,80 @@
+---
+sidebar_position: 1
+id: mod_basic
+slug: /module-reference/languages/mod_basic
+title: "mod_basic — MY-BASIC 脚本"
+description: "嵌入 MY-BASIC 解释器，让拨号计划或 API 调用者在 FreeSWITCH 通道上执行 BASIC 脚本。"
+sidebar_label: "mod_basic"
+---
+
+# mod_basic — MY-BASIC 脚本 {#mod_basic-—-my-basic-scripting}
+
+`mod_basic` 将 [MY-BASIC](http://code.google.com/p/my-basic/) 解释器（一种轻量级 BASIC 方言）直接嵌入 FreeSWITCH。MY-BASIC 运行时随模块源码中的 `my_basic.c`／`my_basic.h` 一同提供，无须安装外部库。模块位于 `src/mod/languages/`。
+
+如果想使用过程式 BASIC 方言编写简单的呼叫控制逻辑，而不引入 Lua、Python 等较重的脚本运行时，可以使用 `mod_basic`。脚本通过模块注册的一小组内置 BASIC 函数读写通道变量、执行拨号计划应用，以及调用 FreeSWITCH API 命令。
+
+## 加载模块 {#loading-the-module}
+
+此模块**不在**默认自动加载集合中。请在 `autoload_configs/modules.conf.xml` 的 `<modules>` 部分添加：
+
+```xml
+<load module="mod_basic"/>
+```
+
+若需在不重启 FreeSWITCH 的情况下运行时加载：
+
+```
+freeswitch@> load mod_basic
+```
+
+编译前仅需在构建系统的 `modules.conf` 中启用该模块，无须其他特殊编译标志。
+
+## 配置 {#configuration}
+
+`mod_basic` 不附带 `.conf.xml` 文件，加载时也不读取配置，没有可调参数。如果脚本文件名不是绝对路径，系统会相对于 FreeSWITCH 全局 `script_dir`（通常为 `$${base_dir}/scripts`）查找脚本。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `basic` | 在当前通道上下文中执行 MY-BASIC 脚本文件 | `<file> [arg1 arg2 ...]` |
+
+参数字符串的第一个字段是脚本文件名。后续以空格分隔的参数成为位置参数，脚本内可通过 `FS_GETARG` 获取。如果 `<file>` 不是绝对路径，模块会添加 FreeSWITCH 的 `scripts/` 目录作为前缀。
+
+```xml
+<action application="basic" data="hello.bas"/>
+<action application="basic" data="/opt/freeswitch/scripts/ivr.bas option1 option2"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `basic` | 在拨号计划呼叫腿之外执行 MY-BASIC 脚本（不要求通道） | `basic <file> [args]` |
+
+```
+freeswitch@> basic /opt/freeswitch/scripts/test.bas
+```
+
+API 版本调用的底层函数与拨号计划应用相同。如果通过 CLI 调用，且没有活动会话，需要通道的脚本函数（`FS_EXECUTE`、`FS_GETVAR`、`FS_SETVAR`）会记录错误并返回警告结果；`FS_API` 和 `FS_LOG` 仍可正常使用。
+
+## BASIC 内置函数 {#basic-built-in-functions}
+
+每次执行脚本时，模块都会向 MY-BASIC 解释器注册以下函数。应将它们作为 BASIC 函数调用，而不是 FreeSWITCH API 命令。
+
+| 函数 | 用途 | 签名 |
+|----------|---------|-----------|
+| `FS_EXECUTE` | 在当前通道上运行 FreeSWITCH 拨号计划应用 | `FS_EXECUTE(app$, args$)` |
+| `FS_GETARG` | 返回传给脚本的某个位置参数 | `FS_GETARG(index%)` |
+| `FS_GETVAR` | 读取通道变量 | `FS_GETVAR(name$)` |
+| `FS_SETVAR` | 写入通道变量 | `FS_SETVAR(name$, value$)` |
+| `FS_API` | 调用 FreeSWITCH API 命令并返回输出 | `FS_API(cmd$, args$)` |
+| `FS_LOG` | 向 FreeSWITCH 日志写入消息 | `FS_LOG(level$, message$)` |
+
+传给 `FS_LOG` 的 `level$` 是标准 FreeSWITCH 日志级别字符串，如 `"DEBUG"`、`"INFO"`、`"WARNING"` 或 `"ERROR"`。
+
+## 另请参阅 {#see-also}
+
+- [第 28 章：脚本集成](../../integration/scripting.mdx)
+
+**源码：** `src/mod/languages/mod_basic`

@@ -1,0 +1,87 @@
+---
+sidebar_position: 4
+id: mod_managed
+slug: /module-reference/languages/mod_managed
+title: "mod_managed — Mono／.NET CLR 脚本"
+description: "将 Mono／Microsoft CLR 嵌入 FreeSWITCH，支持在拨号计划与 API 中运行 C#、F#、VB.NET 脚本和插件。"
+sidebar_label: "mod_managed"
+---
+
+# mod_managed — Mono／.NET CLR 脚本 {#mod_managed-—-mono--net-clr-scripting}
+
+`mod_managed` 将 Mono JIT 运行时（或使用 `_MANAGED` 构建时的 Microsoft 公共语言运行时 CLR）直接嵌入 FreeSWITCH，允许运维人员使用任意公共语言基础设施（CLI）语言（C#、F#、VB.NET 或兼容脚本文件）编写拨号计划应用和 API 命令，而无须重启交换机。原生层位于 `src/mod/languages/mod_managed`，大部分逻辑位于配套托管程序集 `FreeSWITCH.Managed.dll` 中。
+
+如果团队偏好 .NET 生态，需要在 FreeSWITCH 与其他 .NET 服务之间共享业务逻辑，或希望在交换机运行时把新的 `.dll` 或脚本文件放入 `managed/` 目录即可热重载，可以使用此模块。
+
+## 加载模块 {#loading-the-module}
+
+`mod_managed` **不在**默认加载集合中。`conf/vanilla/autoload_configs/modules.conf.xml` 完全没有对应条目（甚至没有注释的条目）。若要加载，请添加以下配置并重启，或在 `fs_cli` 中使用 `load`：
+
+```xml
+<load module="mod_managed"/>
+```
+
+```
+freeswitch@> load mod_managed
+```
+
+FreeSWITCH 模块目录中必须存在 `FreeSWITCH.Managed.dll`（与 `mod_managed.so` 一起安装）。构建模块前应准备好 Mono 开发头文件，使 `pkg-config mono-2` 能正确解析。
+
+## 配置 {#configuration}
+
+`mod_managed` **没有 `mod_managed.conf.xml`**。模块不附带配置文件，加载时也不读取配置。相关设置都是隐式的：
+
+- **插件目录：** `{modules_dir}/managed/`——加载器启动时扫描该目录中的每个文件，并在运行时监控变化。
+- **影子复制目录：** `{modules_dir}/managed/shadow/`——如果加载时已存在该目录，加载器会删除并重新创建它；.NET AppDomain 影子复制机制使用它暂存程序集。
+- **逐插件配置：** 与 `.dll` 或 `.exe` 同名位置的 `.config` 文件（如 `MyPlugin.dll.config`），会作为插件隔离 AppDomain 的配置。交换机运行期间修改该 `.config` 文件会触发对应插件自动重载。
+- **逐插件引用目录：** `{modules_dir}/managed/<modulename>/`——对于名为 `<modulename>.<ext>` 的插件文件，此目录会与共享 `managed` 目录一起加入该插件 AppDomain 的 `PrivateBinPath`，允许把私有依赖程序集放在各自的子目录中，而不是共享 `managed/` 目录中。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|-------------|---------|-----------|
+| `managed` | 在活动通道上运行 .NET `IAppPlugin` 实现（或脚本） | `<plugin-name> [<args>]` |
+
+对于已编译程序集，`<plugin-name>` 可以是完整限定类型名（`Namespace.ClassName`）或短类名（`ClassName`）；对于脚本文件，也可以是文件名（例如 `Demo.csx`）。
+
+加载器以 `.dll` 扩展名识别已编译程序集，并将以下扩展名交给脚本插件管理器（通过 CodeDOM Provider 即时编译）：`.csx`（C#）、`.fsx`（F#）、`.vbx`（VB.NET）、`.jsx`（JScript）和 `.exe`。其他扩展名的文件将被忽略。
+
+```xml
+<action application="managed" data="AppDemo"/>
+<action application="managed" data="MyCompany.IVR.WelcomeApp some-argument"/>
+<action application="managed" data="Demo.csx"/>
+```
+
+该应用支持 `SAF_SUPPORT_NOMEDIA`，因此可在无媒体（bypass-media）通道上调用。
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---------|---------|--------|
+| `managed` | 同步（阻塞式）执行 .NET `IApiPlugin` | `managed <plugin-name> [<args>]` |
+| `managedrun` | 通过 `ExecuteBackground` 在后台异步执行 .NET `IApiPlugin` | `managedrun <plugin-name> [<args>]` |
+| `managedreload` | 强制重新加载 `managed/` 目录中的指定文件 | `managedreload <filename-or-path>` |
+| `managedlist` | 将当前已加载的 API 和应用列表写入输出流（或日志） | `managedlist` |
+
+```
+freeswitch@> managed ApiDemo hello-world
+freeswitch@> managedrun ApiDemo background-job
+freeswitch@> managedreload MyPlugin.dll
+freeswitch@> managedlist
+```
+
+`managedreload` 可以接受裸文件名（相对于 `managed/` 目录解析）或绝对路径。加载器也会自动监控 `managed/` 目录中的文件变化并重载，除非插件设置了 `PluginOptions.NoAutoReload`。
+
+## 依赖 {#dependencies}
+
+构建前必须安装 **Mono 运行时**（`mono-devel`／`libmono-dev`），构建系统通过 `pkg-config` 链接 `mono-2`。在 Windows 上，可以选择使用 Microsoft CLR 编译模块（预处理标志 `_MANAGED`），从而不依赖 Mono。
+
+在 Linux 上，当 FreeSWITCH 核心 API 改变时，构建还需要 **SWIG** 重新生成 `freeswitch_wrap.cxx` 和 `managed/swig.cs`（运行 `make reswig`）。默认情况下使用源码树中随附的预生成文件。
+
+---
+
+## 另请参阅 {#see-also}
+
+- [第 28 章：脚本集成](../../integration/scripting.mdx)
+
+**源码：** `src/mod/languages/mod_managed`

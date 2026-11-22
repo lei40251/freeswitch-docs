@@ -1,0 +1,108 @@
+---
+sidebar_position: 7
+id: mod_com_g729
+slug: /module-reference/codecs/mod_com_g729
+title: "mod_com_g729——G.729 编解码器（商业版）"
+description: "商业 G.729 编解码模块的授权、打包时长、转码行为及 API 命令。"
+sidebar_label: "mod_com_g729"
+---
+# mod_com_g729——G.729 编解码器（商业版） {#mod_com_g729-—-g729-codec-commercial}
+
+`mod_com_g729` 是商业版 G.729 编解码模块。它提供经授权的 G.729 Annex A 编码器和解码器，使 FreeSWITCH 可以在 G.729 与其他编解码器之间转码，并能对 G.729 呼叫进行播放、录音和会议混音。G.729 以 8 kbit/s 传输窄带语音，在带宽有限的运营商中继中较常见。
+
+开源模块 [`mod_g729`](./mod_g729.mdx) 注册相同的编解码器。如果编译时没有 G.729 库，它只能在两侧都使用 G.729 的呼叫腿之间透传，不能转码。`mod_com_g729` 则是支持转码的授权版本。
+
+`mod_com_g729` 按通道授权，不属于开源代码树。购买、安装软件包、激活许可证以及许可证服务器的相关信息见[商业模块与授权](../commercial-modules.mdx)。
+
+## 编解码器详情 {#codec-details}
+
+模块注册一个名为 `G.729` 的编解码器，支持十二种打包时长：
+
+| 属性 | 值 |
+|---|---|
+| IANA 名称（用于编解码器字符串） | `G729` |
+| RTP 载荷类型 | `18`（静态分配） |
+| 采样率 | 8000 Hz |
+| 声道数 | 1 |
+| 比特率 | 8000 bit/s |
+| 打包时长（ptime） | 10～120 毫秒，步长 10 毫秒 |
+| 编码后大小 | 每 10 毫秒 10 字节 |
+| fmtp | `annexb=no` |
+| 编解码变体 | G.729 Annex A。不支持 Annex B（语音活动检测和舒适噪声），这一点由 `annexb=no` fmtp 标识。 |
+
+## 加载模块 {#loading-the-module}
+
+安装 `freeswitch-mod-com-g729` 软件包，并按照[商业模块与授权](../commercial-modules.mdx)中的说明激活 G.729 许可证。本模块没有配置文件。
+
+默认的 `modules.conf.xml` 会加载 `mod_g729`，它同样注册 `G729` 编解码器。这两个模块只能加载其中一个。请在 `autoload_configs/modules.conf.xml` 中用 `mod_com_g729` 替换 `mod_g729`：
+
+```xml
+<!-- <load module="mod_g729"/> -->
+<load module="mod_com_g729"/>
+```
+
+模块加载时，会记录授权通道数，格式为 `G.729A license count => <N>`；如果许可证检查失败则记录 `Couldn't contact license server`。随后模块注册编解码器和三个 API 命令。修改加载列表后，请重启 FreeSWITCH；或者在 `fs_cli` 中卸载 `mod_g729` 并加载 `mod_com_g729`：
+
+```text
+unload mod_g729
+load mod_com_g729
+```
+
+## 提供 G.729 {#offering-g729}
+
+加载模块只会让 `G729` 变为可用；只有在编解码器偏好字符串中包含它，才会在协商时提供。默认的 `global_codec_prefs` 和 `outbound_codec_prefs` 均不包含它。请在需要提供 G.729 的位置添加 `G729`，例如在 `vars.xml` 中：
+
+```xml
+<X-PRE-PROCESS cmd="set" data="global_codec_prefs=OPUS,G722,PCMU,PCMA,G729,H264,VP8"/>
+<X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=OPUS,G722,PCMU,PCMA,G729,H264,VP8"/>
+```
+
+可以添加 ptime 后缀来指定打包时长，例如 `G729@30i`。偏好字符串的语法及其生效位置见[第 16 章：编解码器与协商](../../media/codecs-and-negotiation.mdx#codec-preference-strings)。
+
+## 许可证使用 {#licence-use}
+
+许可证服务器分别维护 G.729 编码器与解码器资源池，每个池的容量均等于授权通道数。因此，一个授权通道覆盖一个编码器和一个解码器，对双向都需要转码的 G.729 呼叫腿来说正好各使用一个。
+
+| 方面 | 行为 |
+|---|---|
+| 何时占用许可证 | 呼叫腿首次对帧进行编码或解码时，而非协商出 G.729 时。编码器和解码器在各自首次使用时分别占用。 |
+| 何时释放 | 呼叫腿的编解码器被销毁时，例如挂机或该呼叫腿切换编解码器时。 |
+| 不占用许可证的呼叫腿 | FreeSWITCH 从未对其音频进行编解码的 G.729 呼叫腿。例如桥接两个 G.729 呼叫腿，并且两侧均无录音、播放或其他媒体处理。 |
+| 没有空闲许可证时 | 对应方向的编码或解码失败，因此该方向的音频丢失。呼叫不会直接被拒绝，因为协商阶段不检查许可证。 |
+
+由于协商时不会检查许可证，即便没有空闲许可证，呼叫也可能协商使用 G.729。如果存在许可证耗尽的可能，请在拨号计划提供 G.729 前检查 `${g729_available()}`，并在不可用时回退到不包含 `G729` 的编解码器列表。`break="never"` 可让路由无论检查结果如何都继续执行到桥接步骤：
+
+```xml
+<extension name="carrier_outbound">
+  <condition field="destination_number" expression="^9(1\d{10})$"/>
+  <condition field="${g729_available()}" expression="^true$" break="never">
+    <action application="set" data="absolute_codec_string=G729,PCMU"/>
+    <anti-action application="set" data="absolute_codec_string=PCMU,PCMA"/>
+  </condition>
+  <condition field="destination_number" expression="^9(1\d{10})$">
+    <action application="bridge" data="sofia/gateway/carrier/$1"/>
+  </condition>
+</extension>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 返回值 |
+|---|---|
+| `g729_info` | `G.729A license available => <free>` 和 `G.729A license allocated => <in use>`；或者 `Can't contact licence server.` |
+| `g729_available` | 至少有一个空闲通道时返回 `true`，否则返回 `false` |
+| `g729_count` | 空闲通道数量 |
+
+这三个命令报告的是编码器资源池。输出格式、拨号计划用法及故障排查见[商业模块与授权：检查许可证使用情况](../commercial-modules.mdx#checking-licence-usage)。
+
+```text
+freeswitch@internal> g729_info
+G.729A license available => 10
+G.729A license allocated => 0
+```
+
+## 通道变量 {#channel-variables}
+
+`mod_com_g729` 不读取或设置任何通道变量。编解码器选择使用核心编解码器变量（如 `absolute_codec_string`），详见[第 16 章：编解码器与协商](../../media/codecs-and-negotiation.mdx#channel-variables)。
+
+**源码：** `mod_com_g729.c`（商业模块源码，不在公开的 FreeSWITCH 代码树中），以及 `freeswitch-mod-com-g729` 软件包。

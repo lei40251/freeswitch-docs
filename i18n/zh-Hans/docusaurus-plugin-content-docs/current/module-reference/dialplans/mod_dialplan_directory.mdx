@@ -1,0 +1,78 @@
+---
+sidebar_position: 2
+id: mod_dialplan_directory
+slug: /module-reference/dialplans/mod_dialplan_directory
+title: "mod_dialplan_directory — 目录服务驱动的拨号计划"
+description: "查询 LDAP 等目录服务，以被拨分机和上下文为键获取呼叫路由指令。"
+sidebar_label: "mod_dialplan_directory"
+---
+
+# mod_dialplan_directory — 目录服务驱动的拨号计划 {#mod_dialplan_directory-—-directory-driven-dialplan}
+
+`mod_dialplan_directory` 是 `src/mod/dialplans` 类别的拨号计划解析器。它不从磁盘 XML 文件中读取路由规则，而是在呼叫期间连接 LDAP 等目录服务，并获取作为目录条目 `callflow` 属性存储的路由指令。
+
+如果呼叫路由数据已经保存在目录服务中，或者希望不必对集群每个节点重新加载 XML 就能立即生效，可以使用此模块。每个入站呼叫会根据被拨分机号以及可选的上下文执行目录查询；模块随后把返回的每个 `callflow` 值作为 FreeSWITCH 应用调用执行。
+
+## 加载模块 {#loading-the-module}
+
+`load`／`modules.conf.xml` 使用的模块名是 `mod_dialplan_directory`。默认配置**不加载**它；`conf/vanilla/autoload_configs/modules.conf.xml` 中对应条目被注释：
+
+```xml
+<!-- <load module="mod_dialplan_directory"/> -->
+```
+
+要启用，请取消注释（或添加对应行）并重启 FreeSWITCH，也可以在 `fs_cli` 中执行 `load mod_dialplan_directory`。无需特殊构建标志；模块随标准 FreeSWITCH 构建编译。
+
+## 配置：`dialplan_directory.conf.xml` {#configuration-dialplan_directoryconfxml}
+
+启动时，模块通过标准 `autoload_configs` 搜索路径读取 `dialplan_directory.conf`。只有五个参数全部存在时，模块才会尝试查询目录；缺少任何一项，路由查找函数会立即返回，不生成 Extension。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `directory-name` | 用作后端的已加载目录接口模块名称 | 任意已加载目录模块名（例如 `ldap`） | _无_ |
+| `host` | 目录服务器主机名或 IP | 字符串 | _无_ |
+| `dn` | 认证目录服务器所用的可分辨名称（绑定 DN） | 字符串 | _无_ |
+| `pass` | 绑定 DN 对应的密码 | 字符串 | _无_ |
+| `base` | LDAP 搜索基准（传给 `switch_core_directory_query`） | 字符串 | _无_ |
+
+随附的 `dialplan_directory.conf.xml` 示例：
+
+```xml
+<configuration name="dialplan_directory.conf" description="Dialplan Directory">
+  <settings>
+    <param name="directory-name" value="ldap"/>
+    <param name="host" value="ldap.freeswitch.org"/>
+    <param name="dn" value="cn=Manager,dc=freeswitch,dc=org"/>
+    <param name="pass" value="test"/>
+    <param name="base" value="dc=freeswitch,dc=org"/>
+  </settings>
+</configuration>
+```
+
+## 选择此拨号计划 {#selecting-this-dialplan}
+
+在 FreeSWITCH 接受 `dialplan` 参数的地方，将拨号计划名称设为 `directory`。对 SIP Profile，可在 `sip_profiles/*.xml` 中使用 `dialplan` 参数：
+
+```xml
+<param name="dialplan" value="directory"/>
+```
+
+若由 `originate` 或网关创建入站呼叫腿，可通过拨号字符串或呼叫腿变量中的 `dialplan` 字段传入。字符串 `"directory"` 与模块通过 `SWITCH_ADD_DIALPLAN(dp_interface, "directory", directory_dialplan_hunt)` 注册的名称相匹配。
+
+## 路由如何工作 {#how-routing-works}
+
+每次呼叫到达时，查找函数执行以下步骤：
+
+1. 构造格式为 `exten=<destination_number>context=<context>` 的目录过滤器字符串（仅当主叫 Profile 携带上下文时才追加 context）。
+2. 使用配置的 `host`、`dn`、`pass`，通过 `switch_core_directory_open` 打开 `directory-name` 所指目录后端的连接。
+3. 通过 `switch_core_directory_query`，使用配置的 `base` 和第 1 步构造的过滤器执行查询，然后遍历返回的每个条目及其中的每一对属性。
+4. 对于属性名为 `callflow` 的条目，在第一个空格处将属性值拆分为应用名和参数字符串，然后把该应用添加到正在构建的主叫 Extension 中。
+5. 将组装好的 Extension 返回核心执行；若未找到任何 `callflow` 属性，则返回 `NULL`。
+
+目录后端（如 `mod_ldap`）需要单独加载；`mod_dialplan_directory` 只通过 FreeSWITCH 通用目录接口（`switch_core_directory_open`／`switch_core_directory_query`／`switch_core_directory_next_pair`）协调查询。
+
+## 依赖 {#dependencies}
+
+`mod_dialplan_directory` 要求至少加载一个**目录接口**模块作为后端。FreeSWITCH 随附的目录接口模块只有 `mod_ldap`（`src/mod/directories/mod_ldap`）。`mod_ldap` 链接 OpenLDAP（`libldap`）；该库必须单独安装，并且默认情况下不会被构建。
+
+**源码：** `src/mod/dialplans/mod_dialplan_directory`、`conf/vanilla/autoload_configs/dialplan_directory.conf.xml`

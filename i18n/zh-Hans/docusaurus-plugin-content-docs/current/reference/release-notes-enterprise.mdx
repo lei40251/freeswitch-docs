@@ -1,0 +1,331 @@
+---
+sidebar_position: 9
+id: release-notes-enterprise
+slug: /reference/release-notes-enterprise
+title: "FreeSWITCH 企业版发行说明"
+description: "FreeSWITCH Advantage 企业版从 2021 年到 2026 年的版本发行说明与下载链接。"
+sidebar_label: "Enterprise Release Notes"
+---
+
+# FreeSWITCH 企业版发行说明 {#freeswitch-enterprise-release-notes}
+
+FreeSWITCH 企业版以 FreeSWITCH Advantage（FSA）形式分发，本页列出其发行说明。下方每个版本所链接的详细发行说明位于 GitHub 的 `signalwire/stack` 仓库，访问需要 FreeSWITCH 企业版权限。开源 FreeSWITCH 的版本列表参见[附录 F](./appendix-release-notes.mdx)。
+
+### 发行版本列表： {#list-of-releases}
+
+* [20.26.2（发布日期：2026年5月21日）](#20262-release-date-21-may-2026)
+* [20.26.1（发布日期：2026年1月29日）](#20261-release-date-29-jan-2026)
+* [20.25.4（发布日期：2025年10月27日）](#20254-release-date-27-oct-2025)
+* [20.25.3（发布日期：2025年9月12日）](#20253-release-date-12-sep-2025)
+* [20.25.2（发布日期：2025年6月18日）](#20252-release-date-18-jun-2025)
+* [20.25.1（发布日期：2025年2月20日）](#20251-release-date-20-feb-2025)
+* [20.24.6（发布日期：2024年12月26日）](#20246-release-date-26-dec-2024)
+* [20.24.5（发布日期：2024年10月9日）](#20245-release-date-09-oct-2024)
+* [20.24.4（发布日期：2024年7月25日）](#20244-release-date-25-jul-2024)
+* [20.24.3（发布日期：2024年7月16日）](#20243-release-date-16-jul-2024)
+* [20.24.2（发布日期：2024年5月9日）](#20242-release-date-09-may-2024)
+* [20.24.1（发布日期：2024年2月27日）](#20241-release-date-27-feb-2024)
+* [20.23.6（发布日期：2023年12月19日）](#20236-release-date-19-dec-2023)
+* [20.23.5（发布日期：2023年8月12日）](#20235-release-date-12-aug-2023)
+* [20.23.4（发布日期：2023年7月18日）](#20234-release-date-18-jul-2023)
+* [20.23.3（发布日期：2023年6月28日）](#20233-release-date-28-jun-2023)
+* [20.23.2（发布日期：2023年4月10日）](#20232-release-date-10-apr-2023)
+* [20.23.1（发布日期：2023年2月1日）](#20231-release-date-01-feb-2023)
+* [20.22.4（发布日期：2022年12月20日）](#20224-release-date-20-dec-2022)
+* [20.22.3（发布日期：2022年10月13日）](#20223-release-date-13-oct-2022)
+* [20.22.2（发布日期：2022年9月1日）](#20222-release-date-01-sep-2022)
+* [20.22.1（发布日期：2022年5月26日）](#20221-release-date-26-may-2022)
+* [20.21.8（发布日期：2022年3月25日）](#20218-release-date-25-mar-2022)
+* [20.21.7（发布日期：2021年11月24日）](#20217-release-date-24-nov-2021)
+* [20.21.6（发布日期：2021年10月21日）](#20216-release-date-21-oct-2021)
+* [20.21.5（发布日期：2021年10月14日）](#20215-release-date-14-oct-2021)
+
+
+## 20.26.2（发布日期：2026年5月21日） {#20262-release-date-21-may-2026}
+
+这是包含重要安全修复和稳定性改进的重要版本，同时增加了 `reloadcert` API，可在 `mod_verto` 与 `mod_sofia` 中在线重载 TLS 证书；`mod_shout` 增加流式 TTS 格式支持（Mistral MP3 和 Inworld NDJSON/base64）；`mod_sofia` 增加 SIP 603+ 检测与透传控制；并从源码树移除了 `mod_cdr_mongodb`。建议所有用户在条件允许时升级至 v20.26.2。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.26.2.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.26.2-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.26.2 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.26.2)
+
+## 20.26.1（发布日期：2026年1月29日） {#20261-release-date-29-jan-2026}
+
+这是一个包含重要安全修复和稳定性改进的重要版本。建议所有用户在条件允许时升级至 v20.26.1。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.26.1.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.26.1-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.26.1 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.26.1)
+
+## 20.25.4（发布日期：2025年10月27日） {#20254-release-date-27-oct-2025}
+
+这是一个包含重要安全修复和稳定性改进的重要版本。建议所有用户在条件允许时升级至 v20.25.4。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.25.4.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.25.4-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.25.4 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.25.4)
+
+## 20.25.3（发布日期：2025年9月12日） {#20253-release-date-12-sep-2025}
+
+这是一次主要版本发布，提供重要安全修复、稳定性改进，并增加 Debian 13 Trixie 支持。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.25.3.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.25.3-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.25.3 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.25.3)
+
+## 20.25.2（发布日期：2025年6月18日） {#20252-release-date-18-jun-2025}
+
+这是一个包含重要安全修复和稳定性改进的重要版本。建议所有用户在条件允许时升级至 v20.25.2。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.25.2.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.25.2-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.25.2 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.25.2)
+
+## 20.25.1（发布日期：2025年2月20日） {#20251-release-date-20-feb-2025}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.25.1.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.25.1-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.25.1 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.25.1)
+
+## 20.24.6（发布日期：2024年12月26日） {#20246-release-date-26-dec-2024}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.24.6.-release.tar.gz)
+* **软件包：** [说明](https://freeswitch.org/confluence/display/FREESWITCH/Installation), [FSGET](https://github.com/signalwire/freeswitch/tree/master/scripts/packaging)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.24.6-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.24.6 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.24.6)
+
+## 20.24.5（发布日期：2024年10月9日） {#20245-release-date-09-oct-2024}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.24.5.-release.tar.gz)
+* **软件包：** [软件包](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.24.5-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.24.5 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.24.5)
+
+## 20.24.4（发布日期：2024年7月25日） {#20244-release-date-25-jul-2024}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.24.4.-release.tar.gz)
+* **软件包：** [软件包](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.24.4-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.24.4 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.24.4)
+
+## 20.24.3（发布日期：2024年7月16日） {#20243-release-date-16-jul-2024}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.24.3.-release.tar.gz)
+* **软件包：** [软件包](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.24.3-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.24.3 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.24.3)
+
+## 20.24.2（发布日期：2024年5月9日） {#20242-release-date-09-may-2024}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.24.2.-release.tar.gz)
+* **软件包：** [软件包](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.24.2-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.24.2 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.24.2)
+
+## 20.24.1（发布日期：2024年2月27日） {#20241-release-date-27-feb-2024}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [源码压缩包](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.24.1.-release.tar.gz)
+* **软件包：** [软件包](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [Windows 安装包](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.24.1-Release-x64.msi)
+* **Windows 音频包：** [音频包](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.24.1 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.24.1)
+
+## 20.23.6（发布日期：2023年12月19日） {#20236-release-date-19-dec-2023}
+
+这是一个包含安全修复和稳定性改进的重要版本。建议所有用户在条件允许时升级至 v20.23.6。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.6.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.6.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.6-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.6-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Advantage v20.23.6 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.23.6)
+
+## 20.23.5（发布日期：2023年8月12日） {#20235-release-date-12-aug-2023}
+
+这是一次主要版本发布，包含重要安全修复，并增加 Debian 12 Bookworm 和 OpenSSL 3 支持。建议所有用户在条件允许时升级至 v20.23.5。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.5.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.5.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.5-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.5-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.23.5 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.23.5)
+
+## 20.23.4（发布日期：2023年7月18日） {#20234-release-date-18-jul-2023}
+
+这是一次主要版本发布，包含重要安全修复，并增加 FFmpeg 5 支持。为持续提升代码质量，本版本修复了整个 FreeSWITCH 核心和大多数模块中的 macOS 静态分析问题。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.4.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.4.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.4-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.4-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.23.4 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.23.4)
+
+## 20.23.3（发布日期：2023年6月28日） {#20233-release-date-28-jun-2023}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.3.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.3.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.3-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.3-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.23.3 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.23.3)
+
+## 20.23.2（发布日期：2023年4月10日） {#20232-release-date-10-apr-2023}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.2.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.2.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.2-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.2-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.23.2 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.23.2)
+
+## 20.23.1（发布日期：2023年2月1日） {#20231-release-date-01-feb-2023}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.1.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.23.1.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.1-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.23.1-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.23.1 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.23.1)
+
+## 20.22.4（发布日期：2022年12月20日） {#20224-release-date-20-dec-2022}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.4.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.4.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.4-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.4-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.22.4 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.22.4)
+
+## 20.22.3（发布日期：2022年10月13日） {#20223-release-date-13-oct-2022}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.3.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.3.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.3-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.3-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.22.3 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.22.3)
+
+## 20.22.2（发布日期：2022年9月1日） {#20222-release-date-01-sep-2022}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.2.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.2.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.2-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.2-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.22.2 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.22.2)
+
+## 20.22.1（发布日期：2022年5月26日） {#20221-release-date-26-may-2022}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.1.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.22.1.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.1-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.22.1-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.22.1 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.22.1)
+
+## 20.21.8（发布日期：2022年3月25日） {#20218-release-date-25-mar-2022}
+
+这是一次主要版本发布，包含覆盖整个代码库的 170 多项变更。为持续提升代码质量，本版本修复了整个 FreeSWITCH 核心和大多数模块中的静态分析问题。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.8.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.8.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.8-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.8-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.21.8 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.21.8)
+
+## 20.21.7（发布日期：2021年11月24日） {#20217-release-date-24-nov-2021}
+
+这是一次小版本更新，包含重要缺陷修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.7.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.7.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.7-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.7-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.21.7 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.21.7)
+
+## 20.21.6（发布日期：2021年10月21日） {#20216-release-date-21-oct-2021}
+
+这是一次非常重要的缺陷修复版本，提供了最新的安全改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.6.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.6.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.6-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.6-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.21.6 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.21.6)
+
+## 20.21.5（发布日期：2021年10月14日） {#20215-release-date-14-oct-2021}
+
+这是一次小版本缺陷修复，包含重要的安全修复和稳定性改进。
+
+* **源码压缩包：** [https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.5.-release.tar.gz](https://fsa.freeswitch.com/downloads/freeswitch-releases/freeswitch-20.21.5.-release.tar.gz)
+* **软件包：** [https://freeswitch.org/confluence/display/FREESWITCH/Installation](https://freeswitch.org/confluence/display/FREESWITCH/Installation)
+* **Windows 安装包：** [https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.5-Release-x64.msi](https://fsa.freeswitch.com/downloads/windows/x64/release/FreeSWITCH-20.21.5-Release-x64.msi)
+* **Windows 音频包：** [http://files.freeswitch.org/windows/installer/x64/sounds/](http://files.freeswitch.org/windows/installer/x64/sounds/)
+* **安装说明：** [Debian](../foundations/getting-started.mdx), [CentOS 7](../foundations/getting-started.mdx), [Raspberry Pi](../foundations/getting-started.mdx)
+* **发行说明：** [FreeSWITCH Enterprise v20.21.5 GitHub 发行说明](https://github.com/signalwire/stack/releases/tag/v20.21.5)
+
+  
+

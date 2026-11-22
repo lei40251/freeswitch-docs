@@ -1,0 +1,70 @@
+---
+sidebar_position: 9
+id: mod_fail2ban
+slug: /module-reference/event-handlers/mod_fail2ban
+title: "mod_fail2ban — 为 Fail2Ban 输出认证失败事件"
+description: "将 SIP 注册尝试、认证失败和放弃的呼叫写入专用日志，供 Fail2Ban 封禁恶意 IP。"
+sidebar_label: "mod_fail2ban"
+---
+
+# mod_fail2ban — 为 Fail2Ban 输出认证失败事件 {#mod_fail2ban-—-authentication-failure-events-for-fail2ban}
+
+`mod_fail2ban` 是事件处理模块（`src/mod/event_handlers`），监听 Sofia SIP 自定义事件，并将结构化日志行写入专用日志文件。随后，Fail2Ban（或其他日志监控工具）就可以解析这些日志，自动封禁反复认证失败的源 IP 地址。
+
+如果你希望把 FreeSWITCH 的 SIP 注册安全机制与操作系统级 IP 封禁集成，同时不修改拨号计划、不编写自定义脚本，可使用此模块。
+
+<SignalWireCallout
+  title="扫描器无法触及你的服务器"
+  href="https://signalwire.com/docs/platform/voice/sip/trunking"
+  page="mod-fail2ban"
+  linkText="了解托管 SIP">
+
+在 SignalWire 托管平台上，你的 SIP 流量终止于由平台运营、面向公网的边缘节点，凭据扫描由平台负责处理。你无需监控注册日志，也无需配置封禁规则（jail）。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+默认的 `autoload_configs/modules.conf.xml` **不包含**此模块，需要手动添加。在 `modules.conf.xml` 的 `event_handlers` 分组下加入以下行，然后重新加载或重启 FreeSWITCH：
+
+```xml
+<load module="mod_fail2ban"/>
+```
+
+不需要特殊编译标志；该模块可通过标准 FreeSWITCH 构建系统构建。
+
+## 配置：`fail2ban.conf.xml` {#configuration-fail2banconfxml}
+
+`mod_fail2ban` 加载时从 FreeSWITCH 配置目录读取 `fail2ban.conf`。该文件包含一个 `<bindings>`／`<config>` 配置块，支持一个参数。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `logfile` | 模块所写日志文件的绝对路径 | 任何可写的文件路径 | `$${log_dir}/fail2ban.log` |
+
+如果 `logfile` 未配置或为空，模块会回退到 `$${log_dir}/fail2ban.log`（运行时解析的 FreeSWITCH 日志目录）。
+
+```xml
+<configuration name="fail2ban.conf" description="fail2ban log configs">
+  <bindings>
+    <config name="settings" desription="configs">
+      <param name="logfile" value="$${log_dir}/fail2ban.log"/>
+    </config>
+  </bindings>
+</configuration>
+```
+
+## 事件 {#events}
+
+`mod_fail2ban` 订阅 `SWITCH_EVENT_CUSTOM` 和 `SWITCH_EVENT_SUBCLASS_ANY`，并对以下 Sofia SIP 自定义事件子类字符串作出响应：
+
+| 事件子类 | 触发条件 | 写入的日志消息 |
+|----------------|---------|---------------------|
+| `sofia::register_attempt` | 任意 SIP REGISTER 尝试 | `A registration was attempted user[<to-user>] ip[<network-ip>]` |
+| `sofia::register_failure` | 认证失败的 SIP REGISTER | `A registration failed user[<to-user>] ip[<network-ip>]` |
+| `sofia::wrong_call_state` | 呼叫因状态错误而被放弃 | `Abandoned call from  user[<from_user>] ip[<network_ip>]` |
+
+每条日志还包含本地时间戳，格式为 `at[YYYY-MM-DDTHH:MM:SS.uuuuuu+HHMM]`（时区偏移不带冒号，例如 `+0200`）。
+
+模块加载和卸载时，分别向日志写入启动标记（`Fail2ban was started`）和停止标记（`Fail2ban stoping`）。
+
+**源码：** `src/mod/event_handlers/mod_fail2ban`、`src/mod/event_handlers/mod_fail2ban/fail2ban.conf.xml`

@@ -1,0 +1,173 @@
+---
+sidebar_position: 12
+id: mod_json_cdr
+slug: /module-reference/event-handlers/mod_json_cdr
+title: "mod_json_cdr——通过 HTTP 发送 JSON CDR"
+description: "通过 HTTP 与本地文件投递 JSON 呼叫详细记录的配置及工作机制。"
+sidebar_label: "mod_json_cdr"
+---
+# mod_json_cdr——通过 HTTP 发送 JSON CDR {#mod_json_cdr-—-json-cdr-over-http}
+
+`mod_json_cdr` 在每个呼叫腿挂机时生成一份 JSON 格式的呼叫详细记录（CDR），通过 HTTP POST 发送到一个或多个远端 URL、写入磁盘，或同时采用两种方式。模块位于 `src/mod/event_handlers/mod_json_cdr`，通过 FreeSWITCH 的 `on_reporting` 状态处理器挂钩运行；`mod_cdr_csv` 和 `mod_xml_cdr` 使用的也是这一机制。
+
+如果计费平台、数据仓库或分析流水线使用 JSON 而非 CSV/XML，适合选用 `mod_json_cdr`。它支持最多 20 个 HTTP 目标、按投递尝试重试、可配置的载荷编码（原始 JSON、URL 编码表单或 Base64）、双向 TLS，以及按通道覆盖日志目录。
+
+<SignalWireCallout
+  title="无需自己开发 CDR 接收服务"
+  href="https://signalwire.com/docs/apis"
+  page="mod-json-cdr"
+  linkText="查看 REST API">
+
+SignalWire 提供可通过 REST API 查询的呼叫日志，并在呼叫状态变化时通过 Webhook 推送事件。JSON 数据已经结构化，也无需自行托管接收服务。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+默认**不加载**该模块。标准 `modules.conf.xml` 没有它的条目，需手动添加：
+
+```xml
+<load module="mod_json_cdr"/>
+```
+
+或通过 `fs_cli` 在运行时加载：
+
+```
+load mod_json_cdr
+```
+
+无需特殊构建标志；模块使用 FreeSWITCH 核心随附的标准 libcurl 包装层（`switch_curl`）编译。
+
+## 配置：`json_cdr.conf.xml` {#configuration-json_cdrconfxml}
+
+FreeSWITCH 加载时打开 `json_cdr.conf`。将配置放在 `conf/autoload_configs/json_cdr.conf.xml`。
+
+所有参数都位于 `<settings>` 块中。严格来说没有必填参数：省略 `url` 会禁用 HTTP 投递，省略 `log-dir` 会禁用磁盘记录。但至少需要配置其中一个，模块才会产生输出。
+
+### 参数 {#parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `log-b-leg` | 是否记录 B-leg（发起的通道）。为 `false` 时会抑制 B-leg CDR，除非通道变量 `force_process_cdr` 为 `true`。 | `true`, `false` | `true` |
+| `prefix-a-leg` | 为 A-leg 的磁盘文件名添加前缀 `a_`，例如 `a_<uuid>.cdr.json`。 | `true`, `false` | `false` |
+| `encode-values` | 序列化前对各个 JSON 字符串值执行 URL 编码。为 `true` 时生成的 JSON 仍有效，但字符串值包含百分号编码。标准未编码 JSON 应设为 `false`。 | `true`, `false` | `true` |
+| `log-dir` | 磁盘 CDR 文件目录。空值解析为 `${prefix}/logs/json_cdr`；相对路径以 `${prefix}/logs` 为基准；绝对路径原样使用。配置了 `url` 时，可完全省略以禁用磁盘记录。 | 路径或空值 | 未设置 |
+| `rotate` | 收到 SIGHUP 时，将日志写入带时间戳的子目录（`YYYY-MM-DD-HH-MM-SS`）。 | `true`, `false` | `false` |
+| `log-http-and-disk` | 即使 HTTP POST 成功，也将每条记录写入磁盘。通常配置 `url` 且 POST 返回 2xx 时会跳过磁盘写入。 | `true`, `false` | `false` |
+| `url` | 接收 CDR POST 的 HTTP/HTTPS 地址。可重复配置最多 20 次以指定故障转移 URL。会附加会话 UUID 查询参数 `?uuid=<uuid>`。 | URL 字符串 | 无 |
+| `timeout` | 整个 HTTP 事务超时时间（秒），`0` 为禁用超时。 | 非负整数 | `0`（标准配置文件使用 `5`） |
+| `cred` | `username:password` 格式的 HTTP 凭据。设置后根据 `auth-scheme`（默认 `basic`）启用 HTTP 认证。 | 字符串 | 无 |
+| `auth-scheme` | HTTP 认证方式。以 `=` 开头表示只使用该方式（如 `=digest`）；不加前缀则对多个方式取 OR，由 libcurl 选择。 | `basic`, `digest`, `NTLM`, `GSS-NEGOTIATE`, `any` | `basic` |
+| `encode` | POST 前的 JSON 载荷编码。`true` 发送 URL 编码表单（`Content-Type: application/x-www-form-urlencoded`）；`base64` 发送 Base64 数据（`Content-Type: application/x-www-form-base64-encoded`）；`false` 发送原始 JSON 文档（`Content-Type: application/json`）。 | `true`, `false`, `base64` | `false` |
+| `retries` | 第一次失败后追加 POST 尝试的次数。逐个尝试已配置的 URL。设置 `retries` 而不设置 `delay` 时，会强制 `delay` 为 5。 | 整数 | `0` |
+| `delay` | 重试之间的等待时间（秒）。 | 整数 | `5`（当 `retries` 大于 0 时） |
+| `disable-100-continue` | 禁止发送 `Expect: 100-continue` 头。部分不能处理 `100 Continue` 的旧 Web 服务器需要此设置。 | `true`, `false` | `false` |
+| `err-log-dir` | HTTP 发送失败的 CDR 存储目录。可重复配置最多 20 次作为冗余错误目标。未设置时默认与 `log-dir` 相同。要求 `log-errors-to-disk` 为 `true`。 | 路径或空值 | 与 `log-dir` 相同 |
+| `log-errors-to-disk` | 为 `false` 时，HTTP 投递失败的记录将被静默丢弃，而不是写入 `err-log-dir`。 | `true`, `false` | `true` |
+| `queue-capacity` | 启用指定容量的异步投递队列。设为正整数时，模块创建后台线程并把 CDR 入队，而不是在挂机处理过程中同步发送。 | 正整数 | 未设置（同步） |
+| `ssl-cert-path` | 双向 TLS 使用的 PEM 格式客户端证书路径。 | 绝对路径 | 无 |
+| `ssl-key-path` | PEM 格式客户端私钥路径。 | 绝对路径 | 无 |
+| `ssl-key-password` | 加密私钥的口令。 | 字符串 | 无 |
+| `ssl-version` | 强制特定 SSL/TLS 版本。 | `SSLv3`, `TLSv1` | 由 libcurl 自动协商 |
+| `enable-cacert-check` | 使用 CA 证书包验证服务器证书。 | `true`, `false` | `false` |
+| `ssl-cacert-file` | 用于验证对端证书的自定义 PEM CA 证书路径，仅在 `enable-cacert-check` 为 `true` 时有效。 | 绝对路径 | 无 |
+| `enable-ssl-verifyhost` | 检查服务器主机名是否匹配证书的 CN。 | `true`, `false` | `false` |
+
+### 配置文件示例 {#configuration-file-example}
+
+下面是随附 `conf/autoload_configs/json_cdr.conf.xml` 的精简版本：
+
+```xml
+<include>
+  <configuration name="json_cdr.conf" description="JSON CDR">
+    <settings>
+      <!-- Leg selection -->
+      <param name="log-b-leg" value="true"/>
+      <param name="prefix-a-leg" value="false"/>
+
+      <!-- JSON encoding: false = raw JSON, true = URL-encode values -->
+      <param name="encode-values" value="true"/>
+
+      <!-- Write to both HTTP and disk simultaneously -->
+      <param name="log-http-and-disk" value="false"/>
+
+      <!-- File logging: leave value empty to use ${prefix}/logs/json_cdr -->
+      <param name="log-dir" value=""/>
+      <param name="rotate" value="false"/>
+
+      <!-- HTTP delivery -->
+      <param name="url" value="https://billing.example.com/cdr"/>
+      <param name="timeout" value="5"/>
+      <param name="auth-scheme" value="basic"/>
+      <param name="cred" value="fsuser:secret"/>
+      <param name="encode" value="false"/>
+      <param name="retries" value="2"/>
+      <param name="delay" value="5"/>
+      <param name="disable-100-continue" value="false"/>
+
+      <!-- Error fallback -->
+      <param name="err-log-dir" value="/var/log/freeswitch/json_cdr_err"/>
+
+      <!-- SSL -->
+      <param name="enable-cacert-check" value="true"/>
+      <param name="ssl-cacert-file" value="/etc/ssl/certs/ca-certificates.crt"/>
+    </settings>
+  </configuration>
+</include>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+`mod_json_cdr` 不注册拨号计划应用。
+
+## API 命令 {#api-commands}
+
+`mod_json_cdr` 不注册 API 命令。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `json_cdr_base` | 读取 | 在每个会话级别覆盖全局 `log-dir`，决定磁盘文件存储位置。在挂机前的拨号计划中设置，可将特定呼叫的 CDR 重定向到其他目录。 |
+| `force_process_cdr` | 读取 | `log-b-leg` 为 `false` 时，在 B-leg 会话中将其设为 `true`，可强制生成该呼叫腿的 CDR。核心代码中定义为 `SWITCH_FORCE_PROCESS_CDR_VARIABLE`。 |
+
+## JSON 文档结构 {#json-document-schema}
+
+每条 CDR 都是由 `cJSON_PrintUnformatted` 序列化的一行 JSON 对象。FreeSWITCH 核心中的 `switch_ivr_generate_json_cdr` 生成以下顶层键：
+
+| 键 | 类型 | 内容 |
+|---|---|---|
+| `core-uuid` | string | FreeSWITCH 实例 UUID |
+| `switchname` | string | 已配置的交换机名称 |
+| `channel_data` | object | 通道状态、方向（`inbound`/`outbound`）、数值状态码、标志和能力字符串 |
+| `callStats` | object | 按媒体类型（音频和视频）分别记录的 RTP 统计数据 |
+| `variables` | object | 挂机时存在的全部通道变量；`encode-values` 为 `true` 时字符串值会做 URL 编码 |
+| `app_log` | object | 会话执行过的拨号计划应用有序列表，每条包含 `app_name`、`app_data`、`app_stamp` |
+| `callflow` | array | 呼叫链上每个主叫配置实例对应一条记录；每条包含 `dialplan`、`profile_index`、包含匹配的 extension 名称、号码和应用列表的 `extension` 子对象，以及包含主被叫身份字段的 `caller_profile` 子对象 |
+
+磁盘文件名为 `<uuid>.cdr.json`；若 `prefix-a-leg` 为 `true`，A-leg 使用 `a_<uuid>.cdr.json`。每个文件仅包含一个 JSON 文档，后面跟一个换行符。
+
+## 文件投递 {#file-delivery}
+
+配置 `log-dir` 后（或者 HTTP 投递失败且 `log-errors-to-disk` 为 `true` 时），模块会为每条 CDR 写入一个文件：
+
+- 正常 CDR 写入 `log-dir`（若通道设置了 `json_cdr_base` 则写入该路径）。
+- 无法通过 HTTP 投递的 CDR 写入 `err-log-dir`；未配置 `err-log-dir` 时回退到 `log-dir`。
+
+当 `rotate` 为 `true`，SIGHUP 信号会使模块在基础日志路径下新建时间戳子目录，并将之后的写入重定向到该目录。目录名格式为 `YYYY-MM-DD-HH-MM-SS`。
+
+## HTTP 投递 {#http-delivery}
+
+存在一个或多个 `url` 参数时，模块打开 libcurl 句柄，并在拆除呼叫后以 HTTP POST 发送每条 CDR。行为如下：
+
+1. 在 URL 后附加会话 UUID，格式为 `?uuid=<uuid>`。
+2. `encode` 控制载荷编码：`false` 以 `Content-Type: application/json` 发送原始 JSON；`true` 发送 `cdr=<url-encoded-json>`，使用 `Content-Type: application/x-www-form-urlencoded`；`base64` 发送 `cdr=<base64-json>`，使用 `Content-Type: application/x-www-form-base64-encoded`。
+3. 非 2xx 响应时，模块切换到下一个配置的 URL，最多按 `retries` 设定的次数重试，并在重试之间等待 `delay` 秒。
+4. 所有重试失败后，如果 `log-errors-to-disk` 为 `true`，则将 CDR 写入 `err-log-dir`。
+5. 配置 `queue-capacity` 后，CDR 被推入进程内队列，由后台线程处理，避免投递延迟阻塞呼叫拆除路径。
+
+## 另请参阅 {#see-also}
+
+- [第 27 章：呼叫详细记录](../../integration/call-detail-records.mdx)
+
+**源码：** `src/mod/event_handlers/mod_json_cdr`、`src/mod/event_handlers/mod_json_cdr/conf/autoload_configs/json_cdr.conf.xml`

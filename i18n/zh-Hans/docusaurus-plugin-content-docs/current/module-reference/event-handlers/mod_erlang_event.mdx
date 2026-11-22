@@ -1,0 +1,180 @@
+---
+sidebar_position: 6
+id: mod_erlang_event
+slug: /module-reference/event-handlers/mod_erlang_event
+title: "mod_erlang_event——Erlang 事件接口"
+description: "使用 Erlang 分布式协议订阅事件、执行 FreeSWITCH API 和控制呼叫。"
+sidebar_label: "mod_erlang_event"
+---
+# mod_erlang_event——Erlang 事件接口 {#mod_erlang_event-—-erlang-event-interface}
+
+`mod_erlang_event` 使用 Erlang 原生分布式协议（通过 `ei` C 库）将 FreeSWITCH 连接到 Erlang 集群。模块将 FreeSWITCH 注册为 Erlang C 节点（c-node），接受远程 Erlang 节点的入站连接，也可以主动连接到这些节点。建立连接后，Erlang 进程可订阅 FreeSWITCH 事件、接收日志输出、执行 API 命令，并完全控制单次呼叫。
+
+如果呼叫处理逻辑由 Erlang 或 Elixir 编写，并希望与 FreeSWITCH 交换结构化 Erlang term，而不是解析纯文本 ESL 或 JSON，可以使用本模块。它位于 `src/mod/event_handlers`，与 `mod_event_socket` 同类，用途相近，但采用 Erlang 二进制通信协议。
+
+<SignalWireCallout
+  title="无需 Erlang 节点的事件控制"
+  href="https://signalwire.com/docs/server-sdks/guides/relay-client"
+  page="mod-erlang-event"
+  linkText="查看 RELAY 实时 SDK">
+
+RELAY 是 SignalWire 的实时 WebSocket API，可通过带类型定义的 SDK 向自己的服务发送事件并接收命令。本模块实现的分布式控制模式，也属于托管平台的原生使用模式。
+
+</SignalWireCallout>
+
+## 加载模块 {#loading-the-module}
+
+模块名称为 `mod_erlang_event`。默认配置中**不加载**该模块；`conf/vanilla/autoload_configs/modules.conf.xml` 中的对应条目已被注释：
+
+```xml
+<!-- <load module="mod_erlang_event"/> -->
+```
+
+要启用，请取消注释（或添加条目）并重启 FreeSWITCH，也可以在运行时加载：
+
+```
+freeswitch@> load mod_erlang_event
+```
+
+构建模块需要 Erlang/OTP 的 `erl_interface` / `ei` 开发头文件（见[依赖项](#dependencies)）。
+
+## 配置：`erlang_event.conf.xml` {#configuration-erlang_eventconfxml}
+
+模块加载时读取 `conf/autoload_configs/erlang_event.conf.xml`。所有参数位于单一 `<settings>` 块中。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `listen-ip` | 接收 Erlang 节点入站连接的监听 IP 地址 | IPv4/IPv6 地址字符串 | `0.0.0.0` |
+| `listen-port` | 监听的 TCP 端口 | 1～65535 | `8031` |
+| `nodename` | FreeSWITCH C 节点的短名或完整节点名（如 `freeswitch` 或 `freeswitch@host.example.com`） | 字符串 | `freeswitch` |
+| `cookie` | 用于认证的 Erlang 分布式 magic cookie | 字符串 | `ClueCon`（如果 `$HOME/.erlang.cookie` 存在则使用该文件） |
+| `cookie-file` | 包含 cookie 的文件路径（替代 `cookie`） | 绝对路径 | — |
+| `shortname` | 是否使用短节点名（`-sname` 方式） | `true` / `false` | `true` |
+| `apply-inbound-acl` | 限制允许连接的来源 IP 的 ACL 列表名称；最多可重复 100 次 | ACL 名称字符串 | —（不限制） |
+| `encoding` | Erlang term 中字符串值的线路编码形式 | `string` / `binary` | `string` |
+| `compat-rel` | 连接旧 OTP 版本时请求向后兼容模式（值必须 ≥ 7） | 整数 | `0`（禁用） |
+| `max-event-bulk` | 每次监听循环最多取出并发送的事件数 | 正整数 | `1` |
+| `max-log-bulk` | 每次监听循环最多取出并发送的日志行数 | 正整数 | `1` |
+| `stop-on-bind-error` | 监听套接字绑定失败时是否中止模块启动 | `true` / `false` | `false` |
+
+**示例**（摘自随附 `erlang_event.conf.xml`）：
+
+```xml
+<configuration name="erlang_event.conf" description="Erlang Socket Client">
+  <settings>
+    <param name="listen-ip" value="0.0.0.0"/>
+    <param name="listen-port" value="8031"/>
+    <param name="nodename" value="freeswitch"/>
+    <param name="cookie" value="ClueCon"/>
+    <param name="shortname" value="true"/>
+    <!--<param name="apply-inbound-acl" value="lan"/>-->
+    <!--<param name="encoding" value="string"/>-->
+    <!--<param name="compat-rel" value="12"/> -->
+  </settings>
+</configuration>
+```
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `erlang` | 挂起当前呼叫并将控制权交给具名节点上的 Erlang 进程 | `<registered-name-or-module:function> <node@host>` |
+| `erlang_sendmsg` | 向具名节点上的已注册进程发送一次性消息，而不转移呼叫控制权 | `<registered-name> <node@host> <message>` |
+
+### `erlang`
+
+将当前会话连接到 `node@host` 上的 Erlang 进程。模块首先查找与该节点已有的监听连接；如果不存在，则主动发起出站连接。支持两种寻址方式：
+
+- **注册名称**：`erlang_outbound_function` 首先向注册进程发送 `{call, <channel-data>}` 消息，此后通过 `{call_event, <event>}` 元组递送事件。呼叫结束时发送 `{call_hangup, <uuid>}` 消息。
+- **Module:function**：模块通过 RPC 调用 `Module:Function(Ref)` 获得进程 PID。也可以使用 `Module:!`，向注册名称为 `Module` 的进程发送 `{get_pid, UUID, Ref, Self}` 消息并等待 PID 回复。
+
+附加会话之后，呼叫进入暂停（park）状态（`switch_ivr_park`），由 Erlang 进程驱动后续呼叫处理。
+
+```xml
+<action application="erlang" data="my_call_handler mynode@192.168.1.10"/>
+```
+
+```xml
+<action application="erlang" data="myapp:start mynode@192.168.1.10"/>
+```
+
+### `erlang_sendmsg`
+
+向已注册进程发送 `{freeswitch_sendmsg, Message}` 元组。不会暂停呼叫或转移控制权，适合发送通知。
+
+```xml
+<action application="erlang_sendmsg" data="logger mynode@192.168.1.10 call_started"/>
+```
+
+## API 命令 {#api-commands}
+
+模块注册一个名为 `erlang` 的 API 命令，带有多个子命令。
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `erlang listeners` | 列出所有活动 Erlang 节点连接及统计信息 | `erlang listeners` |
+| `erlang sessions <node>` | 列出附加到指定节点的活动出站呼叫会话 | `erlang sessions <node@host>` |
+| `erlang bindings` | 列出 Erlang 进程注册的活动 XML 节绑定 | `erlang bindings` |
+| `erlang handlers` | 列出每个监听连接的事件和自定义事件订阅 | `erlang handlers` |
+| `erlang debug <on\|off>` | 启用或禁用 XML 获取响应的详细调试日志 | `erlang debug on` |
+
+**`fs_cli` 示例：**
+
+```
+freeswitch@> erlang listeners
+freeswitch@> erlang sessions mynode@192.168.1.10
+freeswitch@> erlang bindings
+freeswitch@> erlang handlers
+freeswitch@> erlang debug on
+```
+
+## Erlang 协议消息 {#erlang-protocol-messages}
+
+已连接的 Erlang 进程通过直接向 FreeSWITCH C 节点发送 Erlang term（元组、原子）来通信。模块识别以下从 Erlang 节点接收的消息。
+
+**原子消息**（作为裸原子发送）：
+
+| 原子 | 作用 |
+|---|---|
+| `register_event_handler` | 将发送方 PID 注册为当前连接的全局事件接收者 |
+| `register_log_handler` | 将发送方 PID 注册为当前连接的日志接收者 |
+| `noevents` | 取消所有事件订阅并清空事件队列 |
+| `nolog` | 取消日志递送并清空日志队列 |
+| `session_noevents` | 取消发送方 PID 所属会话的事件订阅 |
+| `getpid` | 回复 `{ok, Pid}`——FreeSWITCH C 节点自己的 PID |
+| `link` | 将 FreeSWITCH C 节点与发送方 PID 链接（用于调试/存活检测）；不发送回复 |
+| `exit` | 关闭来自该节点的连接 |
+
+**元组消息**（第一个元素为命令原子）：
+
+| 元组标记 | 用途 |
+|---|---|
+| `{event, EventName, ...}` | 为监听连接订阅一个或多个事件类型 |
+| `{nixevent, EventName, ...}` | 取消订阅一个或多个事件类型 |
+| `{setevent, EventName, ...}` | 原子地替换当前事件订阅集合 |
+| `{session_event, EventName, ...}` | 为每会话 PID 订阅事件类型 |
+| `{session_nixevent, EventName, ...}` | 取消每会话 PID 的事件类型订阅 |
+| `{session_setevent, EventName, ...}` | 原子地替换每会话事件订阅集合 |
+| `{filter, "Header Value", ...}` | 添加或删除事件头过滤器 |
+| `{set_log_level, Level}` | 设置递送到此连接的最低日志级别 |
+| `{api, Command, Args}` | 同步执行 FreeSWITCH API 命令；回复 `{ok, Output}` 或 `{error, Reason}` |
+| `{bgapi, Command, Args}` | 在后台线程执行 FreeSWITCH API 命令；先回复 `{ok, UUID}`，结果通过 `{bgok, UUID, Output}` 或 `{bgerror, UUID, Reason}` 递送 |
+| `{sendevent, EventName, [{Key, Value}, ...]}` | 向 FreeSWITCH 事件系统触发一个事件 |
+| `{sendmsg, UUID, [{Key, Value}, ...]}` | 向会话队列发送一个 `SWITCH_EVENT_SEND_MESSAGE` 私有事件 |
+| `{bind, Section}` | 将此 PID 注册为 `config`、`directory`、`dialplan`、`phrases` 或 `chatplan` 的 XML 获取处理器 |
+| `{handlecall, UUID}` | 将发送方 PID 附加到现有会话以接收其事件 |
+| `{handlecall, RegName, UUID}` | 将已注册进程附加到现有会话 |
+| `{fetch_reply, UUID, XMLString}` | 响应来自 `{bind, ...}` 的未完成 XML 获取请求 |
+| `{rex, {Ref, Pid}}` | RPC 回复（响应 `ei_rpc_to` 调用）；路由到等待中的会话或 `{Ref, Pid}` 处理器 |
+
+向已订阅 Erlang PID 递送的事件编码为带 `event` 标记的 Erlang term。每会话事件包装为 `{call_event, Event}`。呼叫结束时发送 `{call_hangup, UUID}`。日志行以 `{log, [{level,N},{text_channel,N},{file,F},{func,Fn},{line,L},{data,D},{user_data,U}]}` 格式递送。
+
+## 依赖项 {#dependencies}
+
+`mod_erlang_event` 链接 Erlang `ei`（erl_interface）C 库。该库随 Erlang/OTP 提供，但多数系统不会默认安装。启用本模块构建 FreeSWITCH 前，请安装 `erlang-dev`（Debian/Ubuntu）或 `erlang-devel`（RHEL/CentOS），或提供 OTP 源码树。运行时还需要能够访问 `epmd` 守护进程（Erlang Port Mapper Daemon）；如果 `$PATH` 中存在 `epmd`，模块会尝试通过 `epmd -daemon` 自动启动。
+
+## 相关文档 {#see-also}
+
+- [第 25 章：Event Socket](../../integration/event-socket.mdx)
+
+**源码：** `src/mod/event_handlers/mod_erlang_event`、`conf/vanilla/autoload_configs/erlang_event.conf.xml`

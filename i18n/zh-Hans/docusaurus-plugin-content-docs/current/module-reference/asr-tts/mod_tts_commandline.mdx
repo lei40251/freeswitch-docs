@@ -1,0 +1,95 @@
+---
+sidebar_position: 3
+id: mod_tts_commandline
+slug: /module-reference/asr-tts/mod_tts_commandline
+title: "mod_tts_commandline — 通过外部命令进行文本转语音"
+description: "把文本、音色、采样率和输出文件插入可配置 Shell 命令，委托外部程序完成 TTS。"
+sidebar_label: "mod_tts_commandline"
+---
+
+# mod_tts_commandline — 通过外部命令进行文本转语音 {#mod_tts_commandline-—-text-to-speech-via-external-command}
+
+`mod_tts_commandline` 提供 TTS（文本转语音）接口，把语音合成委托给任意外部命令行程序。模块位于 `src/mod/asr_tts`。当 FreeSWITCH 需要朗读文本时，模块会将文本、音色名称、采样率和临时 WAV 输出文件路径替换到可配置的命令模板字符串中，同步执行命令，再将生成的 WAV 流传回通道。
+
+如果需要集成自带 CLI 的 TTS 引擎（例如 Festival 的 `text2wave`、`espeak`、`flite` 或任意自定义合成程序），又不想编写 FreeSWITCH 原生模块，就可以使用它。除外部命令本身以外，没有额外的库依赖。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_tts_commandline`。默认发行配置中存在这一项，但**被注释**，因此默认不加载：
+
+```xml
+<!-- <load module="mod_tts_commandline"/> -->
+```
+
+要激活模块，请在 `conf/vanilla/autoload_configs/modules.conf.xml` 中取消注释并重启 FreeSWITCH，或在运行时加载：
+
+```
+load mod_tts_commandline
+```
+
+无须特殊构建标志；模块随标准 FreeSWITCH 源码树一起编译。
+
+## 配置：`tts_commandline.conf.xml` {#configuration-tts_commandlineconfxml}
+
+模块在加载时及收到 `reloadxml` 事件时，都会从 FreeSWITCH 配置搜索路径读取 `tts_commandline.conf`。
+
+### 参数 {#parameters}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|-----------|---------|-----------------|---------|
+| `command` | 每次 TTS 请求执行的 Shell 命令模板。执行前会替换占位符（见下文）。 | 包含一个或多个 `${text}`、`${voice}`、`${rate}`、`${file}` 占位符的有效 Shell 命令字符串 | _无（必须设置；缺少时模块记录错误并拒绝合成）_ |
+
+#### 运行时替换的占位符 {#placeholder-tokens-substituted-at-runtime}
+
+| 占位符 | 注入的值 |
+|-------|---------------|
+| `${text}` | 要合成的文本，经过 Shell 引用 |
+| `${voice}` | 传给 TTS 接口的音色名称，经过 Shell 引用 |
+| `${rate}` | 采样率（Hz），例如 `8000` |
+| `${file}` | FreeSWITCH 临时目录中以 UUID 命名的 `.tmp.wav` 临时文件绝对路径，经过 Shell 引用 |
+
+模板中可以使用所有四个占位符，但没有哪个是强制的——只需包含外部命令真正需要的部分。
+
+### 配置示例 {#example-configuration}
+
+```xml
+<configuration name="tts_commandline.conf" description="TextToSpeech Commandline configuration">
+  <settings>
+    <param name="command" value="echo ${text} | text2wave -f ${rate} > ${file}"/>
+  </settings>
+</configuration>
+```
+
+此示例使用 Festival 的 `text2wave` 工具，以要求的采样率合成文本，并将 WAV 写入临时输出路径。
+
+## 拨号计划应用 {#dialplan-applications}
+
+`mod_tts_commandline` 本身不注册拨号计划应用。TTS 播放通过标准 FreeSWITCH `speak` 机制调用，语音接口名为 `tts_commandline`。
+
+### 在拨号计划中使用 `speak` {#using-speak-in-the-dialplan}
+
+```xml
+<action application="speak" data="tts_commandline|default|Hello, welcome to FreeSWITCH."/>
+```
+
+`data` 参数格式为 `engine|voice|text`：
+
+| 字段 | 值 |
+|-------|-------|
+| `engine` | 必须为 `tts_commandline`，以选择本模块 |
+| `voice` | 任意音色名称字符串，通过 `${voice}` 传给命令模板 |
+| `text` | 待合成文本，通过 `${text}` 传给命令模板 |
+
+## API 命令 {#api-commands}
+
+此模块不注册 ESL API 或 CLI 命令。
+
+## 通道变量 {#channel-variables}
+
+此模块不直接读取或设置通道变量。
+
+## 事件 {#events}
+
+此模块不发出自定义事件子类。它仅订阅标准 `SWITCH_EVENT_RELOADXML` 事件，以便重新加载配置。
+
+**源码：** `src/mod/asr_tts/mod_tts_commandline`、`conf/vanilla/autoload_configs/tts_commandline.conf.xml`

@@ -1,0 +1,251 @@
+---
+sidebar_position: 3
+id: gateways
+slug: /users-and-endpoints/gateways
+title: "第 8 章：网关与中继注册"
+description: "在 Sofia 配置实例中定义出站 SIP 中继（网关），可选进行注册，并通过命名网关在拨号计划桥接字符串中发起呼叫。"
+sidebar_label: "8. 网关与中继注册"
+---
+
+# 第 8 章：网关与中继注册 {#chapter-8-gateways-and-trunk-registration}
+
+FreeSWITCH 网关是一个具有名称的出站 SIP 中继定义，位于 [Sofia 配置实例](../users-endpoints/sip-profiles-sofia.mdx)的 `<gateways>` 块中。它告知 Sofia 端点如何连接远端 SIP 服务提供商或对等节点，可以选择向提供商注册 SIP 账号，并提供一个命名标识，供拨号计划中的桥接字符串用于路由出站呼叫。
+
+<SignalWireCallout
+  title="将 SignalWire 作为此网关的对端"
+  href="https://signalwire.com/docs/platform/voice/sip/trunking"
+  page="gateways"
+  linkText="查看 SignalWire SIP 中继服务">
+
+本章介绍的网关现在可以连接到 SignalWire：它由 FreeSWITCH 创始团队提供 SIP 中继服务，同一账号可使用电话号码、E911 紧急呼叫和消息服务。平台支持混合部署；FreeSWITCH Connector 资源用于在平台中表示你的 FreeSWITCH 实例。
+
+</SignalWireCallout>
+
+## 什么是网关 {#what-a-gateway-is}
+
+网关是嵌套在 Sofia 配置实例 `<gateways>` 块中的 `<gateway>` 元素。每个网关都有唯一名称，作为拨号计划桥接字符串中的标识符。FreeSWITCH 启动时读取各网关定义，可选择向提供商发送 SIP REGISTER，并在该配置实例存续期间维护注册状态。
+
+网关隶属于一个 [Sofia 配置实例](../users-endpoints/sip-profiles-sofia.mdx)。在默认配置中，`external` 配置实例通常用于面向运营商的网关，因为它将入站呼叫配置为进入 `context="public"`（参见[第 13 章：入站呼叫与 public 上下文](../dialplan/inbound-public-context.mdx)），而且不强制对入站请求进行身份认证。
+
+---
+
+## 网关文件存放位置 {#where-gateway-files-live}
+
+默认配置将网关定义集中保存在：
+
+```
+conf/sip_profiles/external/
+```
+
+该目录中的每个文件都是包裹在 `<include>` 中的独立 XML 片段。`external` 配置实例通过 `X-PRE-PROCESS` 包含指令将其加载：
+
+```xml
+<profile name="external">
+  <gateways>
+    <X-PRE-PROCESS cmd="include" data="external/*.xml"/>
+  </gateways>
+  ...
+</profile>
+```
+
+你可以在该目录放置任意数量的网关 XML 文件，也可以直接在任何配置实例的 `<gateways>` 块中内联定义网关。
+
+---
+
+## 网关参数参考 {#gateway-parameter-reference}
+
+所有参数都是 `<gateway>` 元素下的 `<param name="..." value="..."/>` 子元素。
+
+### 身份与认证 {#identity-and-authentication}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `username` | 用于认证的 SIP 用户名，也是出站 Request-URI 的用户部分。`register` 为 `true` 时必填；`register` 为 `false` 且未指定时默认为 `FreeSWITCH`。 | 字符串 | 无 |
+| `password` | 用于摘要认证的 SIP 密码。`register` 为 `true` 时必填；`register` 为 `false` 且未指定时默认是空字符串。 | 字符串 | 无 |
+| `auth-username` | 摘要认证用户名；当它与 `username` 不同时使用。 | 字符串 | 同 `username` |
+| `realm` | REGISTER 挑战响应所使用的认证域。未指定时优先使用 `proxy`，否则使用网关名称。 | 主机名或 IP | 网关名称 |
+| `scheme` | 放在 Authorization 头中的认证方案。 | `Digest` | `Digest` |
+| `from-user` | 出站请求 SIP `From` 头中的用户部分。 | 字符串 | 同 `username` |
+| `from-domain` | 出站请求 SIP `From` 头中的域名部分。影响 `From` 头以及 OPTIONS 探测的目标 URI。 | 主机名或 IP | 同 `proxy` |
+
+### 路由 {#routing}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `proxy` | 接收 REGISTER 和 INVITE 的 SIP 服务器，构成出站 Request-URI 的主机部分。未指定时使用 `realm`。 | 主机名、IP 或 `sip:` URI | 同 `realm` |
+| `register-proxy` | 仅接收 REGISTER 的 SIP 服务器。在注册目标与呼叫路由目标不同时使用。 | 主机名、IP 或 `sip:` URI | 同 `proxy` |
+| `outbound-proxy` | 无论 Request-URI 为何，都通过此 SIP 代理发送出站 INVITE。它与 `proxy` 共同生效。 | 主机名、IP 或 `sip:` URI | 无 |
+| `destination-prefix` | 通过该网关拨出时，始终添加在目的号码前的字符串。 | 字符串 | 空 |
+
+### 注册行为 {#registration-behavior}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `register` | 是否向服务提供商发送 SIP REGISTER。基于 IP 认证的中继设为 `false`。 | `true`、`false` | `true` |
+| `register-transport` | REGISTER 请求使用的传输协议，父级配置实例必须支持该协议。指定 `tls` 时须在配置实例中启用 `enable-tls`。 | `udp`、`tcp`、`tls` | `udp` |
+| `expire-seconds` | 在 `Expires` 头中请求的注册有效期（秒）。小于 `5` 的值被拒绝并改用 `3600`。 | 整数 | `3600` |
+| `retry-seconds` | 注册失败或超时后重新尝试前的等待秒数。小于 `5` 的值会调整为 `30`。 | 整数 | `30` |
+| `908-retry-seconds` | 针对 SIP 908 响应单独覆盖 `retry-seconds`；未指定时，908 失败也采用 `retry-seconds`。 | 整数 | 同 `retry-seconds` |
+| `timeout-seconds` | 等待 REGISTER 响应并判定超时的秒数。小于 `5` 的值会调整为 `60`。 | 整数 | `60` |
+| `distinct-to` | 为 `true` 时，每次 REGISTER 使用不同的 To 头，而非共用的网关 To URI。 | `true`、`false` | `false` |
+
+### Contact 头 {#contact-header}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `contact-host` | 覆盖 REGISTER 中 SIP Contact 头的主机部分。特殊值 `sip-ip` 强制使用配置实例的内部 SIP IP，而非外部 IP。 | 主机名、IP 或 `sip-ip` | 配置实例的外部 SIP IP |
+| `contact-params` | 附加到 REGISTER Contact URI 的额外分号分隔参数。传输参数和 `gw` 标签会自动附加，请勿在此重复设置。 | 分号分隔的 SIP URI 参数 | 空 |
+| `extension-in-contact` | 为 `true` 时，将 `extension` 值放在 Contact 头的用户部分；为 `false` 时使用网关名称（`gw+{name}`）。 | `true`、`false` | `false` |
+
+### 入站呼叫处理 {#inbound-call-handling}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `extension` | 从该网关进入的呼叫所匹配的拨号计划分机号。特殊值 `auto` 与 `auto_to_user` 都将目标映射为 SIP To 头的用户部分。未指定时默认采用 `username`。 | 字符串、`auto`、`auto_to_user` | 同 `username` |
+| `context` | 该网关入站呼叫所进入的拨号计划上下文。 | 字符串 | 父配置实例的 `context` |
+| `caller-id-in-from` | 为 `true` 时，经该网关桥接拨出呼叫会使用入站主叫号码作为 `From` 头的用户部分。 | `true`、`false` | `false` |
+| `gw-auth-acl` | ACL 名称，用来授权携带此网关 `gw+` Contact 标签的入站 SIP 请求。 | ACL 名称字符串 | 无 |
+
+### OPTIONS 保活（Ping） {#options-keepalive-ping}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `ping` | 每隔 N 秒向网关发送 SIP OPTIONS。小于 `5` 的值被拒绝且禁用探测。连续失败达到 `ping-min` 次后，网关标记为 DOWN 并取消注册。 | 整数（秒） | 禁用 |
+| `ping-max` | 将网关状态切换为 UP 所需的连续 OPTIONS 成功响应次数。 | 整数 | `1` |
+| `ping-min` | 将网关状态切换为 DOWN 所需的连续 OPTIONS 失败响应次数。 | 整数 | `1` |
+| `ping-user-agent` | OPTIONS 探测请求中发送的 User-Agent 字符串。 | 字符串 | 无 |
+| `ping-monitoring` | 为 `true` 时，每次 OPTIONS 探测结果都触发 `sofia::gateway_state` 自定义事件，而不仅在状态转换时触发。 | `true`、`false` | `false` |
+| `contact-in-ping` | 为 `true` 时，OPTIONS 探测发往已注册的 Contact URI，而不是代理 URI。 | `true`、`false` | `false` |
+
+### RFC 5626（SIP Outbound） {#rfc-5626-sip-outbound}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|---|---|---|---|
+| `rfc-5626` | 为该网关启用 RFC 5626 SIP Outbound。父级配置实例也须设置 `enable-rfc-5626`。启用后在 Contact 头中附加 `+sip.instance` 和 `reg-id`。 | `true`、`false` | `false` |
+| `reg-id` | RFC 5626 启用时放在 Contact 头中的 `reg-id` 值。 | 整数字符串 | 无 |
+
+### 不适用于网关级别的参数说明 {#notes-on-parameters-not-accepted-at-gateway-level}
+
+默认配置中的 `example.xml` 文件有一个被注释掉的 `cid-type` 参数。该参数实际上是**配置实例级别**的设置（在配置实例解析器中称为 `caller-id-type`），不会被网关参数解析循环读取。在 `<gateway>` 元素中设置它不会生效。
+
+同样，`dtmf-type` 与 `sip-cid-type` 都是配置实例级别的参数，网关解析器不接受它们。
+
+带下划线的 `retry_seconds` 拼法作为 `retry-seconds` 的向后兼容别名仍被接受。新配置应使用带连字符的写法。
+
+---
+
+## 网关通道变量 {#gateway-channel-variables}
+
+除了 `<param>` 元素，网关定义还支持 `<variables>` 块（或单独的 `<variable>` 元素），以便为经过该网关的呼叫设置通道变量。
+
+```xml
+<gateway name="my-provider">
+  <param name="username" value="15555550100"/>
+  <param name="password" value="s3cr3tpass"/>
+  <param name="proxy"    value="sip.myprovider.com"/>
+
+  <variables>
+    <variable name="sip_cid_type"          value="rpid" direction="outbound"/>
+    <variable name="accountcode"           value="provider-a" direction="inbound"/>
+    <variable name="absolute_codec_string" value="PCMU,PCMA" direction="outbound"/>
+  </variables>
+</gateway>
+```
+
+每个 `<variable>` 都可接受可选的 `direction` 属性：
+
+| `direction` 的值 | 作用 |
+|---|---|
+| `inbound` | 在从此网关进入的呼叫上设置变量。 |
+| `outbound` | 在通过此网关桥接拨出的呼叫上设置变量。 |
+| 未指定 | 在入站和出站呼叫上都设置变量。 |
+
+网关变量常用于按中继设置 `sip_cid_type`（因为 `cid-type` 不是网关 `<param>`）、应用特定中继的编解码器列表，或给呼叫打上计费代码标签。
+
+---
+
+## 需要注册与无需注册的中继 {#registering-vs-non-registering-trunks}
+
+**需要注册的网关**向服务提供商发送 SIP REGISTER，并通过定期刷新保持注册。必须配置 `username` 和 `password`。FreeSWITCH 在加载配置实例时立即发送 REGISTER，并在 `expire-seconds` 指定的有效期到期前重新注册。
+
+**无需注册的网关**将 `register` 设为 `false`。FreeSWITCH 不发送 REGISTER，中继两端通过 IP 地址认证。无需设置 `username` 和 `password`（`register` 为 `false` 时，FreeSWITCH 默认使用 `username` = `FreeSWITCH` 和空的 `password`）。配置实例加载后立即将网关标记为 UP。
+
+---
+
+## 需要注册的网关完整示例 {#complete-registering-gateway-example}
+
+```xml
+<include>
+  <gateway name="my-provider">
+    <!-- Required credentials -->
+    <param name="username"           value="15555550100"/>
+    <param name="password"           value="s3cr3tpass"/>
+
+    <!-- Authentication realm; defaults to gateway name if omitted -->
+    <param name="realm"              value="sip.myprovider.com"/>
+
+    <!-- Outbound request target; defaults to realm if omitted -->
+    <param name="proxy"              value="sip.myprovider.com"/>
+
+    <!-- From header identity -->
+    <param name="from-user"          value="15555550100"/>
+    <param name="from-domain"        value="sip.myprovider.com"/>
+
+    <!-- Registration behavior -->
+    <param name="register"           value="true"/>
+    <param name="register-transport" value="udp"/>
+    <param name="expire-seconds"     value="3600"/>
+    <param name="retry-seconds"      value="30"/>
+
+    <!-- Inbound call handling -->
+    <param name="extension"          value="15555550100"/>
+    <param name="context"            value="public"/>
+
+    <!-- OPTIONS keepalive every 30 seconds -->
+    <param name="ping"               value="30"/>
+  </gateway>
+</include>
+```
+
+---
+
+## 无需注册（基于 IP 认证）的网关示例 {#non-registering-ip-authenticated-gateway-example}
+
+```xml
+<include>
+  <gateway name="peer-trunk">
+    <!-- proxy is the only required field for a non-registering gateway -->
+    <param name="proxy"    value="203.0.113.10"/>
+    <param name="register" value="false"/>
+
+    <!-- Calls from this peer enter the public context -->
+    <param name="context"  value="public"/>
+  </gateway>
+</include>
+```
+
+`register` 为 `false` 时，配置实例加载后不会发送 REGISTER，而是立即启用网关；`username` 和 `password` 参数可以省略。
+
+---
+
+## 通过网关路由出站呼叫 {#routing-outbound-calls-through-a-gateway}
+
+在拨号计划中使用 [`bridge` 应用](../dialplan/dptools-reference.mdx)，端点字符串写作 `sofia/gateway/<name>/<number>`，其中 `<name>` 为网关名称，`<number>` 为目标号码。
+
+```xml
+<action application="bridge" data="sofia/gateway/my-provider/12125550199"/>
+```
+
+网关名称必须与 `<gateway>` 元素的 `name` 属性完全一致。如果网关不可用（状态为 `DOWN`），桥接失败并返回 `GATEWAY_DOWN` 原因码。
+
+网关名称保存在通道变量中时，通常会使用变量替换：
+
+```xml
+<action application="bridge" data="sofia/gateway/${default_gateway}/$1"/>
+```
+
+---
+
+## 来自中继的入站呼叫 {#inbound-calls-from-a-trunk}
+
+从已注册或基于 IP 认证的中继进入的 SIP INVITE，通常会进入父级 Sofia 配置实例所设的拨号计划上下文（`external` 配置实例通常是 `public`）；网关定义中的 `context` 参数可覆盖此设置。在对应上下文中，拨号计划规则依据被叫号码进行匹配和路由。有关 `public` 上下文及入站路由，参见[第 13 章：入站呼叫与 public 上下文](../dialplan/inbound-public-context.mdx)。

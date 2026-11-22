@@ -1,0 +1,38 @@
+---
+sidebar_position: 30
+id: mod_random
+slug: /module-reference/applications/mod_random
+title: "mod_random — 随机熵收集模块"
+description: "通过 /dev/random 或 /dev/hwrandom，将 FreeSWITCH 事件数据及由静音生成的音频采样注入 Linux 内核熵池。"
+sidebar_label: "mod_random"
+---
+
+# mod_random — 随机熵收集模块 {#mod_random--random-application-execution}
+
+`mod_random` 是一个仅限 Linux 使用的基础设施模块，位于 `src/mod/applications` 源码目录中，用于持续为宿主操作系统提供熵。它会打开 `/dev/hwrandom`（失败时回退为 `/dev/random`），并通过 `RNDADDENTROPY` ioctl 将两类数据注入内核熵池：一类是通过 `SWITCH_EVENT_ALL` 捕获并序列化的 FreeSWITCH 事件，另一类是由 `switch_generate_sln_silence` 生成的静音模式音频缓冲区。
+
+在虚拟机或嵌入式设备上运行 FreeSWITCH 时，如果内核熵池消耗较快，导致 `getrandom()` 或 `/dev/urandom` 的读取阻塞，运维人员可以加载该模块，以持续提供由呼叫活动衍生的随机性。它不需要任何配置，也不提供拨号计划应用或 API 命令。
+
+## 加载模块 {#loading-the-module}
+
+在 `load` 命令及 `modules.conf.xml` 中，模块名称为 `mod_random`。
+
+默认 vanilla 配置**不会启用**该模块；`autoload_configs/modules.conf.xml` 中的加载项已被注释：
+
+```xml
+<!--<load module="mod_random"/>-->
+```
+
+如需启用，请取消该行的注释，或将其加入自己的 `modules.conf.xml`，随后重启 FreeSWITCH，或在 `fs_cli` 中执行：
+
+```
+load mod_random
+```
+
+此模块**仅支持 Linux**。在 Windows 上，加载函数会立即返回 `SWITCH_STATUS_NOTIMPL`，因此模块无法启动。
+
+## 依赖项 {#dependencies}
+
+`mod_random` 使用 Linux 内核头文件 `linux/random.h`，以调用 `RNDADDENTROPY` ioctl。该头文件属于在 Linux 上构建 FreeSWITCH 所需的标准 Linux 内核开发包，并非额外的外部依赖。无需第三方库。
+
+**源码：** `src/mod/applications/mod_random`

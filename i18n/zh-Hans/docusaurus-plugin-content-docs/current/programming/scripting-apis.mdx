@@ -1,0 +1,388 @@
+---
+sidebar_position: 5
+id: scripting-apis
+slug: /programming/scripting-apis
+title: "第 48 章：嵌入式脚本 API"
+description: "mod_lua 与 mod_v8 的常用脚本接口：Session、freeswitch.API、freeswitch.Event、consoleLog 等。"
+sidebar_label: "48. 嵌入式脚本 API"
+---
+
+# 第 48 章：嵌入式脚本 API {#chapter-48-embedded-scripting-apis}
+
+[第 28 章：脚本集成](/integration/scripting)介绍了如何*接入*语言模块，包括拨号计划应用、API 命令、XML 处理器和事件钩子。本章介绍这些模块向脚本开放的*编程接口*：脚本运行后可以调用哪些对象和函数。
+
+`mod_lua` 与 `mod_v8`（JavaScript）具有几乎相同的对象模型，因为它们都封装了 `src/switch_cpp.cpp` 中相同的 C++ 类：`src/include/switch_cpp.h` 声明的 `CoreSession`、`API`、`Event` 和 `Stream`。`mod_lua` 通过 SWIG 绑定（`src/mod/languages/mod_lua/freeswitch.i`）暴露这些类；`mod_v8` 则在 `src/mod/languages/mod_v8/` 下以 C++ 重新实现等价接口。两种语言的接口足够接近，可以对照阅读，但个别名称和调用方式不同，下文将明确指出。
+
+本章介绍的每个方法和函数均已对照 FreeSWITCH 源码核实。Lua 与 JavaScript 不一致时，会分别提供对应名称。
+
+---
+
+<SignalWireCallout
+  title="通过 SDK 使用 Session 对象"
+  href="https://signalwire.com/docs/server-sdks/guides/build-ai-agents"
+  page="scripting-apis"
+  linkText="查看 SignalWire SDK">
+
+本章的 Session 和 API 对象在 SignalWire SDK 中有对应的托管能力：可以从普通 Python 或 TypeScript 进程控制呼叫、媒体和 AI 坐席。代码可以运行在任何环境，底层引擎则运行在 SignalWire 平台。
+
+</SignalWireCallout>
+
+## 脚本如何获得 Session {#how-a-script-gets-a-session}
+
+*Session（会话）* 是脚本操作某条呼叫腿的句柄。脚本可以通过三种方式获得它。
+
+### 全局变量 `session` {#the-global-session}
+
+在活动呼叫腿上通过拨号计划应用 `lua` 或 `javascript` 启动脚本时，模块会把一个可直接使用的会话对象注入脚本，命名为全局变量 `session`。
+
+Lua 通过 `mod_lua_conjure_session(L, session, "session", 1)` 完成该操作（`mod_lua.cpp`）；JavaScript 中的 `mod_v8` 使用名称 `session` 注册同一对象（`mod_v8.cpp` 中的 `RegisterInstance(isolate, "session", true)`）。因此两种语言的全局变量都叫 `session`。
+
+```lua title="Lua — from the lua dialplan app"
+-- 'session' already exists; it is the inbound call leg
+session:answer()
+```
+
+```javascript title="JavaScript — from the javascript dialplan app"
+// 'session' already exists; it is the inbound call leg
+session.answer();
+```
+
+如果脚本在**没有呼叫腿**的环境中运行（例如 `luarun` / `jsrun` API 命令、启动脚本或 XML 处理器），就没有关联的呼叫，因此 `session` 不能作为有效的通话对象使用。`mod_v8` 在这种情况下会把全局变量设置为布尔值 `false`，方便脚本检查（`mod_v8.cpp`）。
+
+### 通过 UUID 包装现有通话 {#wrapping-an-existing-call-by-uuid}
+
+脚本可以通过 UUID 绑定任意仍然存活的通道。
+
+Lua 中将 UUID 字符串传给 `freeswitch.Session` 构造函数：
+
+```lua
+local sess = freeswitch.Session("<uuid>")
+if sess:ready() then
+  sess:execute("playback", "ivr/ivr-welcome.wav")
+end
+```
+
+JavaScript 中以 UUID 构造 `Session`。如果参数不包含 `/`，`mod_v8` 会将其视为 UUID 并查找现有通道（`fssession.cpp` 中的 `FSSession::Construct`）：
+
+```javascript
+var sess = new Session("<uuid>");
+if (sess.ready()) {
+  sess.execute("playback", "ivr/ivr-welcome.wav");
+}
+```
+
+### 发起新呼叫 {#originating-a-new-call}
+
+传入拨号字符串（包含 `/`）会创建**新的**出站呼叫腿，而非包装现有会话。可选的第二个参数为发起呼叫的 A 腿 Session，用于继承 Caller Profile 等数据。
+
+```lua
+-- new outbound leg, originated from the current call leg
+local b = freeswitch.Session("sofia/gateway/mygw/+15551234567", session)
+if b:ready() then
+  session:bridge(b)
+end
+```
+
+```javascript
+// new outbound leg, originated from the current call leg
+var b = new Session("sofia/gateway/mygw/+15551234567", session);
+if (b.ready()) {
+  bridge(session, b);   // see "Bridging" below
+}
+```
+
+:::note Lua 与 JavaScript
+`mod_v8` 仍提供已弃用的 `session.originate(a_leg, dialstring)` 方法，但它会记录弃用警告。建议使用构造函数 `new Session("<dial string>", a_leg)`（`fssession.cpp`）。
+:::
+
+---
+
+## Session 对象 {#the-session-object}
+
+Session 方法映射到 `src/include/switch_cpp.h` 中的 C++ `CoreSession` 类。`mod_lua` 几乎原样通过 SWIG 绑定该类，因此 Lua 方法名与 C++ 声明一致。`mod_v8` 在自己的 `session_proc` 表（`fssession.cpp`）中注册了等价但并不完全相同的方法集。
+
+下表列出常用方法。**Lua** 列是 SWIG 暴露的名称；**JavaScript** 列是 `mod_v8` 中的名称。破折号表示该语言的公共接口中未暴露该方法。
+
+| 用途 | Lua | JavaScript | 源码核对位置 |
+|---|---|---|---|
+| 应答呼叫 | `session:answer()` | `session.answer()` | `switch_cpp.h` / `fssession.cpp` |
+| 预应答（早期媒体） | `session:preAnswer()` | `session.preAnswer()` | `switch_cpp.h` / `fssession.cpp` |
+| 挂机 | `session:hangup(cause)` | `session.hangup(cause)` | `switch_cpp.h` / `fssession.cpp` |
+| 播放文件 | `session:streamFile(file)` | `session.streamFile(file)` | `switch_cpp.h` / `fssession.cpp` |
+| 录音到文件 | `session:recordFile(name, limit, thresh, hits)` | `session.recordFile(name, cb, arg, limit, thresh, hits)` | `switch_cpp.h` / `fssession.cpp` |
+| 播放提示音并收集 DTMF | `session:playAndGetDigits(...)` | *（未暴露）* | `switch_cpp.h` |
+| 收集指定数量按键 | `session:getDigits(max, terminators, timeout)` | `session.getDigits(max, terminators, timeout)` | `switch_cpp.h` / `fssession.cpp` |
+| 播放提示并读取按键 | `session:read(min, max, file, timeout, terminators)` | *（未暴露）* | `switch_cpp.h` |
+| 执行拨号计划应用 | `session:execute(app, data)` | `session.execute(app, data)` | `switch_cpp.h` / `fssession.cpp` |
+| 获取通道变量 | `session:getVariable(name)` | `session.getVariable(name)` | `switch_cpp.h` / `fssession.cpp` |
+| 设置通道变量 | `session:setVariable(name, val)` | `session.setVariable(name, val)` | `switch_cpp.h` / `fssession.cpp` |
+| 按指定结构朗读值（数字、日期等） | `session:say(text, module, type, method, gender)` | *（使用 `sayPhrase` / `speak`）* | `switch_cpp.h` |
+| 播放 Phrase 宏 | `session:sayPhrase(name, data, lang)` | `session.sayPhrase(name, data, lang)` | `switch_cpp.h` / `fssession.cpp` |
+| 睡眠（毫秒），期间仍可处理 DTMF | `session:sleep(ms)` | `session.sleep(ms)` | `switch_cpp.h` / `fssession.cpp` |
+| 通道是否仍然存活 | `session:ready()` | `session.ready()` | `switch_cpp.h` / `fssession.cpp` |
+| 呼叫是否已应答 | `session:answered()` | `session.answered()` | `switch_cpp.h` / `fssession.cpp` |
+| 桥接另一会话 | `session:bridge(other)` | `session.bridge(other)` | `switch_cpp.h` / `fssession.cpp` |
+| 设置挂机回调钩子 | `session:setHangupHook(func)` | `session.setHangupHook(func)` | `freeswitch.i` / `fssession.cpp` |
+| 设置 DTMF/输入回调 | `session:setInputCallback(func, args)` | `session.collectInput(func, arg, timeout)` | `freeswitch.i` / `fssession.cpp` |
+
+其中一些方法值得进一步说明。
+
+### `streamFile` {#streamfile}
+
+`streamFile(file)` 向通道播放指定文件。在 Lua 中，第二个整数参数可指定播放起始位置（以采样数为单位，见 `switch_cpp.h`）：
+
+```lua
+session:streamFile("ivr/ivr-welcome.wav")
+```
+
+在 JavaScript 中，附加参数为可选的输入回调函数、回调参数及采样起始位置（`fssession.cpp` 的 `StreamFile`）：
+
+```javascript
+session.streamFile("ivr/ivr-welcome.wav");
+```
+
+### `playAndGetDigits`——仅 Lua {#playandgetdigits}
+
+`playAndGetDigits` 播放提示音、收集 DTMF、使用正则表达式验证输入，并可在无效输入时重试。该方法在 `CoreSession`（`switch_cpp.h`）中声明且由 SWIG 绑定，因此 **Lua 可以使用**，但它**未出现在** `mod_v8` 的 `session_proc` 表中：
+
+```lua
+-- min, max, tries, timeout, terminators, prompt, badInput, regex
+local digits = session:playAndGetDigits(
+  1, 1, 3, 5000, "#",
+  "ivr/ivr-enter_ext.wav",
+  "ivr/ivr-that_was_an_invalid_entry.wav",
+  "\\d+")
+```
+
+JavaScript 中可以组合 `streamFile` 和 `getDigits` 达到相同效果，也可以通过 `session.execute(...)` 调用底层 `play_and_get_digits` 应用。
+
+### `getDigits` {#getdigits}
+
+`getDigits` 收集最多指定数量的按键，遇到结束符或超时可提前结束。前三个参数——最大按键数、结束符字符串和总超时（毫秒）——在两种语言中一致（`switch_cpp.h`、`fssession.cpp`）：
+
+```lua
+local d = session:getDigits(4, "#", 5000)
+```
+
+```javascript
+var d = session.getDigits(4, "#", 5000);
+```
+
+### `execute` {#execute}
+
+`execute(app, data)` 在当前会话中按名称执行任意拨号计划应用，也就是 XML 拨号计划中可以指定的应用（`switch_cpp.h`、`fssession.cpp`）。这是脚本最通用的控制入口：
+
+```lua
+session:execute("playback", "ivr/ivr-welcome.wav")
+session:execute("sleep", "1000")
+```
+
+### `getVariable` / `setVariable` {#getvariable-setvariable}
+
+这些方法用于读取和写入通道变量（`switch_cpp.h`、`fssession.cpp`）：
+
+```lua
+local cid = session:getVariable("caller_id_number")
+session:setVariable("my_flag", "1")
+```
+
+```javascript
+var cid = session.getVariable("caller_id_number");
+session.setVariable("my_flag", "1");
+```
+
+### `setHangupHook` 与输入回调 {#hangup-hooks-and-input-callbacks}
+
+`setHangupHook(func)` 注册通道挂机时调用的函数，适合资源清理及记录日志。Lua 和 JavaScript 都支持它（Lua 由 `freeswitch.i` 绑定，JavaScript 由 `fssession.cpp` 的 `SetHangupHook` 实现）。
+
+对于播放期间的 DTMF 和事件回调，两种语言的接口有所不同：
+
+- **Lua** 通过 `session:setInputCallback(func, args)` 注册持久化回调，可以使用 `session:unsetInputCallback()` 解除（`freeswitch.i`）。在 `streamFile`、`collectDigits` 等阻塞方法运行期间也会触发该回调。
+- **JavaScript** 将回调函数直接传入播放方法（如 `streamFile`、`recordFile`、`speak`），并提供 `session.collectInput(func, arg, timeout)` 用于独立收集输入（`fssession.cpp`）。
+
+:::warning Lua 与 JavaScript：输入收集
+`mod_v8` 中不存在 `collectDigits` 方法；JavaScript 的对应接口是 `session.collectInput(...)`。Lua 通过 SWIG 绑定 `CoreSession::collectDigits(...)`，因此该方法在 Lua 中可用。
+:::
+
+---
+
+## `freeswitch.API`——执行 API 命令 {#freeswitch-api}
+
+脚本可执行任意 FreeSWITCH API 命令，包括在 `fs_cli` 中输入或通过事件套接字发送的命令。C++ 类 `API` 定义于 `switch_cpp.h`，`execute` 和 `executeString` 在 `switch_cpp.cpp` 中实现。
+
+### Lua {#api-lua}
+
+Lua 中创建 `API` 对象，然后调用 `execute(cmd, args)` 或 `executeString("cmd args")`：
+
+```lua
+local api = freeswitch.API()
+
+-- two-argument form: command and its arguments
+local result = api:execute("sofia", "status")
+
+-- single-string form: command and args in one string
+local uptime = api:executeString("uptime")
+```
+
+`execute(cmd, args)` 与 `executeString(cmd)` 均将命令输出作为字符串返回（`switch_cpp.cpp` 中的 `API::execute`、`API::executeString`）。
+
+### JavaScript {#api-js}
+
+:::warning Lua 与 JavaScript：API 访问
+`mod_v8` **不提供** `API` 类，而是提供全局函数 `apiExecute(cmd, arg)`（`fsglobal.cpp` 的 `ApiExecute`）。JavaScript 中没有 `executeString`，需要把命令和参数作为两个参数分别传入。
+:::
+
+```javascript
+// global function, not a class
+var result = apiExecute("sofia", "status");
+var uptime = apiExecute("uptime", "");
+```
+
+`apiExecute` 可选的第三个参数是 Session 对象，用于将命令作用域限定到该通道（`fsglobal.cpp`）。
+
+---
+
+## `freeswitch.Event`——创建并触发事件 {#freeswitch-event}
+
+脚本可以构造自定义事件并将其发送到 FreeSWITCH 事件总线。其他订阅者——事件套接字客户端、事件钩子、其他脚本——都能接收。对应的 C++ 类是 `switch_cpp.h` 中的 `Event`。
+
+### Lua {#event-lua}
+
+创建时提供事件类型和可选子类名称，然后添加头字段和正文，最后调用 `fire()`：
+
+```lua
+local event = freeswitch.Event("CUSTOM", "my::namespace")
+event:addHeader("Action", "ping")
+event:addHeader("Caller-ID", session:getVariable("caller_id_number"))
+event:addBody("hello from lua")
+event:fire()
+```
+
+已核对的方法（`switch_cpp.h`、`switch_cpp.cpp`）：`addHeader(name, value)`、`getHeader(name)`、`delHeader(name)`、`addBody(value)`、`getBody()`、`getType()`、`serialize(format)`、`setPriority(priority)`、`fire()`、`merge(other)`、`chat_execute(app, data)` 和 `chat_send(proto)`。
+
+### JavaScript {#event-js}
+
+JavaScript 的接口基本相同，通过 `Event` 类提供（`fsevent.cpp` 中的 `event_proc`）：
+
+```javascript
+var event = new Event("CUSTOM", "my::namespace");
+event.addHeader("Action", "ping");
+event.addHeader("Caller-ID", session.getVariable("caller_id_number"));
+event.addBody("hello from js");
+event.fire();
+```
+
+已核对的 JavaScript 方法（`fsevent.cpp`）：`addHeader`、`getHeader`、`addBody`、`getBody`、`getType`、`serialize`、`fire`、`chatExecute`。
+
+:::note Lua 与 JavaScript：聊天方法
+Lua 绑定使用 `chat_execute`（C++ 方法名）；`mod_v8` 使用 `chatExecute`。
+:::
+
+---
+
+## 日志与流输出 {#logging-and-stream-output}
+
+### `consoleLog` {#consolelog}
+
+`consoleLog(level, msg)` 将消息写入 FreeSWITCH 的指定日志级别，支持 `debug`、`info`、`notice`、`warning`、`err`、`crit`、`alert`、`console`。它在 `switch_cpp.cpp` 中以全局函数 `consoleLog` 实现。
+
+```lua
+freeswitch.consoleLog("INFO", "script reached branch A\n")
+```
+
+JavaScript 中全局函数也是 `consoleLog(level, msg)`。`mod_v8` 还将 `log(level, msg)` 注册为短别名，同时保留已弃用的 `console_log` 名称（`fsglobal.cpp`）：
+
+```javascript
+consoleLog("INFO", "script reached branch A\n");
+```
+
+:::warning Lua 与 JavaScript：日志函数名
+两种语言都使用 `consoleLog`。在 JavaScript 中，`console_log` 虽然仍可用，但已弃用；`log` 是支持的简写。使用时应自行注意换行：Lua 的函数不会自动添加换行，而 `mod_v8` 仅在消息末尾没有 `\n` 时才会补加。
+:::
+
+### `stream` 输出 {#stream-output}
+
+脚本作为 **API 命令**执行时（例如通过 `luarun`，或者由 `mod_xml_rpc` / 事件套接字 `api` 命令为 HTTP 请求提供服务），模块会注入一个全局 `stream` 对象。向该对象写入数据可把内容返回给调用方。Lua 模块通过 `mod_lua_conjure_stream` 以名称 `stream` 注入它（`mod_lua.cpp`），并提供 `write` 方法（`switch_cpp.cpp` 中的 `Stream::write`）：
+
+```lua
+-- in an API/luarun context, 'stream' is available
+stream:write("OK\n")
+```
+
+`Stream` 类还提供 `get_data()` 和 `raw_write(data, len)`（`switch_cpp.h`）。在呼叫腿上由拨号计划启动的脚本拥有 `session`，但没有 `stream`；作为 API 命令启动的脚本拥有 `stream`，但没有可用的呼叫 `session`。
+
+---
+
+## 完整示例：应答、播放、收集按键、分支处理 {#worked-example}
+
+下面两段脚本功能相同：应答呼叫、播放提示音、收集一个数字，再根据结果分支处理。并列提供 Lua 和 JavaScript 版本，以展示两种语言接口的对应关系及少数命名差异。
+
+### Lua {#worked-example-lua}
+
+```lua title="press1.lua — run with: lua press1.lua (from the dialplan)"
+-- 'session' is provided by the lua dialplan application
+session:answer()
+
+-- play a prompt and collect exactly one digit, '#' terminates, 5s timeout
+local digit = session:getDigits(1, "#", 5000)
+
+freeswitch.consoleLog("INFO", "caller pressed: '" .. digit .. "'\n")
+
+if digit == "1" then
+  session:execute("playback", "ivr/ivr-welcome.wav")
+elseif digit == "2" then
+  -- run any API command from the script
+  local api = freeswitch.API()
+  api:execute("uuid_broadcast", session:getVariable("uuid") .. " tone_stream://%(500,0,800)")
+else
+  -- build and fire a custom event for monitoring
+  local ev = freeswitch.Event("CUSTOM", "press1::no_input")
+  ev:addHeader("Caller", session:getVariable("caller_id_number"))
+  ev:fire()
+  session:execute("playback", "ivr/ivr-that_was_an_invalid_entry.wav")
+end
+
+session:hangup()
+```
+
+### JavaScript（mod_v8）{#worked-example-js}
+
+```javascript title="press1.js — run with: javascript press1.js (from the dialplan)"
+// 'session' is provided by the javascript dialplan application
+session.answer();
+
+// play a prompt and collect exactly one digit, '#' terminates, 5s timeout
+var digit = session.getDigits(1, "#", 5000);
+
+consoleLog("INFO", "caller pressed: '" + digit + "'\n");
+
+if (digit == "1") {
+  session.execute("playback", "ivr/ivr-welcome.wav");
+} else if (digit == "2") {
+  // run any API command from the script (global function, not a class)
+  apiExecute("uuid_broadcast",
+    session.getVariable("uuid") + " tone_stream://%(500,0,800)");
+} else {
+  // build and fire a custom event for monitoring
+  var ev = new Event("CUSTOM", "press1::no_input");
+  ev.addHeader("Caller", session.getVariable("caller_id_number"));
+  ev.fire();
+  session.execute("playback", "ivr/ivr-that_was_an_invalid_entry.wav");
+}
+
+session.hangup();
+```
+
+两段程序的主要差别在于语言级语法（方法调用使用 `:` 还是 `.`、`local` / `var`、字符串拼接），以及上文明确标出的**两处命名差异**：JavaScript 通过全局 `apiExecute(...)` 执行 API，而 Lua 使用 `freeswitch.API()` 对象；JavaScript 以 `new Event(...)` 构造事件，而 Lua 使用 `freeswitch.Event(...)`。其他方法如 `answer`、`getDigits`、`execute`、`getVariable`、`hangup` 和事件方法，名称均相同。
+
+---
+
+## 总结 {#summary}
+
+- 脚本可以通过 `lua` / `javascript` 拨号计划应用获取全局 `session`，通过 `freeswitch.Session("<uuid>")` / `new Session("<uuid>")` 根据 UUID 包装现有通道，或通过拨号字符串发起新呼叫腿。
+- Session 对象封装 `CoreSession`；Lua 的方法名几乎原样绑定，`mod_v8` 则另行注册。`playAndGetDigits`、`read` 和 `say` 在公共接口中仅由 Lua 提供；JavaScript 使用 `collectInput`，而 Lua 使用 `setInputCallback` / `collectDigits`。
+- Lua 通过 `freeswitch.API():execute(cmd, args)` 执行 API 命令，JavaScript 则调用全局函数 `apiExecute(cmd, arg)`。
+- 通过 Lua 的 `freeswitch.Event(type, subclass)` 或 JavaScript 的 `new Event(type, subclass)` 构造事件，然后调用 `addHeader` / `addBody` / `fire()`。
+- 两种语言均使用 `consoleLog(level, msg)` 记录日志；API 上下文中的脚本通过 `stream:write(...)` 返回输出。
+
+有关模块配置、拨号计划应用、API 命令和事件钩子的接入方式，请参阅[第 28 章：脚本集成](/integration/scripting)。

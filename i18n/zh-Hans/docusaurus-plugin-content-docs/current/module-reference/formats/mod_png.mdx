@@ -1,0 +1,81 @@
+---
+sidebar_position: 5
+id: mod_png
+slug: /module-reference/formats/mod_png
+title: "mod_png — PNG 图像帧"
+description: "注册 PNG 文件接口，使静态 PNG 图像与可选音频在播放时作为持续的视频源输出。"
+sidebar_label: "mod_png"
+---
+
+# mod_png — PNG 图像帧 {#mod_png-—-png-image-frames}
+
+`mod_png` 位于 `src/mod/formats/`，注册用于 `.png` 扩展名的只读文件格式接口。当支持视频的通道通过标准文件播放机制（如 `playback`）打开 `.png` 文件时，模块会把图像解码为一帧 I420，并不断重复该帧作为视频流，同时生成静音或传送配套音频文件中的音频。
+
+模块还开放 `uuid_write_png` API 命令，可从活动呼叫中抓取一帧视频并保存为 PNG 文件。结合这两种能力，它适合在视频呼叫中显示静态 Logo／保持画面，也能抓取实时视频会话截图用于日志和监控。
+
+## 加载模块 {#loading-the-module}
+
+在 `modules.conf.xml` 及 `load` 命令中使用的模块名为 `mod_png`。
+
+默认发行配置中**已启用该模块**；在 `conf/vanilla/autoload_configs/modules.conf.xml` 中对应条目没有被注释：
+
+```xml
+<load module="mod_png"/>
+```
+
+不需要特殊构建标志。模块链接 FreeSWITCH 核心视频库，而后者要求编译时存在 libpng（版本至少 1.2.49，建议至少 1.6.16）。
+
+## 将 mod_png 用作视频源 {#using-mod_png-as-a-video-source}
+
+### 文件接口 {#file-interface}
+
+`mod_png` 向 FreeSWITCH 文件格式层注册扩展名 `png`。任何打开媒体文件的拨号计划应用（主要是 `playback`）都可以引用 `.png` 路径，模块会把它作为持续的视频流输出。
+
+模块通过 `{key=value}` 文件打开参数接受两个 URI 参数：
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `audio_file` | 与 PNG 图像同时播放的音频文件路径 | 文件格式层能够解析的路径 | _无（静音）_ |
+| `png_ms` | 停止输出 PNG 前的最长播放时长，单位毫秒 | 正整数（毫秒） | `86400000`（24 小时） |
+
+如果通道**没有视频**，则必须设置 `audio_file`，否则打开会失败。如果通道**有视频**，PNG 仅解码一次，之后每个视频帧都是该图像的副本；除非指定 `audio_file`，音频帧均为静音。
+
+### 拨号计划示例 {#dialplan-example}
+
+```xml
+<action application="playback" data="{audio_file=/tmp/hold_music.wav,png_ms=30000}/tmp/logo.png"/>
+```
+
+此示例将 `logo.png` 作为视频帧播放最多 30 秒，同时以音频播放 `hold_music.wav`。
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `uuid_write_png` | 从活动呼叫抓取视频帧并写入 PNG 文件 | `uuid_write_png <uuid> <path> [concat \| split <other_path> \| write]` |
+
+### `uuid_write_png` 详细说明 {#uuid_write_png-detail}
+
+向 `<uuid>` 标识的会话附加临时 media bug，等待下一帧视频，将其保存为 `<path>` 指定的 PNG 文件，随后移除 media bug。如果 `<path>` 不是绝对路径，文件会写入 FreeSWITCH 配置的 `images` 目录。
+
+**模式：**
+
+- _（不传第三个参数）_——抓取**读方向**（入站）视频。
+- `write`——抓取**写方向**（出站）视频。
+- `concat`——抓取双向视频，并将它们并排合成为一个 PNG，保存到 `<path>`。会话必须已桥接，远端也必须具有视频。
+- `split <other_path>`——抓取双向视频，分别存为两个文件（`<path>` 为读方向，`<other_path>` 为写方向）。会话必须已桥接，远端也必须具有视频。
+
+**fs_cli 示例：**
+
+```
+uuid_write_png 3f9b1c2a-... /tmp/snapshot.png
+uuid_write_png 3f9b1c2a-... /tmp/snapshot.png write
+uuid_write_png 3f9b1c2a-... /tmp/both.png concat
+uuid_write_png 3f9b1c2a-... /tmp/read.png split /tmp/write.png
+```
+
+## 依赖 {#dependencies}
+
+`mod_png` 本身除了 FreeSWITCH 核心外不依赖其他外部库。PNG 读写由 FreeSWITCH 内部视频层（`switch_core_video`）实现；该层需要 **libpng**（至少 1.2.49；为了支持简化 API，建议至少 1.6.16）。编译 FreeSWITCH 时必须已有 libpng；它不随源码提供，需要单独安装，例如 Debian/Ubuntu 的 `libpng-dev`、RHEL/CentOS 的 `libpng-devel`。
+
+**源码：** `src/mod/formats/mod_png`

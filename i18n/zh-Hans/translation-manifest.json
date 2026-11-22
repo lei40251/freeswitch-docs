@@ -1,17 +1,69 @@
 {
   "version": 1,
   "files": {
+    "applications/conferencing.mdx": {
+      "sourceHash": "58359ca683f528d65b9e07d22430aed1e9b99e0789ac141de521e29398643a6c",
+      "translationHash": "8ff7651a8ca803ba6d30225f3fa12e4c7a2ec612a55ff778a0a02263a8e87225"
+    },
+    "applications/fax-t38.mdx": {
+      "sourceHash": "b39fba360393b0f707795ac3a39d022e61093737465d5512781f52382a5bf386",
+      "translationHash": "83c1350912f24af2ca89acdba0531c7f7fe5c9814a0fbe99788e9675ea34fa03"
+    },
     "applications/index.mdx": {
       "sourceHash": "c35ab51198d2d8ccee691a929a150d2d7d7c36025941e9edfb30bfd56104eb1f",
       "translationHash": "cfdf767c07ee458176a5101ad359e6c1fea3ebddaef2004155d59ac31a31cc74"
+    },
+    "applications/ivr-menus.mdx": {
+      "sourceHash": "93edca3c8cb0a7c1243c2a9e6986a3a53a7bed37a93b74f5feb1b91a8b608447",
+      "translationHash": "e226f089d9c59ce5f41fb766162807eff030558c59578c4188db2f41f3db54ab"
+    },
+    "applications/queues-fifo-callcenter.mdx": {
+      "sourceHash": "dca9d9ff7aef961f81e3f7ea576fd9b7b1f26022b146280d7a77a0037ab43d6b",
+      "translationHash": "80a16f104df033fbc0ed950aabb7a3f1199c74c56945bc0bc2b2a2697b2a765f"
+    },
+    "applications/utility-applications.mdx": {
+      "sourceHash": "341f56e76531a07360f47c1160cbc2069c02471407fe593144fc349e4e8a5ed9",
+      "translationHash": "62a3c38b75e70be47906f4b51946911562b00ed27fb24897614fa641a0ddecb3"
+    },
+    "applications/voicemail.mdx": {
+      "sourceHash": "a04865c4f48f7e2d853b94da6f4fc5ab83f8f26d41397a77c44f9589afad1342",
+      "translationHash": "3aa958ef6955bb61e0e24035f60147275561d6f4dda151cb8575bb6ceef8d508"
     },
     "configuration-system/index.mdx": {
       "sourceHash": "d2f8064a5da9400cc78180fa58a442535196acfdaf74083ac5d1c69ac8b34e2c",
       "translationHash": "637c03d07b7dfdabe138720328a711fd795a85f255a6bf38014957408d721e9b"
     },
+    "configuration-system/module-loading.mdx": {
+      "sourceHash": "a312ba486375720004e3497ce096d974684e2d68102608b344183a611345aa35",
+      "translationHash": "d4620a43cbfa5953b2c4a2d2750eaac1fcbeae8c2876ac93d6b6ab4c9047de6d"
+    },
+    "configuration-system/variables-and-core-settings.mdx": {
+      "sourceHash": "43216ab711385604bb396b674a5aaeecafac0afdf8e7516aedc1446997c1e290",
+      "translationHash": "095d856c696c2ee4054c02f437bd4a3d40f3eea548b63f934c8716f0edf231f5"
+    },
+    "configuration-system/xml-configuration.mdx": {
+      "sourceHash": "d0868a9d877e0e3b0bb08b2e0781da47286fd39a67bdde123060c724f429240f",
+      "translationHash": "662af2b62b6cbc1b2caa157abffd70d41ffa178e9ecfb7c1d2e2287f2cfbdfd3"
+    },
+    "dialplan/dptools-reference.mdx": {
+      "sourceHash": "3ad5a5413623e4afed7431b4ccd081d91959f1a4d5279f677b221d667f9378eb",
+      "translationHash": "e0ed3385947c8ec117dccc8d23a7b48b50c599ce03c98059583629b7c1f79054"
+    },
+    "dialplan/inbound-public-context.mdx": {
+      "sourceHash": "a94b7f75c6a283a12ef0c834af2fc7e2f018ee716aa7f345b817f064152d2dde",
+      "translationHash": "5b2c99140def5f8e46faaa61646d3f84c45aa950d11fd9607e7a78f6f5c9ab41"
+    },
     "dialplan/index.mdx": {
       "sourceHash": "18f34b1babc8bafd8d5adfdfbd5c5e897efe3eb4ed8ce568f4ff5a55a14087ab",
       "translationHash": "af9ecb219afc8476d2ce4335d1428f3d9b409abb5cf962feacbfa6bdf36278ec"
+    },
+    "dialplan/time-and-condition-routing.mdx": {
+      "sourceHash": "0154946c6175748bc6aef19234e4cefbdb0a4631dc7510abbeef0e10ffa2a0ab",
+      "translationHash": "fe8a907e597ac21eb1c72ed87d99bc481eae949f23950686ec47dbeb3e378317"
+    },
+    "dialplan/xml-dialplan.mdx": {
+      "sourceHash": "edd8149755099bb270154c585ebedb60fb8df05246e5432ab406e7c61effc3b7",
+      "translationHash": "4c1d9d278a92327f2ebbc13f2359cfcc92c70543c7d33beba81467454c256225"
     },
     "foundations/getting-started.mdx": {
       "sourceHash": "7621a82d8179fbd480d5f68fe75890e2c6fa7821d21048a9f3a5d3da78e6b35c",
@@ -29,29 +81,605 @@
       "sourceHash": "05d54eb2de5e004ff8ca90b891792a9ea63d41755c2aed6cd5eb8297f48bad6c",
       "translationHash": "024d01a0a2e68e5138aae7f62ebba2d4957f131138b5754166993e50dabdd7cd"
     },
+    "integration/access-control-lists.mdx": {
+      "sourceHash": "7e2826dacd8e1544925199e0f3af7ab23ef77769e37595290db303adfaed6a41",
+      "translationHash": "c7a37e7a0135e607865fd6411aa593f5454e6525570cd745ba446f8aa1ff8063"
+    },
+    "integration/call-detail-records.mdx": {
+      "sourceHash": "8107f5793845e1e83c2e96dd264625bc30cef1752f474cbdfbae1b7fca9c0eeb",
+      "translationHash": "926eda8a9ef2e52f9ca51f93e7fa3f205ddb0a747ebdd3ed56edc45ce7d7bb34"
+    },
+    "integration/event-socket.mdx": {
+      "sourceHash": "82759c890ad5c3bbb8296f9217372bc9efc3fd2f8e178a407eb4d76365b77b07",
+      "translationHash": "fa5036c0b424e94abcb647f720f86635873d006eca845d83009d7df8a089a50b"
+    },
     "integration/index.mdx": {
       "sourceHash": "40f2e5a9ea5423b05b696f17eafb3ba50a04c99cff0dcbc28e4a5b1bce11f9ec",
       "translationHash": "5f23d4802493b6376fb7ef375d48c5f669dd33e0ea6b234730dfa6df6c5eb7d6"
+    },
+    "integration/scripting.mdx": {
+      "sourceHash": "96c05b88359b892de1087f78984e6c657d6b2217194c8420af0fc030423c0d19",
+      "translationHash": "7964a87e38dc50c65cff2d3bac0e065b4f0174fce526937e2de1b6781abab82d"
+    },
+    "integration/signalwire.mdx": {
+      "sourceHash": "190b9b8344fd9b775f1e600dbeb4a44252135092cda1af3fd614f43891f7ddfb",
+      "translationHash": "68be150a94be76f9f868b606cffd674b844eb7545f47a395f363d096cfa86379"
+    },
+    "integration/xml-curl.mdx": {
+      "sourceHash": "433bf42b326ff3539f710a9d15259f6d4fd33813fc352989cc6e15c0c3990a96",
+      "translationHash": "90d303b65dc1ef6a6dd3a0e125e9e66cc145b11f6cfccde8d41b73d0ef4cc8e5"
+    },
+    "media/audio-files-and-streaming.mdx": {
+      "sourceHash": "002c2db5af6bb341c10cae86c823f889d6e899cab8edc26f78c6a9380944914f",
+      "translationHash": "fb382fae8b53722739dca01f79f00947713964106b1aaa696149e04f9bbbb830"
+    },
+    "media/codecs-and-negotiation.mdx": {
+      "sourceHash": "7bd198f3e2fb04f62dddc15fa88b1a433ce3193b5fda6e3c2c5ff782c0e38e0a",
+      "translationHash": "916cd60a88360fa8bb32741c15cb9e31f9df4ebe7ccb46dda9627ffe88cc6b12"
     },
     "media/index.mdx": {
       "sourceHash": "d31b3efb74f4380d6ccf156ea5a69331d6285b422cdfa5e2c08542f96fb0f341",
       "translationHash": "105d11b6575b992126b936a2de1b4baa7a1f349c603d439472ca9d06996504e5"
     },
-    "users-endpoints/index.mdx": {
-      "sourceHash": "0600fe27d9d4f3c5498e643ae4229b52d285a424ac71f6bbbbc6fe96f9176e0d",
-      "translationHash": "afaf18be7209fe17fa413f90368a64faad73d8c806687bcfd9928902b53d5fd9"
+    "media/media-handling.mdx": {
+      "sourceHash": "0464762046a59ac6ef432031a62d9208d9b8796b2aca995f924bb6c4414ffcc8",
+      "translationHash": "46fee43485db0da12c44dd11746cc9c32aeb247f75958df97c36b374d7d8ad12"
     },
-    "configuration-system/module-loading.mdx": {
-      "sourceHash": "a312ba486375720004e3497ce096d974684e2d68102608b344183a611345aa35",
-      "translationHash": "d4620a43cbfa5953b2c4a2d2750eaac1fcbeae8c2876ac93d6b6ab4c9047de6d"
+    "module-reference/applications/index.mdx": {
+      "sourceHash": "049dfd78c4e58c6c48e273eac9c2344093f5364ce7e64749bd8ff68e8b0977d8",
+      "translationHash": "d1468a0574862c469f5d56604aa1a4d0dab5155ff43bbeb3371b61f46c467d0e"
     },
-    "configuration-system/variables-and-core-settings.mdx": {
-      "sourceHash": "43216ab711385604bb396b674a5aaeecafac0afdf8e7516aedc1446997c1e290",
-      "translationHash": "095d856c696c2ee4054c02f437bd4a3d40f3eea548b63f934c8716f0edf231f5"
+    "module-reference/applications/mod_avmd.mdx": {
+      "sourceHash": "7413a75edaeeae55550bc1088feb1aebc310c0c6fc7b23b71e27fdee999c1b8e",
+      "translationHash": "a2b4ef4f890e81be673c2753f3bc338fda244018c6ef8abe39e2ad59350c460e"
     },
-    "configuration-system/xml-configuration.mdx": {
-      "sourceHash": "d0868a9d877e0e3b0bb08b2e0781da47286fd39a67bdde123060c724f429240f",
-      "translationHash": "662af2b62b6cbc1b2caa157abffd70d41ffa178e9ecfb7c1d2e2287f2cfbdfd3"
+    "module-reference/applications/mod_bert.mdx": {
+      "sourceHash": "54ad62c6e2d44a240513b7762dd101be02fee90428054f25bbee9661d6c29305",
+      "translationHash": "e730c67b2a77da8386cea2862e9adcce8f0d63e259b686d084b4cca84025f6d4"
+    },
+    "module-reference/applications/mod_blacklist.mdx": {
+      "sourceHash": "7808a0a9b3b48c0d36f4b409730cbe54fcda50474b3f3a03dbf4fcfd8c455605",
+      "translationHash": "f3d00399f4ea3cc3cf9726230c39f59fd3a05684148237d5f1879d0d60ce3423"
+    },
+    "module-reference/applications/mod_callcenter.mdx": {
+      "sourceHash": "d4ff5a64269998e7254533c6bb2be871f49097f2a3e3272a180c5dba6dac1e5d",
+      "translationHash": "d3de89b67f20271023579a5bf083ab47f2607f9d09f130108052ed6bb50bcaa6"
+    },
+    "module-reference/applications/mod_cidlookup.mdx": {
+      "sourceHash": "76f1d16c60c29b2d46ff605c31f411d2a76a692bc28cf294c1ff33ba2144095d",
+      "translationHash": "d9fded940c0e1c3e9503a275d2a484ea15cfd24cbb331ac9c2985329f6d4e339"
+    },
+    "module-reference/applications/mod_com_amd.mdx": {
+      "sourceHash": "4acc2d83818562d30c6b9dba44cdd9c16161444624e4c0de602a051aed6baa4e",
+      "translationHash": "be3192568eab6992fe2364f186bd04618081327f620c71e0765e87050dcf2dbd"
+    },
+    "module-reference/applications/mod_commands.mdx": {
+      "sourceHash": "023c4ed5f7a25dcbb08d3d33f4ee0319ec64f25a243cd3cb0f9e5fe83e4201c6",
+      "translationHash": "83ca66b33b4b45cf279437ad71829071556b09c0560f084b8bb0eb0c1d8db198"
+    },
+    "module-reference/applications/mod_conference.mdx": {
+      "sourceHash": "bbf79cf8ec31e5cf3e2525d95fc50754a2605d243a5b2ace70a2a4ef00f263be",
+      "translationHash": "f53221e862423d233030033dcb9fc508848292fa09e8346b711a702f228ed763"
+    },
+    "module-reference/applications/mod_curl.mdx": {
+      "sourceHash": "952d5662277e4b10e8591d1e7fb7e8a1ed5fa728447ac584f6b7022a8d81a32a",
+      "translationHash": "0e57d4b5f76a1ad111b198723f8dec4f445ac754c72f96a2ba24f2da3aaf8265"
+    },
+    "module-reference/applications/mod_cv.mdx": {
+      "sourceHash": "759b9c4e702e0d21f2abaa7e9be7d6267328e63cebe5f880eca6520424b9087c",
+      "translationHash": "cded31b9c5ac922e6331ecffe1c6d4d915487e59005951501fe78675a384e62d"
+    },
+    "module-reference/applications/mod_db.mdx": {
+      "sourceHash": "960f7ae6739e45c0fa37a429ed340a850be2d75abef57df351ded214066259bf",
+      "translationHash": "c41176578394722f07529675aca30b1d61c804bd7162215b0a921f9d820a43ce"
+    },
+    "module-reference/applications/mod_directory.mdx": {
+      "sourceHash": "92a48a40873ba8209c81271881bde39d3c17f347a576f4a3a782b3aa87069f89",
+      "translationHash": "7ea6b8ef78a7d21313e36a7da9f3afea40a6f90fae351ff0e0de1488fd28c6c2"
+    },
+    "module-reference/applications/mod_distributor.mdx": {
+      "sourceHash": "892177d7bdf5aaf4df6e6ed8be2a6787d413944ea9fb83b1a38bfd2a493e090c",
+      "translationHash": "6adfd641b1255cb39d87a9f4fb11dd6453976a95910578b0b308aa8c454e85fa"
+    },
+    "module-reference/applications/mod_dptools.mdx": {
+      "sourceHash": "9000bdbc091eec30b6a049cc32346a2e80cda46ae3719baaaa1634cd4799ea0c",
+      "translationHash": "8654a979dd1f3a4ddd7ac71b84acec6a482a7f46b9f97d7806f887edb65aa665"
+    },
+    "module-reference/applications/mod_easyroute.mdx": {
+      "sourceHash": "9f8cd0d961066de3c4da197a3eca29a1512628a4b54a99732984da045a66650a",
+      "translationHash": "da81bfc83caa87bef0d43d0c0be0fd7a63bd60a444777ac7192be6319c21e96d"
+    },
+    "module-reference/applications/mod_enum.mdx": {
+      "sourceHash": "01fd90c5e5b5c1d4047a4bae07dd801743dbe0541593f2a6f6af921dec202cea",
+      "translationHash": "4a380a2e0323ba78e932352f0c4b69db19fac93ab12178b6d68863489b9793ab"
+    },
+    "module-reference/applications/mod_esf.mdx": {
+      "sourceHash": "c45b09983f5279533f8055ae01e2c8e31c5fde34c9eefcd8a04d424180e3bc18",
+      "translationHash": "8ed1b57ad6a49767a71b48189e1a2a735b2da3305ae030ae11641788ffbe3b77"
+    },
+    "module-reference/applications/mod_esl.mdx": {
+      "sourceHash": "c3ff5e5bb7bb61b68628d531379e167026471f8b3e44c2d1c6d5a6fed8ff41ab",
+      "translationHash": "339cbfff2ad3aed4b194a82824e230e1efe63c909c95390a62f647071a593550"
+    },
+    "module-reference/applications/mod_expr.mdx": {
+      "sourceHash": "8415a01a4dbfbffe67383c55c0bcfcc0f54c6f9b426468effc81b2c52e9b2147",
+      "translationHash": "0158c4172a0cfd43ee67b490d0b969152bc48581f0c943711e620324eabceb3d"
+    },
+    "module-reference/applications/mod_fifo.mdx": {
+      "sourceHash": "202a6901214bba320c4df302d95c8b5acbc35c95579af3d564df9a0ce7f626c6",
+      "translationHash": "61bdd929f90a4061add53615f463c3d87b7e3f038837a58f4baa19947e6dd52e"
+    },
+    "module-reference/applications/mod_fsk.mdx": {
+      "sourceHash": "cb54efab3e82bfa54690e263fc116ff4148bb18775f3fb99589c34c6186292c9",
+      "translationHash": "7bdd2e2bcbf27b9d8538075b2cadc5cec8922792c171671cfa623dd83f46a4aa"
+    },
+    "module-reference/applications/mod_fsv.mdx": {
+      "sourceHash": "a37b475ded9bc0ea09233cd95b523a146eec45b2caed59b45b0713743e8e04d3",
+      "translationHash": "2f00c84d9d332be104ed3ca73e6257c79573b089cf298271228a521c1daf312b"
+    },
+    "module-reference/applications/mod_hash.mdx": {
+      "sourceHash": "6c0f49910634c7c644637a18b41d6b654533d6e651628d7c17ed85de240f05db",
+      "translationHash": "71fc666899a5a0173abbd1c5f13b697b0760ef6f148dc61457cbef9dadfbc4dc"
+    },
+    "module-reference/applications/mod_httapi.mdx": {
+      "sourceHash": "2da0212d9bbef9e0efddc55c5d23e9f600864beb1b55f5821fcd86a6f88ba3ba",
+      "translationHash": "2a2b4d6e7c6b6eb782fda5631b36922110acf39085d59c0ec87d686435f9203f"
+    },
+    "module-reference/applications/mod_http_cache.mdx": {
+      "sourceHash": "5acca78e850fdd63d87523f5996ed56795d8ba7859d75e2f373b984761e233c9",
+      "translationHash": "3b3dc404bf4e344beaa23070304f2b74b9b4eb2bbeaa01010ac4384b8774aba6"
+    },
+    "module-reference/applications/mod_lcr.mdx": {
+      "sourceHash": "fa25b7320461f111acd97b4799a406c43772f4501ae15396bead7ba1f2b92618",
+      "translationHash": "2b965f24545f2f7da36009724e9c4ef0eee2e0d34021d5c1901afe9994804662"
+    },
+    "module-reference/applications/mod_limit.mdx": {
+      "sourceHash": "2d00b90d7bdfa72da374e184be8938cb0f7b21d7b70f0e0b98459aaba459cb6c",
+      "translationHash": "d43070c851b93831cf80cbad2e62528e4344e7616ed73e69b39b75c45b5ae7d7"
+    },
+    "module-reference/applications/mod_nibblebill.mdx": {
+      "sourceHash": "072783d1780973359b458e2b1e17f352c64067bb0e7463891020b2c99122d5f3",
+      "translationHash": "ab3b9a0ad8b7dd622431be8e32fa6e8aeb36649945813bd6a8fb5f52453dd77e"
+    },
+    "module-reference/applications/mod_osp.mdx": {
+      "sourceHash": "1013166590f7764b7673c53717a5afe3ac8107b761216e5b98d49e5fcc1706bc",
+      "translationHash": "8a63d1d5c4a8e160409f07104cab8e9ca4beeace1f980a9452d940e82059fe50"
+    },
+    "module-reference/applications/mod_prefix.mdx": {
+      "sourceHash": "fab0c7fb1ce186f18a9104d8e54c4387fbe2adc6b9c1a262ec14e10f853c7995",
+      "translationHash": "d4ca9bcd2447e0878d467061804e31d47db4298942c6751320135b8fad78b057"
+    },
+    "module-reference/applications/mod_random.mdx": {
+      "sourceHash": "8594df5469917b9e6065f0dfd4e3516573fc6438c5a1bc472818896b577bccd2",
+      "translationHash": "08661809160b806f5bb0b7c8ae2a4f3446263fffec88002888d0ec9cbf4b6c0c"
+    },
+    "module-reference/applications/mod_signalwire.mdx": {
+      "sourceHash": "fb3ce4e3ac440277856a865862ab789233ea61cbbe1b242cff09420aa4bf6e92",
+      "translationHash": "0eb78ddfeaa7b868f143790e3ed516cd90fc7d511f629ff9bb46186ca4060a01"
+    },
+    "module-reference/applications/mod_sms.mdx": {
+      "sourceHash": "5fdc187bf923eebe98004476319e0daa8132b27bf8e92f81d99a1d1686c489ad",
+      "translationHash": "f6d22bdc5d6e48f6bc1e7532881d73ce030683d0df467587c17e43f4f4e19427"
+    },
+    "module-reference/applications/mod_snapshot.mdx": {
+      "sourceHash": "9039a8d878172642a37ec3408bec892cd76b19eeaef66ef7ea956d78dc2afb49",
+      "translationHash": "4412c686b0bc6259fd4dc16add8e1f6734c3777d43d867a99eda22801673aff0"
+    },
+    "module-reference/applications/mod_spandsp.mdx": {
+      "sourceHash": "7bffa40029eb1664db530251608a20bd3dcfb03059f59e1f20d75012bde86d46",
+      "translationHash": "fd70142d76730cf9dce074eaeaffe84225c0480090dd9a904a14ff085129b3b0"
+    },
+    "module-reference/applications/mod_spy.mdx": {
+      "sourceHash": "e070a89cf6a78943b697d25da85fc313087ccd1a90777cb76811e96f76d2ba51",
+      "translationHash": "779f1f4aff07a829908be6dbfcc36f46cdb17505989a712388462dab4eb71644"
+    },
+    "module-reference/applications/mod_translate.mdx": {
+      "sourceHash": "6b85d1220b47af3bb0bdc9e53dc3a3e4ce1d0121a6a8bdb3678c768a8a792115",
+      "translationHash": "a15f56297a913d6d8f8596374105424413f03e15c56890d4be18e45142943ca0"
+    },
+    "module-reference/applications/mod_valet_parking.mdx": {
+      "sourceHash": "639b460ff62152e0cbfdbfcdc0fd60acea23f37817a9d4bdaefdfe8abc319ada",
+      "translationHash": "3a83b37bae6b16079942808f9844c4288673e758f8ccf6d83110961bfdfe4b00"
+    },
+    "module-reference/applications/mod_video_filter.mdx": {
+      "sourceHash": "c93c0d2797db28d4892157e12882dad356622a7678d5c4d8e5166df9bb4f97e4",
+      "translationHash": "ec64c3d00dcfda5759380a5e5ed3af502f317ea44cc961b84219c0e666e4ed2e"
+    },
+    "module-reference/applications/mod_vmd.mdx": {
+      "sourceHash": "8c8248d2364b4cf0d2bce9d3dac8916bd94db08b37400f42aeae430c83996d3f",
+      "translationHash": "1771719d6d26ee42f451e2fb59c38d68a71b040335eec19d9080c681cd2a7782"
+    },
+    "module-reference/applications/mod_voicemail.mdx": {
+      "sourceHash": "15e7e16bb58714d7e17199a0f451631f56472f9995e23773542f4c476cb72325",
+      "translationHash": "92865868f5d8e20dfb5b6758af9e350c18a39e48a8133b703abb3ddd21c56bad"
+    },
+    "module-reference/applications/mod_voicemail_ivr.mdx": {
+      "sourceHash": "40b49dacb6facff9d86f2e3b790e89a74f0072e1ab87bd59c0fa9381e8ac33ca",
+      "translationHash": "23ab954a5d85468582e046538dc0f6a08cbe4c0e342333cbbcd59ef3a7fd2bf7"
+    },
+    "module-reference/asr-tts/index.mdx": {
+      "sourceHash": "7ec362d9ab63235516721164770bd50beb8e4651a7663013baf26da353e4d55a",
+      "translationHash": "c9b89ef87b4724f53e79eb70581527a3d236abca966e677e9a811ca87f076d83"
+    },
+    "module-reference/asr-tts/mod_flite.mdx": {
+      "sourceHash": "a9af5c6812015bac07a9cd72763a52e6f5c288e0e73778a1807fb8104d957996",
+      "translationHash": "7904b060c23bd0d2a2b3e6ae17bce5ce587d38afc16f82e3a0ef8cb652270d7c"
+    },
+    "module-reference/asr-tts/mod_pocketsphinx.mdx": {
+      "sourceHash": "7640bff65e0648c83d051b3ed807bf93a518bfb7fef023476276aafaa6932638",
+      "translationHash": "5e8f4483b90d1f7c43c8045ffd6f14a43eb6492e5139ef3b060bd3aad87ce856"
+    },
+    "module-reference/asr-tts/mod_tts_commandline.mdx": {
+      "sourceHash": "232c48da997afc5fb3ca88208e0837d8e03144c875f4e382710aa5520b3076e9",
+      "translationHash": "3a01f03026d91b0801ed20d9160814cf75f0fb22ffb56a88a2c447815535bf97"
+    },
+    "module-reference/codecs/index.mdx": {
+      "sourceHash": "f979c22d0ef4a776dfbbb6da298f87ee68f4ebd985fd5544bec84edf2d34d00a",
+      "translationHash": "02bb288f9d417624f2dad17b5e2e1b090817203414125a503eab9dd79b0c009f"
+    },
+    "module-reference/codecs/mod_amr.mdx": {
+      "sourceHash": "49524ba1f6417ca85ee44ddc127a9d5afe20952038681bdafee91f6e4bea4cd0",
+      "translationHash": "bb8b1e1a17a8c6755560b7e65aac58b6b7efe4571f0118325dcc6fceaa4abcbd"
+    },
+    "module-reference/codecs/mod_amrwb.mdx": {
+      "sourceHash": "f7bbf3e30247b33a11678b7d032ee4eead188fbaa3c5b8afe956aa0ad045733c",
+      "translationHash": "00a2c62be48cd13f9b605d2ff58982415e28330ddffda3a363c65f73e36a9847"
+    },
+    "module-reference/codecs/mod_av.mdx": {
+      "sourceHash": "961eca66ce2dc92804db12539149b0dec507ec8db04281638c99fd29577db5de",
+      "translationHash": "fba461358a5ba13671c18e4d23b46c72d5e8a2244ae1dd9bb1458df7e67dd43d"
+    },
+    "module-reference/codecs/mod_b64.mdx": {
+      "sourceHash": "b61f997297d3c89e557b1734fc7224bd7ed8c6863d3ea7126d8d7bbdf7968bd2",
+      "translationHash": "4248196f508bde643d7f5bc7c480ff16c785e900e9b81e855c408217c3b29f6c"
+    },
+    "module-reference/codecs/mod_bv.mdx": {
+      "sourceHash": "152378ddd453f48e5077ae932102d523606b8906de21d9d7434dfe5ca7c786f8",
+      "translationHash": "a4e613947ce7e60c20b7a68e5d98199213dc14ef74d734f879e75fbc75cfd78a"
+    },
+    "module-reference/codecs/mod_codec2.mdx": {
+      "sourceHash": "cff066c4efad1f0db10fadaaf83737adf83f92c0d12a65961870dea652010702",
+      "translationHash": "91d00fd32c5e7006137a59bda262b6fb0350caffac87c92d62ab6bc3d3b39970"
+    },
+    "module-reference/codecs/mod_com_g729.mdx": {
+      "sourceHash": "6a41671373fe3228ef0773725c1c541a9028ca2412d6f36170a4e22667a99d11",
+      "translationHash": "627f6bfe3496d0b84d280a1d120b78d3b020f469f97480cb7788e3d812d859e6"
+    },
+    "module-reference/codecs/mod_g723_1.mdx": {
+      "sourceHash": "8391f59aa9dc2f085b482b93467d506a442ed90f66ea902f9712abe712aa0113",
+      "translationHash": "ada8564156e1b8e3f5a23697de59e9911656ac51ea2e2d80e85b0405ae5249bb"
+    },
+    "module-reference/codecs/mod_g729.mdx": {
+      "sourceHash": "cf2e4a481912d992c5a28fc71831218f5836793e8631d24698dd85c42a6846e4",
+      "translationHash": "db1ab8598a7fb103df8468b8e5e676e408f8aa7488592122327e95a4ec218ef7"
+    },
+    "module-reference/codecs/mod_ilbc.mdx": {
+      "sourceHash": "fb7052e0e6cf19cc2970470c285088e2a6d188fd8405c74aa440135596960a3f",
+      "translationHash": "e6547f6efb1ec9f903ae3daba21ce12885a88d3092d24755d6a9b9b0f53dca97"
+    },
+    "module-reference/codecs/mod_openh264.mdx": {
+      "sourceHash": "d9956e9748db709358ad46eb6d9e96de043f22b29b14d6a11f8057a5086ee224",
+      "translationHash": "056286ef86aa1aa1d050c78a4f820cf94d93441786d9dbbb944e3d48042d4102"
+    },
+    "module-reference/codecs/mod_opus.mdx": {
+      "sourceHash": "77f8386a50ebbd8723799ab3a6fe9ab35dd49fbf3eb886568f2feca431d4f418",
+      "translationHash": "e4d604ab67fc409af707d8de4ea4e0487b8b5e7df03eef5ffb59762fd84525af"
+    },
+    "module-reference/codecs/mod_silk.mdx": {
+      "sourceHash": "be6e35eea3969cc2914f74003bda70b5b97fe3099d07d56a01e0ebf85f07f252",
+      "translationHash": "e4d66081c07379406188a8cd48c74fdc3b1ae529ed54d4910644234b6f533d8c"
+    },
+    "module-reference/codecs/mod_siren.mdx": {
+      "sourceHash": "2b83990525a1e248f115e9a3afcfe6b864acba367b18c2b6773eb74cf27c8f46",
+      "translationHash": "a9c70f350af2a6b99f7011a263a8fe63fc128a9f986da820b10f8a729e86110b"
+    },
+    "module-reference/codecs/mod_yuv.mdx": {
+      "sourceHash": "22b08c66749827a3841cd8a180744e577c2a46aecafccc865425e0954dffca42",
+      "translationHash": "b776f85c520c101493d92b64f2581546e2c58f1840ddf8a2d5510fe57c57aa28"
+    },
+    "module-reference/commercial-modules.mdx": {
+      "sourceHash": "fb7ec46a6db5740a1d273ed6a40efa393b0e76d3f9e9d17db00b330e830a97b1",
+      "translationHash": "432b8a59e617493ef418b51827f2f6817fa188a33cb0c2ff7adade8f2ec9a01f"
+    },
+    "module-reference/data-stores/index.mdx": {
+      "sourceHash": "7b52235da57dbcea88ec6469b9c5c8f4befc030fd8438886c0ca7e0387f2de15",
+      "translationHash": "3a1427ad1dccd748c06498066f339b7bcd9ffddbc045123da965b808fafbe399"
+    },
+    "module-reference/data-stores/mod_hiredis.mdx": {
+      "sourceHash": "22c162741d9f816ca0071fe70ed47c60e2350fd8c09fbec4fe627e75e1a64e6f",
+      "translationHash": "125693fd4cfee1cb81d1689b8880a7815f735df522eea1bdc2d9d765ba561eff"
+    },
+    "module-reference/data-stores/mod_mariadb.mdx": {
+      "sourceHash": "dddab6c9c81517a18d08abf98b1e5dbc571885e2296d6ff2c8d892e4a11c354d",
+      "translationHash": "e40193ba84424e8636bab8fac35c82ccd7979f0965f5b7b7de078713d5b69567"
+    },
+    "module-reference/data-stores/mod_memcache.mdx": {
+      "sourceHash": "02766f2745e50775f702c330b39ede7b9ca44abfeb3b56d4b681478484fbd3f0",
+      "translationHash": "866cd95ed2f5fc7b5cba95eacc0242888ea4e08e008273f75cb234c31f6715c0"
+    },
+    "module-reference/data-stores/mod_mongo.mdx": {
+      "sourceHash": "00f547db82e08d7f9d7186251c6fa20021438cb647a1f5e0b6e590962d2a1cb8",
+      "translationHash": "196cab949197056b26d4320ace91da08439e0970e76bb141a7d4aabbdf39cd7d"
+    },
+    "module-reference/data-stores/mod_pgsql.mdx": {
+      "sourceHash": "493f283de2a8d5d1f79c5f5ae84fe3fdecbd3d5cf501c78e03437caaa3da17ae",
+      "translationHash": "8d52a7cd588cef172d778e153cf3396ae0abea09fcb260f580c59a611c6fca49"
+    },
+    "module-reference/data-stores/mod_redis.mdx": {
+      "sourceHash": "f50220c6e5f0e064e1471ec7cef02b0fd6bd54374f3ce864013ffbabaff33707",
+      "translationHash": "2af1b8d9681778c240fdecc2d36a3d208cbfc622b25b7e22d61f4182c10d721c"
+    },
+    "module-reference/dialplans/index.mdx": {
+      "sourceHash": "06a6bf19e3e8cbe4b96c8927e1b48c891441490b1ac61817b85b6efe67cd35f2",
+      "translationHash": "3bf1522fd763ae8feeee8f0d81f76d8d37ca51b39a8cecae4c595dac67995c51"
+    },
+    "module-reference/dialplans/mod_dialplan_asterisk.mdx": {
+      "sourceHash": "27b3f83793b5211f7d1580678b044ca416408a1bb5775d3e441bf68025b74a2f",
+      "translationHash": "f100a78b7ff6779a72b083b28c904c107dd14e02e7b457578a7ebc25e1099ee0"
+    },
+    "module-reference/dialplans/mod_dialplan_directory.mdx": {
+      "sourceHash": "f8fdb8a3780e688648bae365124e92d3813cf31624150b736df640675d824259",
+      "translationHash": "d4d0781b1e81e4501876fb31fb6198a8d0916ba99201eea3489910bc19cac030"
+    },
+    "module-reference/dialplans/mod_dialplan_xml.mdx": {
+      "sourceHash": "c00f9f81063f594fa1c4145586bb61577113dc73117c6ebef6a89b1b7eb26a02",
+      "translationHash": "24553c744c0f010173592130f4eaa06d0c341adc106627d4216350ef04ae2065"
+    },
+    "module-reference/endpoints/index.mdx": {
+      "sourceHash": "65d12652715a326dedec721a3cf3fb27d0effa31a80a838c956046b5486ab65d",
+      "translationHash": "80d0765976bd695938d85ad214531603d25d1ebb88accc78764b247e3cb6b7d3"
+    },
+    "module-reference/endpoints/mod_alsa.mdx": {
+      "sourceHash": "435a4b29d469701b36d30c4030ba455615f2ea1c824db6b521e521f08b9c40d6",
+      "translationHash": "e2de4765349a571156b56bd05871e6d7d38a85452bc7ddb4fb2c32a1c0b0c3dc"
+    },
+    "module-reference/endpoints/mod_h323.mdx": {
+      "sourceHash": "7ef7a9572d70ffaad1f9c3bfe530ef9d556b9c80d3357dbe727f06f745318215",
+      "translationHash": "74bd6f47250ab642e28f092da5ee7659f69e4571be9bfb9ae2ba6e100b0dbf34"
+    },
+    "module-reference/endpoints/mod_loopback.mdx": {
+      "sourceHash": "52de391d03a925ca5316368f6434a6dbee4e8691bb4cd1a7baf7e11d69624b9b",
+      "translationHash": "60d2d75e090fa2ad786ed5874b6fc9e50727bc3ceb2d55864040e77077b79599"
+    },
+    "module-reference/endpoints/mod_opal.mdx": {
+      "sourceHash": "cc64bce022cf6f7f026b7e9e76b63fd62c542ad71c210902205756cc214202be",
+      "translationHash": "6d56403a29b3bdae1d41702971300821e29f07adef755d0765d638949ab6e4a0"
+    },
+    "module-reference/endpoints/mod_rtc.mdx": {
+      "sourceHash": "4dc15231f53a7f5b2082b533e3702f7ab8a9c24d5564281d0081a9c539c86141",
+      "translationHash": "40ae336dedf3c066bce0d77557a5e01f7e01d3b4c3aa59a7f76399fc116a6342"
+    },
+    "module-reference/endpoints/mod_rtmp.mdx": {
+      "sourceHash": "d5c390a903c39023ce7a87c31315c7c04f2f57253a49f14af5df36aab817ad4b",
+      "translationHash": "9cbcd577ff25a51318f0e9505cb073e83326a0f63befaa4523b1f784b5135c38"
+    },
+    "module-reference/endpoints/mod_skinny.mdx": {
+      "sourceHash": "91f1c73a59b063aaefd2b2da159fd953364fbdf47c4ea3f31381e442216d236c",
+      "translationHash": "2a9b295364eeacdc6c608c656bea56e6eabb7e895bc6c5e50ca2dc0b3b772a37"
+    },
+    "module-reference/endpoints/mod_sofia.mdx": {
+      "sourceHash": "9d2f578ad7b89a5292c77f6c56f38c2e7631f87b0fd7c02fc0db4d5c50e8a668",
+      "translationHash": "d60d93dced63f85db73040c92523ac77693da8fbfa1ccf9f9720e0d508ec073c"
+    },
+    "module-reference/endpoints/mod_verto.mdx": {
+      "sourceHash": "ebbbd4feb3259e05e8ca1151e7fadc4b215c020435a8d4adda2f75c014b55c10",
+      "translationHash": "5e8ef560ec6264d30128c82d4890de1b7e97e889f6ef4490c2de14b7eda74242"
+    },
+    "module-reference/event-handlers/index.mdx": {
+      "sourceHash": "6527a96c6edb7d8aae79c2278be7b164c3d6db9c610c5740b0bb5eaff1630740",
+      "translationHash": "c124fbda3ed4de16ecf912cf5d6e42d539bab3907661d6985cd4df0a4974a53a"
+    },
+    "module-reference/event-handlers/mod_amqp.mdx": {
+      "sourceHash": "40d823957e33996a6abd47c6f03243955bca30ae1c6c60331dc5e6d6498b09b0",
+      "translationHash": "73862087c07fc8e01446cfaef35e9ab13178d0159c213f98e88b0dd0f938d2a8"
+    },
+    "module-reference/event-handlers/mod_cdr_csv.mdx": {
+      "sourceHash": "0c3015027b924e7976a14a2640d4c02034a5544a21ceb05bb69ff3bc13ba9d27",
+      "translationHash": "17a78f7a1dc7eb615c833db26dcbe39d275bc177030ae79da55b7689263dbe10"
+    },
+    "module-reference/event-handlers/mod_cdr_pg_csv.mdx": {
+      "sourceHash": "33764b23d8814ffea86622727e872f9c10b0ebb4c4cdc39c71ce71f2bc3d62ee",
+      "translationHash": "94d90d3729330f768b58c457bfc47e3439f952dac8e6359b99a67f1ea650da78"
+    },
+    "module-reference/event-handlers/mod_cdr_sqlite.mdx": {
+      "sourceHash": "2ec79d1f4e39c684d01506a9d520e3fe1eb3f0f012239acafb9a968ba78324eb",
+      "translationHash": "8f3a9e7c237d642de65f1e136171ab98da7353823ce158069d34da2cbd7504c0"
+    },
+    "module-reference/event-handlers/mod_console.mdx": {
+      "sourceHash": "618740191f8389a170a5c00243d1a0843198e2ebed97723f8b8939a4ffded133",
+      "translationHash": "6ca182968b6d2049db19a9c8e79f5c37635c6e10ba993ea6e45d22471abdfdd2"
+    },
+    "module-reference/event-handlers/mod_erlang_event.mdx": {
+      "sourceHash": "ce711554c6fd0edf1e01db3379bfeeed56fd9bb4754ad19f829a95f0271a15f9",
+      "translationHash": "7f15619c67337bc7c4e81184d4399b9954bb9f2f41e9bfa79c45a29900692acf"
+    },
+    "module-reference/event-handlers/mod_event_multicast.mdx": {
+      "sourceHash": "740b9ac57023c9bd769981de7a41daf3662cce549bed6ae0a25e024ff472560c",
+      "translationHash": "8ecf87b3d1eb8960dc892838af1642399e2a76d996369b6dde5246152504dd16"
+    },
+    "module-reference/event-handlers/mod_event_socket.mdx": {
+      "sourceHash": "621b73497e5e2e050ee031f79b9ea7f9c7a44dac25706a842dfa5ce212dfa6f2",
+      "translationHash": "11a527d2767d3f66427b75cd12b8c688e5830d46cc4cecebf20030b9ea74d8c3"
+    },
+    "module-reference/event-handlers/mod_fail2ban.mdx": {
+      "sourceHash": "d772f88aa90f87f6cbc3211260b44795dc4fc3a15a3ed98bef80ebf52304680a",
+      "translationHash": "3d0749d4ced88e0ff72db9dcd8955482dfa3166198401a2061e1675c18c44eb6"
+    },
+    "module-reference/event-handlers/mod_format_cdr.mdx": {
+      "sourceHash": "b41ace2eb03059ad45d0205eac53d30a28277a6928f4033e095acae4307ff2e0",
+      "translationHash": "5fef5aba4f4778b19497f9f5f5c9c29bc107e52d1ea199e5407daca683a139ea"
+    },
+    "module-reference/event-handlers/mod_graylog2.mdx": {
+      "sourceHash": "4bdf8199564796c0defcd5d890518dba1c025e44fd1622fa9107aaa489cdd2c1",
+      "translationHash": "c8cee14f9d32b8c084e13db0d3dffc1d3e76561f70197a9e05ce01e0586cfe30"
+    },
+    "module-reference/event-handlers/mod_json_cdr.mdx": {
+      "sourceHash": "ee99c964428df410a0803bcdaec21350c6c2a3ae33099f5b404e180046e10850",
+      "translationHash": "aa5768ca91ea5793c9dbb34d30fe281d56c3003a53ba634b020852841dd7b9ff"
+    },
+    "module-reference/event-handlers/mod_logfile.mdx": {
+      "sourceHash": "f102ac6f2309fd78a5b697291572338b0a25c586bb48ee286c1e4bf270985e34",
+      "translationHash": "ccdd8736784082b018f033255442c28489c91962a158c520ca1f3468293a338d"
+    },
+    "module-reference/event-handlers/mod_odbc_cdr.mdx": {
+      "sourceHash": "339e710e7ed550695a0d529245f6aed787fa7a7c31d4797ce828537072f5e86f",
+      "translationHash": "479d7b5a47dabfc64494a2ae494cba3155c2b57f27d49990274cee7027821865"
+    },
+    "module-reference/event-handlers/mod_smpp.mdx": {
+      "sourceHash": "abe6d83659042664cec1add8ff0d619270887a0e2e7019ad98ce072fc8f7380b",
+      "translationHash": "3bab9125b8289c96ef21fb39e59d5c13586e9e2636d6ef3b2fc7b8dec12d6af8"
+    },
+    "module-reference/event-handlers/mod_snmp.mdx": {
+      "sourceHash": "aca2f123db69a25080c498e99344f4a8d2445c60ee9197fb46e0304d14bae777",
+      "translationHash": "70d584bc91cdcc9b4e23ff155599556ff72eaf5b2ff606037dd80dd11f4836e6"
+    },
+    "module-reference/event-handlers/mod_syslog.mdx": {
+      "sourceHash": "1a0cffa661cdb409b56de7d3f7537f6df824f0d699fdada0632772213f22cbee",
+      "translationHash": "b0e4e1f620093c24b3400fd9063bf656ece6283e2730184598707f57090c8ff0"
+    },
+    "module-reference/event-handlers/mod_xml_cdr.mdx": {
+      "sourceHash": "eb8df8cafb6a571b70ec0a36d79206ec2d9fef50f2707e2ff17b3863585c08f4",
+      "translationHash": "07942f8676e7a81edaf21d9521eae9bab5ca6972bb664b4db9c6bafb18188163"
+    },
+    "module-reference/formats/index.mdx": {
+      "sourceHash": "f8911445128053c10cf75cec272c6b1b1ab2cb4ca650120f995bb0ad040737dd",
+      "translationHash": "2628da0972491fbcbfb2ce318797a9f5fa1801968b051ff8715caf7aac0a7736"
+    },
+    "module-reference/formats/mod_imagick.mdx": {
+      "sourceHash": "a0f5af85f021cf3c566321b4da8dea4b0da19f9a2320146e0a022399d5d3eda0",
+      "translationHash": "66072ad265ce7e1552ebbfa701806590226804a84d45332347b5d22d07c6e552"
+    },
+    "module-reference/formats/mod_local_stream.mdx": {
+      "sourceHash": "8e307839dc06d97ee66a8a2f37d3e9646e28363b99629ffd2c9ec2882ea43a73",
+      "translationHash": "4cbabfd2b7c2be953dabfc0139d2498267bb82a20af1cddd472eaba5d64ea5d9"
+    },
+    "module-reference/formats/mod_native_file.mdx": {
+      "sourceHash": "6581e987605895bfbd35397c9c50d43ba56722263ffefaad98902305659e7916",
+      "translationHash": "cf50e5769a74c58954b111da7f9ab08f6aab913067fe7186109fbfb8ef86a3bd"
+    },
+    "module-reference/formats/mod_opusfile.mdx": {
+      "sourceHash": "51a57db6f67a7abc0d91d23c0808953d6a610e890e555ad7f8530ebd74c1f817",
+      "translationHash": "8af9e14229c247bf3f9b5d1182b59ef018ddffb49da9a0385d2f90a9b553fba4"
+    },
+    "module-reference/formats/mod_png.mdx": {
+      "sourceHash": "cb92ffbd1354d25a996f46a92b0bc2c75915ccf36c80c7919f8b2257cf9fb275",
+      "translationHash": "0d705b376d5cf2777a1a929aebf269af9b8e965be729503b927001ab6d20a68c"
+    },
+    "module-reference/formats/mod_shell_stream.mdx": {
+      "sourceHash": "82705812f4ff5f63fc6398fb45e44504469917e5d4600c9d1d2d94646872a6b1",
+      "translationHash": "fd4023a7a16e2e0ffbbd02387b9ff02de791bfaa8149028061658e0dd297c3ec"
+    },
+    "module-reference/formats/mod_shout.mdx": {
+      "sourceHash": "30fe3937d51450bd50df9d7962e1f80f91942d35ac907a5c97dca170e5816c24",
+      "translationHash": "1613143fb38923272ce8641818b0a44b96235b689ba2b4d57324fb133ed97562"
+    },
+    "module-reference/formats/mod_sndfile.mdx": {
+      "sourceHash": "be16eb041e353cff1db897efcaa84b6068cedf879a93bf6ec08fb9ad4f8ab799",
+      "translationHash": "c96f9871190b4d3d69ba3e27a18a023dcb4d822527057252e17cd0058b9748eb"
+    },
+    "module-reference/formats/mod_tone_stream.mdx": {
+      "sourceHash": "11eacee988459be7a671e96158ce86627e6d69cd17df6f93c06a3ab2f18690ef",
+      "translationHash": "a8afbbf258a6ca94804c9a895378ddb8a94e8608e957cd78bf798ebc390647fc"
+    },
+    "module-reference/formats/mod_vlc.mdx": {
+      "sourceHash": "98f7b9995b2a7ddbaadb71f8328eac9b30d5d43865418138c39a4bd8b46ee4a6",
+      "translationHash": "a66826abe9d3c15a386b64bc736b7abd23204957035a0cc3a7b7ca686f7da08b"
+    },
+    "module-reference/formats/mod_webm.mdx": {
+      "sourceHash": "6d5f7427ae9dfcd62073f0f44428dc2111d259f0317eceef6eaa003216e9e1ef",
+      "translationHash": "963aa4205b477ce5998414779aff6f269f0d32e6ffd5d51b4d4927791f575a86"
+    },
+    "module-reference/index.mdx": {
+      "sourceHash": "d4939b0e0e673f9df8c7283800ed315dbb514cc9ffe114378220fc3c8bf72ee4",
+      "translationHash": "dd510794e0bfc772c90cc92ee9b7e5c3b3a7410a510a3ffee23ea3940fbf5355"
+    },
+    "module-reference/languages/index.mdx": {
+      "sourceHash": "ec12ec74b69c76cf563ddabc8ac567cd3feee8e2d3c8475261f1f110af8bf047",
+      "translationHash": "9092babc4efd3a10580b2c2ec95264bbbd4793db61bc43c691e4529304904c07"
+    },
+    "module-reference/languages/mod_basic.mdx": {
+      "sourceHash": "07c0d5f958a433b0c1e2d7ab1406035cb946dc834331e4aac6fb8fd22b783992",
+      "translationHash": "f4ab70214a9159d75b3efa6259b14ca4e6dcb7b9192e8c19b43d9407ef9570b8"
+    },
+    "module-reference/languages/mod_java.mdx": {
+      "sourceHash": "0693b6d410edfcdf4e75afb7aed3e66c5000dfb3dc975e2dc980d65b7897ed69",
+      "translationHash": "b8d353b609aa414c505532de3824d2d6eea325b1b6ba50fb41cbfca6e43a9540"
+    },
+    "module-reference/languages/mod_lua.mdx": {
+      "sourceHash": "22600fe9c1bfea96f0f9fed502c8a39e14eafc7af8500c147137f7fbdf0d3abc",
+      "translationHash": "e7f97d3f892d82a790f230d4fc9dbf078263ad8f7c482908edd4027d933ca2d0"
+    },
+    "module-reference/languages/mod_managed.mdx": {
+      "sourceHash": "0fd5106df2916ccf21005cadaac08b95a0236253906690b629764b006d454311",
+      "translationHash": "370febea975496c3850e548ab75cf1247465f64b453dc927b6778fff53d0dcd8"
+    },
+    "module-reference/languages/mod_perl.mdx": {
+      "sourceHash": "db3cbb461fc69efeb13976ed2ea7d199215b6610008afbe9975408af6b909dab",
+      "translationHash": "6d46799814378185145d7092c252d9f6a1ba92a0bfcf2f7326bbe509c73cdb16"
+    },
+    "module-reference/languages/mod_python3.mdx": {
+      "sourceHash": "f76502f089a107957a0dd3931072a0176a5aa27029b22af0fb3fcf535e1ee684",
+      "translationHash": "b571af625902f4a42060b98ec42e3f2a968708a413832854ecd4f98c732d4ba4"
+    },
+    "module-reference/languages/mod_v8.mdx": {
+      "sourceHash": "faae39befc0d3f9459377298cf252ae17150e4cdc13b371d99f56c364b1eaa98",
+      "translationHash": "2a3a3f650c0079da3e05a1aa7e285184528bb350f00fad1d6f5119efec9bd877"
+    },
+    "module-reference/say-modules.mdx": {
+      "sourceHash": "c0cc88a9dbcd6a83f4c18cb8e004e806b0b59a3986e230c3981eee6e782bd205",
+      "translationHash": "02aba5e030173463c51646e7ae708cfd86071ec55a06f063e400d06711540e6e"
+    },
+    "module-reference/timers.mdx": {
+      "sourceHash": "918430743c57e9b1798fa28104b0a1458fa0b136a37d10afee787f524666dc78",
+      "translationHash": "911cc98d9008426a534a8f2207f677c3ca60acd7a87fb6ffc33c0fa412fa4a75"
+    },
+    "module-reference/xml-interfaces/index.mdx": {
+      "sourceHash": "91df8ce173fa4161c13720d673607ecbafa341559af5cba9d4e69824130f30d8",
+      "translationHash": "bc4b047becc8a95dfa1a1da43653573ca5f399baa4e05c95ce3c2a023143ead2"
+    },
+    "module-reference/xml-interfaces/mod_ldap.mdx": {
+      "sourceHash": "4332afbc969c29eb775d7a233898479dea8260ad309c83b426efbbe506a5a22f",
+      "translationHash": "820e750f8453432824a04f6e222dc324df6c3285adf84a0b5273926de6382a10"
+    },
+    "module-reference/xml-interfaces/mod_xml_curl.mdx": {
+      "sourceHash": "e6f2e1c574492bc504459d885932cdd12fb5858f88d7b2143bae70a69941d775",
+      "translationHash": "7b3c97b82de8d2e34e681ac42bf42f386f4c22dee03ece93e8cdddbf0c63ea30"
+    },
+    "module-reference/xml-interfaces/mod_xml_ldap.mdx": {
+      "sourceHash": "a4085bcc9e12af92098b449d695f46b15b1246ee07d5fc71f0f11f42619e9675",
+      "translationHash": "09b2bcad4c3b431e0e65c459027b216c6eecb03589ff35f876c45b1656069e00"
+    },
+    "module-reference/xml-interfaces/mod_xml_rpc.mdx": {
+      "sourceHash": "54cb35228ac08313b9d4de99d9b5e12e27a5eecdf1299eeed587658292d85dee",
+      "translationHash": "84cd8c5546d74d517cfc4d55d6154670990ce03756ac46a63794e7667d36f37a"
+    },
+    "module-reference/xml-interfaces/mod_xml_scgi.mdx": {
+      "sourceHash": "27c0c2049cf2f2ee7ea0a1f066dbfadceb0c735db0e0ff58e6565648d8c35591",
+      "translationHash": "16173ed028c5d098101c60c37989aa2d5e9b52f0668d301ea22dfc16fe18960a"
+    },
+    "programming/esl-inbound.mdx": {
+      "sourceHash": "e91767251e0fca57c3847760dd94a9b3e3a5d6a77251421769249c19fa6168fb",
+      "translationHash": "7bb36aa8771817917a18f45bcd97fb0d591a5e162e8af449625bc7014e3d60af"
+    },
+    "programming/esl-outbound.mdx": {
+      "sourceHash": "b4f401ee73b08ecaa959d5419284a36813b4386a3be84b58dfa3a99518ddfc27",
+      "translationHash": "b1529f52d475afbb310db7de424a7614d50b1038ac9215a85c3903812578e21f"
+    },
+    "programming/event-model.mdx": {
+      "sourceHash": "67f27197e892773fbb0e9d31e0e33f10ecea06777090660d3c61db7cf6647236",
+      "translationHash": "6eb99560b2af2782da9ffb49112818a26b7197c0723d67bf47b68b998e3141e1"
+    },
+    "programming/events-catalog.mdx": {
+      "sourceHash": "3d45d2afea5a7bdf5011b399633f6dc3173a605451e6133f702bf50f2b167208",
+      "translationHash": "b7f9f75517474b3580a39aab7b1b7433a4747e9738cea7741994826827701e35"
+    },
+    "programming/index.mdx": {
+      "sourceHash": "de020f4a1935f1d494766eefa82342e091308df0e6bb1f3a78df967a7a6f359e",
+      "translationHash": "e80925be868a958faec43d7f95d0e7628921ed7ffe27c0cf59e5dd9a04b51765"
+    },
+    "programming/scripting-apis.mdx": {
+      "sourceHash": "cdebc37c72ce3fd13b687386ab21cf7e21b2b2090ea3e33ed8855d49ab97522a",
+      "translationHash": "a576591fe512a4393c203c73f3fcff4b7a25a7f8c95326a5a2808f335701bd10"
     },
     "recipes/index.mdx": {
       "sourceHash": "deafcbfad18d0b32635290ebb5ad388ba20a9497bb9eb735e720477cc7d3c147",
@@ -81,17 +709,45 @@
       "sourceHash": "c1f2a6dbe6b47d4d93e0f32f262b753b1fb877e71df0a4dab2351865081739b5",
       "translationHash": "84b9b23211a41c87ffe1d91fd3e44db1a01295f200932207ef759dae8ed399bb"
     },
-    "troubleshooting/diagnostic-toolbox.mdx": {
-      "sourceHash": "c23c297af9237258c6911222732d79f558578b62d198b09385cae8a7aa23b31f",
-      "translationHash": "1d84353515b10446cefcf15e88636250f2ff6157223c4b98db2aecac2d59aa11"
+    "reference/appendix-codec-table.mdx": {
+      "sourceHash": "4225879c6221a2f85d6cf1065ba0c4c11bddcaf07c233b0e8445c0859db8019d",
+      "translationHash": "dcb2450f8498fdba7e9a484d6efa9b54a036607132adf0c22febd1a2f1f8a3fb"
     },
-    "troubleshooting/index.mdx": {
-      "sourceHash": "3954bd8db217cece370a22045308bbfc9160aa6b18e693db58faec05d2fd07c0",
-      "translationHash": "dd865d869bb7a123237698b53bf2ca96f3cd89fb6d29e2c31e326ea4a499ba51"
+    "reference/appendix-glossary.mdx": {
+      "sourceHash": "5de3468739e66fdfca147537b9f0ae4d072111c37fd980fdc2fd37608e258b77",
+      "translationHash": "ce28b4654d6b3b8e67e803c334d86b339a1c6130a84b246a1597bab348085c32"
     },
-    "troubleshooting/registration-problems.mdx": {
-      "sourceHash": "3a615899eed659e77e347e9e8663a2f58d33516161fc027c7410d39a0e0d9396",
-      "translationHash": "5de529069c014ca25882e0bd1d1aad195e1f962593c4925c83dd2c94ec99b859"
+    "reference/appendix-hangup-causes.mdx": {
+      "sourceHash": "64c715586fdde90324667ec0c7fa5b6514d764ed74afe71b32ce20d7bd7cd7f4",
+      "translationHash": "ea0b62db7fdd204be9e45e38ea7e554789c4c47eb028db79ff4c5171e133e3bb"
+    },
+    "reference/appendix-release-notes.mdx": {
+      "sourceHash": "f287f8f9f7029b5dc18d4708dee71234225eacf45987cbca79c6456f1eb162b4",
+      "translationHash": "882a8506a30428358bea71d3f42f42851264936f588e6d540d3aa68ec7c24f82"
+    },
+    "reference/appendix-signalwire-map.mdx": {
+      "sourceHash": "2aecb2e605bb6bdd327d10f290c676b80fac2e72a8e3870121c868a5a721bb03",
+      "translationHash": "5b8cb765a92425ed2d2e5920c3d32ad1037945b22470b09c9f95930264e69916"
+    },
+    "reference/appendix-vanilla-config-map.mdx": {
+      "sourceHash": "92cbeff4573f0c9fa2855ee6e3addf1e0fb6de525b6acecda5af396f3e13e81b",
+      "translationHash": "7fc5d43ab3d5b348c881b4a99c774e926be46e6d2afec9a5d0ce4f1dc3936d17"
+    },
+    "reference/channel-variables.mdx": {
+      "sourceHash": "1b612eda241b54ab0f6f959f554cd107ed6011473a1f7e4a157f7df79ebc657c",
+      "translationHash": "f5a4aa6d3e1cd3cdf6aef7723f21e8a46ff835dc09a17e62ab97f867f5f7cfae"
+    },
+    "reference/cli-and-api.mdx": {
+      "sourceHash": "2d928180f254a3051d384db03648eabe534417ca71fc2458ab6ab683f72254af",
+      "translationHash": "9069c73747e88cfa626e4113be437bc4abaed430aefbc7a6370c94d0726e081d"
+    },
+    "reference/index.mdx": {
+      "sourceHash": "3c429a5694632371c93a8af672364b03a4604dca3d099eac62ba678396881155",
+      "translationHash": "bc599caa8d0d5c94914f41880fe529c1784a9b29a5bb62f362bdc4aa9de2be5f"
+    },
+    "reference/release-notes-enterprise.mdx": {
+      "sourceHash": "11f57518e580cf89c21cdb3d3fa5fddd264ada56c1e07e6ea9a6a281e9c97cc0",
+      "translationHash": "02e40714f9f2e476e3d07038e65f81bdc0f48b514543c2887c2c1e67bb48ec5c"
     },
     "troubleshooting/audio-problems.mdx": {
       "sourceHash": "0114b38b596efb8098d84c1d356d0739490030eb0f9adbd915270deb85f3c0bd",
@@ -101,9 +757,49 @@
       "sourceHash": "8454ff21eb19ff60e5159618bce807793e27461cdfcc0b67b70ce02bc56bcda7",
       "translationHash": "82a74e21deb13e9f83abf474f6d1ae8d934075306fa08840d65b69cc0ebb534f"
     },
+    "troubleshooting/diagnostic-toolbox.mdx": {
+      "sourceHash": "c23c297af9237258c6911222732d79f558578b62d198b09385cae8a7aa23b31f",
+      "translationHash": "1d84353515b10446cefcf15e88636250f2ff6157223c4b98db2aecac2d59aa11"
+    },
+    "troubleshooting/index.mdx": {
+      "sourceHash": "3954bd8db217cece370a22045308bbfc9160aa6b18e693db58faec05d2fd07c0",
+      "translationHash": "dd865d869bb7a123237698b53bf2ca96f3cd89fb6d29e2c31e326ea4a499ba51"
+    },
     "troubleshooting/reading-traces-cdr.mdx": {
       "sourceHash": "bcf0f134e3d7e4b29e56ac44c063635161c72e6e8e6322af8c2d72d66209c473",
       "translationHash": "516db00fd2e4e06b9f04513294df06b33bce3567f5ec5f3c1dbb7d23bc742b86"
+    },
+    "troubleshooting/registration-problems.mdx": {
+      "sourceHash": "3a615899eed659e77e347e9e8663a2f58d33516161fc027c7410d39a0e0d9396",
+      "translationHash": "5de529069c014ca25882e0bd1d1aad195e1f962593c4925c83dd2c94ec99b859"
+    },
+    "users-endpoints/gateways.mdx": {
+      "sourceHash": "7c2534c88dc09dec4933bfe8e749340b7bbbe6a43fd0ebe044faa7dc7c97458a",
+      "translationHash": "7d7bd45c15d48625dec96206de9b199f36b3e395f620bab399735e2b4f13673d"
+    },
+    "users-endpoints/index.mdx": {
+      "sourceHash": "0600fe27d9d4f3c5498e643ae4229b52d285a424ac71f6bbbbc6fe96f9176e0d",
+      "translationHash": "afaf18be7209fe17fa413f90368a64faad73d8c806687bcfd9928902b53d5fd9"
+    },
+    "users-endpoints/other-endpoints.mdx": {
+      "sourceHash": "780654e58a8e8a7758644cea357d44ef99bfe2053f44ef2925b7c68151ce8d36",
+      "translationHash": "2612334883a922bffe72d4aefe803f9f5f482b8eb06767e7d1d50625d94d3637"
+    },
+    "users-endpoints/sip-profiles-sofia.mdx": {
+      "sourceHash": "1dbd4990916d93ceca87026afc6c5dee227685463474181ccf67ab8d5cbb305b",
+      "translationHash": "0fddc5a0db8e2bd5f4cca989d7762ab6f35074b814f0bdef938c8693a85ad0e5"
+    },
+    "users-endpoints/user-directory.mdx": {
+      "sourceHash": "4995dd94f41d162f660e75285ce4a8ed6df9c12df994244be5d91979a3a89898",
+      "translationHash": "920493450d651a306ad916f9d9079c472343a41e6ed76c6bbfb75239a293b25d"
+    },
+    "users-endpoints/webrtc-sip-wss.mdx": {
+      "sourceHash": "c648c1a03a0fd9d612eecb3f7cf3f1912c0e55e69c6557615e0191393953ce16",
+      "translationHash": "af2c384d04c5c17b3e14e150a740824d9717efe23eb55b82a07ec3aea905f128"
+    },
+    "users-endpoints/webrtc-verto.mdx": {
+      "sourceHash": "5494c81a69d0f2122d98d4b7dfebf8a97454fa108d2f1788ceb392290351e635",
+      "translationHash": "53215715df5b571eb518dfa301ba8e33f9867b45681608393773b807b124c74e"
     }
   }
 }

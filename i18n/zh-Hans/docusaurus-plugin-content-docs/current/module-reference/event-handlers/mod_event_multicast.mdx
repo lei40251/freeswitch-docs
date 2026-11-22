@@ -1,0 +1,90 @@
+---
+sidebar_position: 7
+id: mod_event_multicast
+slug: /module-reference/event-handlers/mod_event_multicast
+title: "mod_event_multicast — 通过组播共享事件"
+description: "通过 UDP 向组播组或单播对端广播 FreeSWITCH 事件，在集群节点之间实时共享事件。"
+sidebar_label: "mod_event_multicast"
+---
+
+# mod_event_multicast — 通过组播共享事件 {#mod_event_multicast-—-event-sharing-over-multicast}
+
+`mod_event_multicast` 是事件处理模块（`src/mod/event_handlers`），将 FreeSWITCH 事件序列化后，以 UDP 数据报发送到一个或多个目标地址。目标可以是 IPv4／IPv6 组播地址，也可以是普通单播地址；模块会识别每个目标的类型并进行对应处理。从其他节点收到的数据报会被反序列化，作为子类为 `multicast::event` 的 `SWITCH_EVENT_CUSTOM` 事件重新注入本地事件总线，使所有本地订阅者都能收到远端事件。
+
+当多台 FreeSWITCH 节点需要共享事件状态时可以使用此模块，例如实现分布式 CDR 处理器、共享 Presence／BLF 系统，或聚合集群事件的自定义监控面板，而不需要集中式消息代理。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_event_multicast`。默认配置**不加载**该模块，`modules.conf.xml` 中对应条目已被注释：
+
+```xml
+<!-- <load module="mod_event_multicast"/> -->
+```
+
+若要启用，在 `conf/autoload_configs/modules.conf.xml` 中取消注释（或添加该行）。如果需要 PSK 加密，编译时还必须有 OpenSSL 开发头文件；除此之外无须特殊构建标志（参见依赖）。
+
+## 配置：`event_multicast.conf.xml` {#configuration-event_multicastconfxml}
+
+模块在加载时及收到 `SWITCH_EVENT_RELOADXML` 事件时读取 `conf/autoload_configs/event_multicast.conf.xml`（仅当文件的 MD5 校验和发生变化时才重新读取）。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `address` | 以逗号分隔的目标 IP 地址列表（IPv4／IPv6、组播／单播），最多 16 项。IPv4 组播范围为 `224.0.0.0`～`239.255.255.255`；IPv6 组播地址以 `FF` 开头。 | IP 地址字符串 | _无（必需）_ |
+| `port` | 发送与接收共用的 UDP 端口 | 整数（1～65535） | `0`（必须设置） |
+| `bindings` | 要订阅并转发的事件类型名，以空格分隔。使用 `all` 表示 `SWITCH_EVENT_ALL`；自定义子类名称跟在 `CUSTOM` 之后。 | FreeSWITCH 事件类型名 | _无_ |
+| `ttl` | IP 组播生存时间／跳数限制（仅 IPv4；由于 APR 限制，不设置 IPv6 TTL） | `0`～`255` | `1` |
+| `loopback` | 是否将组播包回送到同一主机上的发送 Socket | `yes`／`no` | `no` |
+| `source_address` | 接收 Socket 要绑定的本地 IPv4 地址 | IPv4 地址 | `0.0.0.0` |
+| `source_address_ipv6` | 接收 Socket 要绑定的本地 IPv6 地址 | IPv6 地址 | `::` |
+| `psk` | 对发出的数据报进行 Blowfish CBC 加密、对收到的数据报进行解密的预共享密钥。编译时需要 OpenSSL。 | 字符串 | _无（不加密）_ |
+
+示例（从随附配置中节选）：
+
+```xml
+<configuration name="event_multicast.conf" description="Multicast Event">
+  <settings>
+    <param name="address" value="225.1.1.1"/>
+    <param name="port" value="4242"/>
+    <param name="bindings" value="all"/>
+    <param name="ttl" value="1"/>
+    <!-- <param name="loopback" value="no"/> -->
+    <!-- <param name="psk" value="ClueCon"/> -->
+  </settings>
+</configuration>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `multicast_peers` | 显示模块状态、配置的对端地址，以及通过心跳发现的每个对端的在线／离线状态与最近一次出现的时间 | `multicast_peers` |
+
+`fs_cli` 使用示例：
+
+```
+freeswitch@> multicast_peers
+Module state: Active
+
+Configured peers:
+	IPv4 multicast: 225.1.1.1
+
+Peer fs-node2 UP; last seen 8 seconds ago
+```
+
+## 事件 {#events}
+
+模块注册并触发三个自定义事件子类：
+
+| 子类 | 触发条件 |
+|---|---|
+| `multicast::event` | 收到的 UDP 数据报成功校验并反序列化；远端事件头字段会加上 `Orig-` 前缀重新添加。 |
+| `multicast::peerup` | 首次发现对端节点，或先前被标记为离线的节点重新出现。头字段：`Peer`（交换机名称）、`Lastseen`（Epoch 时间或 `Never`）。 |
+| `multicast::peerdown` | 对端超过 60 秒未发送心跳。头字段：`Peer`、`Lastseen`（Epoch 时间）。 |
+
+对端存活状态依据从远端节点收到的 `SWITCH_EVENT_HEARTBEAT` 事件跟踪。若超过 60 秒未见心跳，即判定该对端离线。
+
+## 依赖 {#dependencies}
+
+若要使用 PSK 加密，执行 FreeSWITCH 的 `./configure` 时必须有 OpenSSL 开发头文件（`libssl-dev`／`openssl-devel`）。如果编译时未检测到 OpenSSL，`psk` 参数会被静默忽略，并记录警告。其他功能除 FreeSWITCH 核心外不依赖外部库。
+
+**源码：** `src/mod/event_handlers/mod_event_multicast`、`conf/vanilla/autoload_configs/event_multicast.conf.xml`

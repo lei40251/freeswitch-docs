@@ -1,0 +1,132 @@
+---
+sidebar_position: 4
+id: mod_opal
+slug: /module-reference/endpoints/mod_opal
+title: "mod_opal——通过 OPAL 支持 H.323、SIP 和 IAX2"
+description: "通过 OPAL 和 PTLib 集成 H.323、IAX2 端点和 T.38 传真中继。"
+sidebar_label: "mod_opal"
+---
+# mod_opal——通过 OPAL 支持 H.323、SIP 和 IAX2 {#mod_opal-—-h323-sip-and-iax2-via-opal}
+
+`mod_opal` 是 `src/mod/endpoints/mod_opal` 下的端点模块，将 FreeSWITCH 与 [OPAL](https://www.opalvoip.org/) 多媒体电话库（3.12.8 或更新版本）集成。OPAL 提供 H.323 与 IAX2 协议栈；该模块将它们暴露为标准 FreeSWITCH 端点，使这些协议上的入站与出站呼叫可以使用常规的拨号计划、编解码器协商及桥接基础设施。
+
+需要与 H.323 端点（硬件视频会议设备、传统 PBX 或网守）或 IAX2 对等端互通，又不想部署独立网关时，可使用 `mod_opal`。如果编译所用 OPAL 版本具备相应能力，模块还支持在 H.323 呼叫上中继 T.38 传真。
+
+## 加载模块 {#loading-the-module}
+
+`load` 和 `modules.conf.xml` 中使用的名称为 **`mod_opal`**。默认的 `modules.conf.xml` **不包含**该模块，必须手动添加：
+
+```xml
+<load module="mod_opal"/>
+```
+
+构建 `mod_opal` 需要 OPAL 与 PTLib 库（版本 ≥ 3.12.8）。它们不随 FreeSWITCH 提供，编译前须单独安装。详见下文依赖项。
+
+## 配置：`opal.conf.xml` {#configuration-opalconfxml}
+
+配置文件为 `autoload_configs/opal.conf.xml`，包含一个 `<settings>` 块和一个 `<listeners>` 块，后者可有一个或多个 `<listener>` 条目。
+
+### 全局设置 {#global-settings}
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `trace-level` | PTLib/OPAL 内部跟踪日志级别（输出至 FreeSWITCH 日志） | 整数 ≥ 0；0 禁用跟踪 | `3` |
+| `context` | 入站呼叫使用的 FreeSWITCH 拨号计划上下文 | 任意已定义上下文名称 | `default` |
+| `dialplan` | 路由入站呼叫所用的拨号计划模块 | `XML`、`asterisk` 等 | `XML` |
+| `dtmf-type` | H.323 连接上的 DTMF 数字发送方式 | `string`、`signal`、`rfc2833`、`in-band` | `signal` |
+| `jitter-size` | 以 `min,max` 表示的音频抖动缓冲区大小（毫秒） | 两个逗号分隔的整数，如 `40,100` | *（无）* |
+| `codec-prefs` | 按优先级排序的逗号分隔编解码器名称列表 | IANA 编解码器名称，如 `PCMU,PCMA` | 所有已加载编解码器 |
+| `disable-transcoding` | 设为 `true` 时强制使用发起方编解码器，不进行转码 | `true` / `false` | `false` |
+| `gk-address` | 要注册的 H.323 网守地址，留空则不使用网守 | IP、主机名，或 `*`（局域网搜索） | *（空，禁用）* |
+| `gk-identifer` | 可选的网守标识符（名称） | 字符串 | *（空）* |
+| `gk-interface` | 联系网守时使用的网络接口地址 | IP 或 FreeSWITCH 变量 | `$${local_ip_v4}` |
+
+### 监听器参数 {#listener-parameters}
+
+`<listeners>` 中每个 `<listener>` 元素绑定一个 H.323 TCP 信令端口。`name` 属性仅用于描述。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `h323-ip` | 绑定 H.323 监听器的 IP 地址 | IP 或 FreeSWITCH 变量 | *（必需）* |
+| `h323-port` | H.323 Q.931 信令的 TCP 端口 | 整数 | `1720` |
+
+### `opal.conf.xml` 示例 {#example-opalconfxml}
+
+```xml
+<configuration name="opal.conf" description="Opal Endpoints">
+  <settings>
+    <param name="trace-level" value="3"/>
+    <param name="context"     value="default"/>
+    <param name="dialplan"    value="XML"/>
+    <param name="dtmf-type"   value="signal"/>
+    <param name="jitter-size" value="40,100"/>
+    <!-- <param name="codec-prefs"          value="PCMU,PCMA"/> -->
+    <!-- <param name="disable-transcoding"  value="true"/> -->
+    <param name="gk-address"   value=""/>
+    <param name="gk-identifer" value=""/>
+    <param name="gk-interface" value="$${local_ip_v4}"/>
+  </settings>
+  <listeners>
+    <listener name="default">
+      <param name="h323-ip"   value="$${local_ip_v4}"/>
+      <param name="h323-port" value="1720"/>
+    </listener>
+  </listeners>
+</configuration>
+```
+
+## 发起呼叫 {#originating-calls}
+
+出站呼叫使用 `opal` 端点前缀。目的地址作为 OPAL 能识别的 H.323 或 IAX2 URL 传入。
+
+```
+originate opal/h323:10.0.0.5 &echo
+originate opal/iax2:10.0.0.5/1001 &bridge(sofia/internal/1001@example.com)
+```
+
+模块通过硬编码的 OPAL 路由条目（`fs:.* = h323:<da>`）在内部把 `fs:` URI 映射为 `h323:`，因此拨号计划目的号码会原样转发到远端 H.323 端点。H.323 和 IAX2 的入站呼叫也分别通过反向路由映射到 `fs:` 端点。
+
+## 接收呼叫 {#receiving-calls}
+
+入站 H.323 呼叫到达 `opal.conf.xml` 定义的 TCP 监听器（默认端口 1720）。OPAL 按 `context` 和 `dialplan` 设置将呼叫路由到 FreeSWITCH。通道名称格式为 `opal/h323:<destination>` 或 `opal/iax2:<destination>`。
+
+## 网守注册 {#gatekeeper-registration}
+
+将 `gk-address` 设置为网守地址（或设置为 `*`，以便在局域网自动发现）。可选的 `gk-identifer` 用于限制可接受的网守；`gk-interface` 选择发送 H.323 注册消息的本地 IP。将 `gk-address` 留空即可在不使用网守的情况下运行。
+
+## 拨号计划应用 {#dialplan-applications}
+
+`mod_opal` 不注册任何 `SWITCH_ADD_APP` 拨号计划应用。
+
+## API 命令 {#api-commands}
+
+`mod_opal` 不注册任何 `SWITCH_ADD_API` 命令。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 读/写方式 | 用途 |
+|---|---|---|
+| `absolute_codec_string` | 读取 | 设置后覆盖该呼叫所有其他编解码器选择逻辑 |
+| `codec_string` | 读取 | 当前通道的编解码器偏好列表；缺省时回退至 `codec-prefs` 设置 |
+| `has_t38` | 写入 | H.323 连接成功协商 T.38 传真模式时，模块将其设置为 `true` |
+
+在 `disable-transcoding` 为 `false` 时，`mod_opal` 还会读取 `SWITCH_ORIGINATOR_CODEC_VARIABLE`，优先选用发起呼叫腿的编解码器。
+
+协商 T.38 后，模块会对通道变量 `opal_execute_on_t38` 触发 `switch_channel_execute_on`，对 `opal_api_on_t38` 触发 `switch_channel_api_on`，允许在传真媒体切换时运行拨号计划钩子。
+
+## 依赖项 {#dependencies}
+
+`mod_opal` 需要以下两个**不随 FreeSWITCH 提供**的外部库，编译模块之前必须先构建并安装：
+
+- **PTLib**：Portable Tools Library，为 OPAL 提供基础线程和 I/O 层。
+- **OPAL**：Open Phone Abstraction Library，版本 **≥ 3.12.8**。
+
+两个库均可从 [OPAL 项目](https://www.opalvoip.org/)获取。如果使用更旧的版本，模块将无法编译（头文件中强制检查 `OPAL_CHECK_VERSION(3,12,8)`）。
+
+---
+
+## 相关文档 {#see-also}
+
+- [第 11 章：其他端点](../../users-endpoints/other-endpoints.mdx)
+
+**源码：** `src/mod/endpoints/mod_opal`、`conf/vanilla/autoload_configs/opal.conf.xml`

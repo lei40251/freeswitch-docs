@@ -1,0 +1,94 @@
+---
+sidebar_position: 5
+id: mod_xml_scgi
+slug: /module-reference/xml-interfaces/mod_xml_scgi
+title: "mod_xml_scgi — SCGI XML 绑定后端"
+description: "通过普通 TCP 连接，把 FreeSWITCH XML 查询请求转发到 SCGI 后端进程。"
+sidebar_label: "mod_xml_scgi"
+---
+
+# mod_xml_scgi — SCGI XML 绑定后端 {#mod_xml_scgi-—-scgi-xml-binding-backend}
+
+`mod_xml_scgi` 是位于 `src/mod/xml_int/` 的 XML 接口模块。它注册 XML 绑定，通过简单公共网关接口协议（SCGI）将 FreeSWITCH 的配置、拨号计划和目录查询请求转发到外部进程。后端收到描述查询的 POST 参数（section、tag、key name、key value 以及通道变量），必须返回有效的 `freeswitch/xml` 文档。
+
+当希望由可长期驻留、能处理多个请求的后端进程（Python、Perl、Ruby 等）提供动态 XML，而不是传统 CGI 网关每次请求都派生进程时，可以使用此模块。SCGI 服务器在 TCP Socket 上监听；`mod_xml_scgi` 负责连接、发送请求、读取 XML 响应，并将响应解析到 FreeSWITCH XML 树中。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_xml_scgi`。在默认发行配置中，`autoload_configs/modules.conf.xml` 的条目被注释：
+
+```xml
+<!-- <load module="mod_xml_scgi"/> -->
+```
+
+要启用，请取消注释（或在 `modules.conf.xml` 中添加 `<load module="mod_xml_scgi"/>`）并重启 FreeSWITCH。除了标准源码树中随附的 `libscgi`（随标准构建编译）以外，无须特殊编译标志。
+
+## 配置：`xml_scgi.conf.xml` {#configuration-xml_scgiconfxml}
+
+配置文件为 `autoload_configs/xml_scgi.conf.xml`，包含一个 `<bindings>` 块，可声明一个或多个 `<binding>` 元素。每个 `<binding>` 定义一个 SCGI 端点，其 `name` 属性会成为 SCGI `REQUEST_URI` 头中的 URI 路径（例如，绑定名为 `example` 就会使用 `/example`）。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `host` | SCGI 后端主机名或 IP 地址 | 可解析的主机名或 IP | `127.0.0.1` |
+| `port` | SCGI 后端 TCP 端口 | 有效端口号 | `8080` |
+| `timeout` | 连接和读取超时（秒） | 非负整数 | `0`（不超时） |
+| `enable-post-var` | 限制 POST 请求体携带的通道变量；每个要传递的变量配置一项 | 任意通道变量名 | 省略此参数时发送所有变量 |
+| `server` | 用于启动和监控 SCGI 后端进程的 Shell 命令；模块开启监控线程，进程退出后自动重启 | 任意 Shell 命令字符串 | 无（可选） |
+
+`host` 参数还接受可选 XML 属性 `bindings`，用于限制哪些 XML 部分会触发该绑定。该属性是以竖线分隔的部分名称列表，由 `switch_xml_parse_section_string` 识别：`config`（因使用子串匹配，`configuration` 也有效）、`directory`、`dialplan`、`languages`、`chatplan`、`channels`。省略时处理所有部分。
+
+**示例（根据随附配置节选）：**
+
+```xml
+<configuration name="xml_scgi.conf" description="SCGI XML Gateway">
+  <bindings>
+    <binding name="example">
+      <!-- one or more |-delim of configuration|directory|dialplan -->
+      <!-- <param name="host" value="127.0.0.1" bindings="dialplan"/> -->
+      <!-- <param name="port" value="8080"/> -->
+      <!-- <param name="timeout" value="10"/> -->
+      <!-- one or more of these imply you want to pick the exact variables that are transmitted -->
+      <!--<param name="enable-post-var" value="Unique-ID"/>-->
+    </binding>
+  </bindings>
+</configuration>
+```
+
+下面是一个最小有效绑定，由 8090 端口的后端提供所有部分：
+
+```xml
+<configuration name="xml_scgi.conf" description="SCGI XML Gateway">
+  <bindings>
+    <binding name="freeswitch">
+      <param name="host" value="127.0.0.1" bindings="configuration|directory|dialplan"/>
+      <param name="port" value="8090"/>
+      <param name="timeout" value="10"/>
+    </binding>
+  </bindings>
+</configuration>
+```
+
+SCGI 后端收到的 POST 请求体采用 URL 编码，至少包含 `hostname`、`section`、`tag_name`、`key_name`、`key_value`，以及允许发送的通道变量。后端必须返回格式正确的 `freeswitch/xml` 文档。模块将响应大小严格限制为 1 MB（`XML_SCGI_MAX_BYTES`）。
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `xml_scgi` | 启用或禁用 SCGI 请求／响应周期的详细调试日志 | `xml_scgi debug_on` \| `xml_scgi debug_off` |
+
+启用调试后，模块会在每次查找时，以 `ERROR` 级别把 SCGI URL、完整 POST 请求体和原始 XML 响应写入 FreeSWITCH 日志。
+
+**fs_cli 示例：**
+
+```
+freeswitch@> xml_scgi debug_on
+OK
+freeswitch@> xml_scgi debug_off
+OK
+```
+
+## 另请参阅 {#see-also}
+
+- [第 26 章：HTTP 集成：XML Curl 与 HTTAPI](../../integration/xml-curl.mdx)
+
+**源码：** `src/mod/xml_int/mod_xml_scgi`、`conf/vanilla/autoload_configs/xml_scgi.conf.xml`

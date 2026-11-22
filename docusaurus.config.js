@@ -41,20 +41,19 @@ const signalwireCodeTheme = {
 
 const rehypeLlmsCleanup = require("./plugins/rehype-llms-cleanup");
 
-// The llms-txt plugin matches every section and exclude glob against
-// Docusaurus' FINAL route paths, which include baseUrl. With baseUrl
-// "/freeswitch" and docs routeBasePath "/", every route is "/freeswitch/<slug>",
-// so every glob below carries the prefix -- including the plugin's own default
-// exclusions, which are written as "/search" etc. and never fire here.
-const B = "/freeswitch";
+// 支持通过环境变量动态配置路径与站点 URL（默认适配当前目标路径 /rtc/docs/freeswitch/）
+const rawBaseUrl = process.env.BASE_URL || "/rtc/docs/freeswitch/";
+const baseUrl = (rawBaseUrl.startsWith("/") ? rawBaseUrl : `/${rawBaseUrl}`).replace(/\/?$/, "/");
+// B 为无末尾斜杠的形式，供插件路由匹配及静态资源引用（根路径 "/" 时为空字符串 ""）
+const B = baseUrl === "/" ? "" : baseUrl.replace(/\/$/, "");
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   themes: ["docusaurus-theme-search-typesense"],
   title: "FreeSWITCH Users Manual",
   tagline: "Configure, set up, and use FreeSWITCH",
-  url: "https://developer.signalwire.com",
-  baseUrl: "/freeswitch",
+  url: process.env.SITE_URL || "https://pro.vsbc.com",
+  baseUrl: baseUrl,
   // nginx serves every page as a directory and 301s the slashless form, so
   // canonicals and the sitemap must use the trailing slash too.
   trailingSlash: true,
@@ -73,7 +72,7 @@ const config = {
     locales: ["en-US", "zh-Hans"],
     localeConfigs: {
       "en-US": { label: "English" },
-      "zh-Hans": { label: "简体中文", htmlLang: "zh-CN", baseUrl: "/freeswitch/zh-Hans/" },
+      "zh-Hans": { label: "简体中文", htmlLang: "zh-CN", baseUrl: `${baseUrl}zh-Hans/` },
     },
   },
 
@@ -169,8 +168,8 @@ const config = {
               {
                 html: `
                   <div class="footer__brand">
-                    <img src="/freeswitch/img/logo.svg" alt="FreeSWITCH" class="footer__brand-logo footer__brand-logo--light" />
-                    <img src="/freeswitch/img/logo-white.svg" alt="FreeSWITCH" class="footer__brand-logo footer__brand-logo--dark" />
+                    <img src="${B}/img/logo.svg" alt="FreeSWITCH" class="footer__brand-logo footer__brand-logo--light" />
+                    <img src="${B}/img/logo-white.svg" alt="FreeSWITCH" class="footer__brand-logo footer__brand-logo--dark" />
                     <p class="footer__brand-tagline">The open source platform for voice, video, and messaging.</p>
                     <p class="footer__brand-note">Maintained by SignalWire</p>
                   </div>
@@ -446,20 +445,20 @@ const config = {
 
   scripts: [
     {
-      src: "/freeswitch/scripts/zoomInfo.js",
+      src: `${B}/scripts/zoomInfo.js`,
       async: true,
       nonce: "SIGNALWIRE_DOCS_CSP_NONCE",
     },
     {
-      src: "/freeswitch/scripts/fullstory.js",
+      src: `${B}/scripts/fullstory.js`,
       async: true,
     },
     {
-      src: "/freeswitch/scripts/munchkin.js",
+      src: `${B}/scripts/munchkin.js`,
       async: true,
     },
     {
-      src: "/freeswitch/scripts/zendesk.js",
+      src: `${B}/scripts/zendesk.js`,
       async: true,
     },
   ],

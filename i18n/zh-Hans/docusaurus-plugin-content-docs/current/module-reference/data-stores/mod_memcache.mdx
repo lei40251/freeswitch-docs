@@ -1,0 +1,121 @@
+---
+sidebar_position: 3
+id: mod_memcache
+slug: /module-reference/data-stores/mod_memcache
+title: "mod_memcache——Memcached 客户端"
+description: "配置 mod_memcache 的 Memcached 数据存储客户端、API 命令及音频文件接口。"
+sidebar_label: "mod_memcache"
+---
+# mod_memcache——Memcached 客户端 {#mod_memcache-—-memcached-client}
+
+`mod_memcache` 是位于 `src/mod/applications/mod_memcache` 的数据存储客户端模块。它通过 **libmemcached** C 库连接一个或多个 Memcached 服务器，并提供两种访问接口：一是可通过拨号计划内联执行调用的 API 命令（`memcache`），二是文件格式接口（`memcache://` 协议），后者允许媒体子系统读写以 Memcached 值保存的原始音频数据块。
+
+需要在多个 FreeSWITCH 节点之间共享高速内存键值存储时，可以选择此模块。例如，缓存供其他节点读取的单次呼叫数据、实现跨服务器计数器，或从内存而非磁盘提供语音提示音。
+
+## 加载模块 {#loading-the-module}
+
+用于 `load` 和 `modules.conf.xml` 的模块名称是 `mod_memcache`。该模块**不在**默认的 `autoload_configs/modules.conf.xml` 中，启动时如需自动加载，必须手动添加。
+
+无需重启即可在运行时加载：
+
+```
+freeswitch@> load mod_memcache
+```
+
+要在启动时自动加载，请在 `conf/autoload_configs/modules.conf.xml` 适当的 `<modules>` 节中添加：
+
+```xml
+<load module="mod_memcache"/>
+```
+
+## 配置：`memcache.conf.xml` {#configuration-memcacheconfxml}
+
+模块从 `memcache.conf` 读取一个设置块。FreeSWITCH 处理 `reloadxml` 事件时会重新加载该文件。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `memcache-servers` | Memcached 服务器地址列表，以逗号分隔；每项可以为 `host` 或 `host:port`。**必需**——模块将此参数标记为必需，编译时的默认值为空；`localhost` 仅来自随附配置。 | 字符串（一个或多个 `host[:port]` 项） | `""`（默认配置文件提供 `localhost`） |
+
+随附配置中的实际示例：
+
+```xml
+<configuration name="memcache.conf" description="memcache Configuration">
+  <settings>
+    <!-- comma sep list of servers: eg:  localhost,otherhost:port,anotherone -->
+    <param name="memcache-servers" value="localhost"/>
+  </settings>
+</configuration>
+```
+
+## API 命令 {#api-commands}
+
+模块只有一个顶层 API 命令 `memcache`，每种操作通过子命令实现。它是主要的拨号计划接口，也可从 `fs_cli` 调用。
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `memcache set` | 存储值（已存在时覆盖） | `memcache set <key> <value> [expiration [flags]]` |
+| `memcache replace` | 仅当键已存在时存储值 | `memcache replace <key> <value> [expiration [flags]]` |
+| `memcache add` | 仅当键不存在时存储值 | `memcache add <key> <value> [expiration [flags]]` |
+| `memcache get` | 按键读取值 | `memcache get <key>` |
+| `memcache getflags` | 获取随键存储的 32 位标志（十六进制返回） | `memcache getflags <key>` |
+| `memcache delete` | 删除键 | `memcache delete <key> [expiration]` |
+| `memcache increment` | 原子地增加数值 | `memcache increment <key> [offset [expires [flags]]]` |
+| `memcache decrement` | 原子地减少数值 | `memcache decrement <key> [offset [expires [flags]]]` |
+| `memcache flush` | 使全部已配置服务器上的所有键失效 | `memcache flush [expiration]` |
+| `memcache status` | 列出已配置服务器及其数量 | `memcache status [verbose]` |
+
+`expiration` 是 Unix 时间戳或以秒为单位的相对存活时间 TTL（整数）。`flags` 为十六进制形式的 32 位整数。对于 `increment` 和 `decrement`，如果键不存在，模块会先通过 `memcached_add` 创建该键，再重试操作。
+
+`fs_cli` 调用示例：
+
+```
+freeswitch@> memcache set mykey "hello world" 300
++OK
+freeswitch@> memcache get mykey
+hello world
+freeswitch@> memcache increment counter 1
+1
+freeswitch@> memcache delete mykey
++OK
+freeswitch@> memcache status
+Lib version: 1.0.18
+Servers: 1
+  localhost (11211)
+freeswitch@> memcache status verbose
+Lib version: 1.0.18
+Servers: 1
+  localhost (11211)
+    pid: 12345
+    ...
+```
+
+在拨号计划中通过 `${}` 展开进行内联调用：
+
+```xml
+<action application="set" data="cached_val=${memcache(get mykey)}"/>
+<action application="set" data="ignore=${memcache(set mykey ${caller_id_number} 3600)}"/>
+```
+
+## 文件格式接口 {#file-format-interface}
+
+`mod_memcache` 将 `memcache` 注册为受支持的音频文件协议。媒体子系统可以像打开音频文件一样打开 Memcached 键；打开时将整个值加载到内存，再从内存流式读取。写入时使用 `memcached_append` 向该键附加二进制数据块。
+
+因此，`playback` 或 `record` 等应用可以使用 `memcache://` URI，例如：
+
+```xml
+<action application="playback" data="memcache://my_audio_prompt_key"/>
+```
+
+此协议不支持随机定位（打开时会拒绝 `offset_pos`）。
+
+## 依赖项 {#dependencies}
+
+`mod_memcache` 依赖 **libmemcached**（C 客户端库，头文件 `<libmemcached/memcached.h>`）。该库不随 FreeSWITCH 一起提供，编译模块前必须单独安装。Debian/Ubuntu 系统的包名通常为 `libmemcached-dev`，RHEL/CentOS 则为 `libmemcached-devel`。
+
+---
+
+## 相关文档 {#see-also}
+
+- [第 23 章：工具类应用](../../applications/utility-applications.mdx)
+
+**源码：** `src/mod/applications/mod_memcache`、`conf/vanilla/autoload_configs/memcache.conf.xml`

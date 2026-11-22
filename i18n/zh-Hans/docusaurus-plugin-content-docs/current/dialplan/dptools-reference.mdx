@@ -1,0 +1,678 @@
+---
+sidebar_position: 3
+id: dptools-reference
+slug: /dialplan/dptools
+title: "第 14 章：拨号计划应用参考"
+description: "mod_dptools 与配套模块面向管理员提供的所有拨号计划应用参考，包括参数与行为。"
+sidebar_label: "14. 拨号计划应用参考"
+---
+
+# 第 14 章：拨号计划应用参考 {#chapter-14-dialplan-application-reference}
+
+本章是分机规则的条件中使用 `<action application="..." data="..."/>` 调用拨号计划应用的参考资料，涵盖 `mod_dptools` 注册的全部应用。该模块提供核心呼叫控制、音频、DTMF、变量和日志应用。少数高级或内部辅助应用（如 `park_state`、`acknowledge_call`、`recovery_refresh`、`reuse_caller_profile`、`set_media_stats`、`capture_text`、`vad_test` 和 `video_*` 叠加应用）很少由管理员直接调用；为完整起见，本章仍将列出并注明。配套模块（`mod_conference`、`mod_voicemail`、`mod_fifo`、`mod_valet_parking`、`mod_hash`、`mod_db`、`mod_lua`、`mod_spy`、`mod_esf`、`mod_fsv`）提供的应用收录于功能应用部分，使用这些应用前必须先加载对应模块。
+
+<SignalWireCallout
+  title="本章每个应用都有对应的托管方法"
+  href="https://signalwire.com/docs/swml/reference/calling"
+  page="dptools-reference"
+  linkText="浏览 SWML 呼叫参考">
+
+本章应用与 SignalWire 的 JSON/YAML 呼叫控制标记语言 SWML 几乎一一对应：`bridge` 对应 [`connect`](https://signalwire.com/docs/swml/reference/calling/connect?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=dptools-reference)，`playback` 对应 [`play`](https://signalwire.com/docs/swml/reference/calling/play?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=dptools-reference)，`record_session` 对应 [`record_call`](https://signalwire.com/docs/swml/reference/calling/record-call?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=dptools-reference)，[`transfer`](https://signalwire.com/docs/swml/reference/calling/transfer?utm_source=freeswitch-docs&utm_medium=callout&utm_campaign=same-engine&utm_content=dptools-reference) 保持原名。托管方法运行在同一引擎上，但背后无需 XML 拨号计划。
+
+</SignalWireCallout>
+
+## 呼叫控制 {#call-control}
+
+这些应用用于建立、路由和终止呼叫腿，直接操作通道的信令和媒体状态。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-answer"></a>`answer` | 应答通道，完成 SIP 200 OK 握手并分配媒体。 | 无 |
+| <a id="app-pre_answer"></a>`pre_answer` | 发送带 SDP 的 `183 Session Progress`，在正式应答前启用早期媒体。 | 无 |
+| <a id="app-ring_ready"></a>`ring_ready` | 向主叫方发送 `180 Ringing` 响应，但不打开早期媒体路径。 | 无 |
+| <a id="app-hangup"></a>`hangup` | 使用可选的 Q.850 原因码终止通道。 | `[<cause>]` —— 例如 `NORMAL_CLEARING`, `USER_BUSY` |
+| <a id="app-bridge"></a>`bridge` | 将当前通道与一个或多个出站通道 URL 桥接。 | `<channel_url>` —— full dial string, e.g., `sofia/internal/1001@example.com` |
+| <a id="app-transfer"></a>`transfer` | 立即把主叫通道转接到拨号计划中的新分机规则。 | `<exten> [<dialplan> <context>]` |
+| <a id="app-intercept"></a>`intercept` | 将由 UUID 指定的振铃或驻留通道接入当前呼叫。 | `[-bleg] <uuid>` |
+| <a id="app-hold"></a>`hold` | 发送 SIP re-INVITE 或 UPDATE，使远端进入保持状态。 | `[<display message>]` |
+| <a id="app-unhold"></a>`unhold` | 解除此前设置的保持状态。 | 无 |
+| <a id="app-park"></a>`park` | 驻留通道，暂停桥接并允许呼叫等待。 | 无 |
+| <a id="app-respond"></a>`respond` | 向会话发送指定的原始 SIP 响应码。 | `<code> [<text>]` —— 例如 `407 Proxy Authentication Required` |
+| <a id="app-deflect"></a>`deflect` | 发送 SIP REFER，将呼叫重定向至其他 URI。 | `<sip-uri>` |
+| <a id="app-redirect"></a>`redirect` | 向会话发送 SIP 3xx 重定向响应。 | `<redirect_data>` |
+| <a id="app-sleep"></a>`sleep` | 使通道执行暂停指定时长，暂停期间仍消耗音频。 | `<milliseconds>` |
+| <a id="app-wait_for_silence"></a>`wait_for_silence` | 阻塞等待音频下降到阈值以下，用于检测语音结束。 | `<silence_thresh> <silence_hits> <listen_hits> <timeout_ms> [<file>]` |
+| <a id="app-execute_extension"></a>`execute_extension` | 跳转到指定上下文中的分机规则，执行完成后返回。 | `<extension> <dialplan> <context>` |
+| <a id="app-att_xfer"></a>`att_xfer` | 先呼叫第二方再交接，发起咨询转接。 | `<channel_url>` |
+| <a id="app-soft_hold"></a>`soft_hold` | 无需完整 re-INVITE，即可使已桥接通道进入保持状态。 | `<unhold_key> [<moh_a>] [<moh_b>]` |
+| <a id="app-pickup"></a>`pickup` | 接听指定代接组中正在振铃的通道。 | `<key>` |
+| <a id="app-check_acl"></a>`check_acl` | 将 IP 地址与指定 ACL 比较，根据结果终止或继续。 | `<ip> <acl_name>` |
+| <a id="app-set_name"></a>`set_name` | 给通道设置便于阅读的名称，供日志和事件数据使用。 | `<name>` |
+| <a id="app-early_hangup"></a>`early_hangup` | 启用提前挂机，使通道在完整媒体建立前也可拆除。 | 无 |
+| <a id="app-media_reset"></a>`media_reset` | 将媒体旁路及代理标志全部重置为默认值。 | 无 |
+| <a id="app-wait_for_answer"></a>`wait_for_answer` | 阻塞主叫腿拨号计划执行，直到被叫方应答。 | 无 |
+| <a id="app-wait_for_video_ready"></a>`wait_for_video_ready` | 阻塞等待通道的视频流就绪。 | `[<ms>]` —— timeout in milliseconds (1 to 10000) |
+| <a id="app-blind_transfer_ack"></a>`blind_transfer_ack` | 确认或拒绝通道上的盲转请求。 | `[true\|false]` |
+| <a id="app-page"></a>`page` | 同时拨打通道列表并播放文件，实现群组寻呼；文件路径及可选变量放在通道列表之前。 | `[<var1=val1,var2=val2>]<chan1>[:_:<chanN>]` |
+| <a id="app-park_state"></a>`park_state` | 触发通道的驻留状态机，通常由 `park` 应用内部调用。 | 无 |
+| <a id="app-acknowledge_call"></a>`acknowledge_call` | 标记呼叫已经确认，用于单独发送呼叫确认信号（区别于振铃或应答）的端点。 | 无 |
+| <a id="app-break"></a>`break` | 设置通道的中断标志，打断正在进行的播放或按键收集。如果广播正在进行则改为停止广播。传入 `all` 还会清空已排队的私有事件。 | `[all]` |
+| <a id="app-recovery_refresh"></a>`recovery_refresh` | 向通道发送恢复刷新指示，用于呼叫恢复期间重新同步端点状态。 | 无 |
+| <a id="app-reuse_caller_profile"></a>`reuse_caller_profile` | 设置通道标志，以便复用现有 caller profile 而不是重建，通常在 `transfer` 或 `execute_extension` 之前使用。 | 无 |
+| <a id="app-set_media_stats"></a>`set_media_stats` | 把当前 RTP 媒体统计快照保存到通道变量（如 `rtp_audio_*`），反映此刻的媒体状态。 | 无 |
+
+### 定时任务应用 {#scheduling-applications}
+
+这些应用用于在通道上安排延迟执行的操作。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-sched_hangup"></a>`sched_hangup` | 安排延迟挂机。 | `[+]<time_sec> [<cause>]` |
+| <a id="app-sched_transfer"></a>`sched_transfer` | 安排延迟转接。 | `[+]<time_sec> <exten> [<dialplan> <context>]` |
+| <a id="app-sched_broadcast"></a>`sched_broadcast` | 安排延迟播放文件广播。 | `[+]<time_sec> <path> [<leg>]` |
+| <a id="app-sched_cancel"></a>`sched_cancel` | 按组名取消此前安排的定时任务。 | `[group]` |
+| <a id="app-sched_heartbeat"></a>`sched_heartbeat` | 开启通道的定时心跳事件。 | `[<seconds>]` |
+
+---
+
+## 音频与提示音 {#audio-and-prompts}
+
+这些应用在通道上播放、录制或生成音频。除非另有说明，通道必须已经应答（或至少具备早期媒体）。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-playback"></a>`playback` | 向通道播放音频文件或音频流。默认遇到 DTMF 即停止，除非清空 `playback_terminators`。 | `<path>` —— filesystem path, `tone_stream://...`, `silence_stream://...`, etc. |
+| <a id="app-endless_playback"></a>`endless_playback` | 无限循环播放文件，直到外部终止通道。 | `<path>` |
+| <a id="app-broadcast"></a>`broadcast` | 只向已桥接呼叫的指定呼叫腿播放文件，不中断另一条腿。 | `<path> <leg>` —— leg is `aleg`, `bleg`, or `both` |
+| <a id="app-gentones"></a>`gentones` | 向通道生成 TGML 音调。 | `<tgml_script>[\|<loops>]` —— 例如 `%(1000,0,350,440)` |
+| <a id="app-play_and_get_digits"></a>`play_and_get_digits` | 播放提示音、收集 DTMF、使用正则验证后存入变量。 | `<min> <max> <tries> <timeout_ms> <terminators> <file> <invalid_file> <var_name> <regexp> [<digit_timeout>] ['<failure_ext> [failure_dp [failure_context]]']` |
+| <a id="app-read"></a>`read` | 播放文件并收集指定数量范围的按键，写入通道变量。 | `<min> <max> <file> <var_name> <timeout_ms> <terminators> [<digit_timeout>]` |
+| <a id="app-say"></a>`say` | 调用语言模块，使用通道语言朗读数字、日期和金额等值。 | `<module_name>[:<lang>] <say_type> <say_method> [<say_gender>] <text>` |
+| <a id="app-speak"></a>`speak` | 通过 TTS 引擎将文本合成为语音。 | `<engine>\|<voice>\|<text>` |
+| <a id="app-phrase"></a>`phrase` | 执行在 phrases XML 配置中定义的命名短语宏。 | `<macro_name>,<data>` |
+| <a id="app-record"></a>`record` | 把通道输入音频录制到文件；遇静音或 DTMF 结束键停止。 | `<path> [<time_limit_secs>] [<silence_thresh>] [<silence_hits>]` |
+| <a id="app-record_session"></a>`record_session` | 在后台将完整桥接会话（两条呼叫腿）录制到文件。 | `<path> [+<timeout_sec>]` |
+| <a id="app-stop_record_session"></a>`stop_record_session` | 停止由 `record_session` 启动的后台会话录音。 | `<path>` |
+| <a id="app-record_session_mask"></a>`record_session_mask` | 把正在录制的一段敏感音频替换为静音，进行遮蔽。 | `<path>` |
+| <a id="app-record_session_unmask"></a>`record_session_unmask` | 结束遮蔽，恢复录音中的正常音频采集。 | `<path>` |
+| <a id="app-record_session_pause"></a>`record_session_pause` | 暂时停止向会话录音文件写入音频。 | `<path>` |
+| <a id="app-record_session_resume"></a>`record_session_resume` | 恢复此前暂停的会话录音。 | `<path>` |
+| <a id="app-displace_session"></a>`displace_session` | 用文件或音频流中的声音替换通道的音频输入。 | `<path> [<flags>] [+<time_limit_ms>]` |
+| <a id="app-stop_displace_session"></a>`stop_displace_session` | 停止由 `displace_session` 启动的音频替换会话。 | `<path>` |
+| <a id="app-detect_speech"></a>`detect_speech` | 使用语法规则和 ASR 引擎在通道上启动语音识别检测，或向已经运行的检测器发送控制关键字。 | `<mod_name> <gram_name> <gram_path> [<addr>]` to start, or one of the control keywords: `grammar <name> [<path>]`, `nogrammar <name>`, `grammaron <name>`, `grammaroff <name>`, `grammarsalloff`, `pause`, `resume`, `start-input-timers`, `init <name> <path>`, `stop`, `param <name> <value>` |
+| <a id="app-play_and_detect_speech"></a>`play_and_detect_speech` | 播放提示音的同时运行 ASR 语音检测。 | `<file> detect:<engine> {<params>}<grammar>` |
+| <a id="app-echo"></a>`echo` | 将音频回传给主叫方，用于延迟测试。 | 无 |
+| <a id="app-delay_echo"></a>`delay_echo` | 将音频延迟指定毫秒数后回传给主叫方。 | `<delay_ms>` |
+| <a id="app-tone_detect"></a>`tone_detect` | 检测通道上的指定音调，检测到后执行操作。 | `<key> <freqs> [<flags> [<timeout>] [<app>] [<data>] [<hits>]]` |
+| <a id="app-fax_detect"></a>`fax_detect` | 检测入站传真的 CED 音，并执行操作。 | 无 (uses channel variables for action) |
+| <a id="app-stop_tone_detect"></a>`stop_tone_detect` | 停止通道上正在进行的音调检测。 | 无 |
+| <a id="app-loop_playback"></a>`loop_playback` | 将文件播放固定次数；循环次数支持 `+` 前缀。 | `[+<loops>] <path>` |
+| <a id="app-detect_audio"></a>`detect_audio` | 阻塞直至音频能量超过阈值，用于检测语音或音调的开始。 | `<threshold> <audio_hits> <timeout_ms> [<file>]` |
+| <a id="app-detect_silence"></a>`detect_silence` | 阻塞直至音频能量连续若干帧低于阈值。 | `<threshold> <silence_hits> <timeout_ms> [<file>]` |
+| <a id="app-preprocess"></a>`preprocess` | 将 DSP 预处理滤波器应用于通道的读取音频。 | `<filter_string>` |
+| <a id="app-sound_test"></a>`sound_test` | 对通道执行音频分析并记录结果。 | 无 |
+| <a id="app-clear_speech_cache"></a>`clear_speech_cache` | 清除通道缓存的 TTS/ASR 语音句柄，使下一次 `speak` 或 `detect_speech` 重新初始化引擎。 | 无 |
+| <a id="app-capture_text"></a>`capture_text` | 将入站文本（T.140/MSRP 实时文本）采集到通道文本缓冲；传入真值可启用采集。 | `[true\|false]` |
+| <a id="app-vad_test"></a>`vad_test` | 对通道读取音频运行语音活动检测器（VAD），记录说话/静音状态变化，以调整 VAD 参数。模式选择灵敏度；`vad_debug`、`vad_silence_ms` 等通道变量控制行为。 | `[<mode>]` —— `-1` (default), `0`, `1`, `2`, or `3` |
+
+---
+
+## DTMF 与信令 {#dtmf-and-signaling}
+
+这些应用控制 DTMF 的检测、生成与传输。当端点不发送 RFC 2833 telephone-event 分组时，需要使用带内检测（`start_dtmf`）。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-start_dtmf"></a>`start_dtmf` | 使用 DSP 在会话中启用带内 DTMF 检测。 | 无 |
+| <a id="app-stop_dtmf"></a>`stop_dtmf` | 停止此前由 `start_dtmf` 启用的带内 DTMF 检测。 | 无 |
+| <a id="app-start_dtmf_generate"></a>`start_dtmf_generate` | 为会话上的出站 DTMF 事件生成带内 DTMF 音频。 | 无 |
+| <a id="app-stop_dtmf_generate"></a>`stop_dtmf_generate` | 停止生成带内 DTMF。 | 无 |
+| <a id="app-send_dtmf"></a>`send_dtmf` | 立即在通道上发送 DTMF 按键。 | `<dtmf_digits>[@<duration_ms>]` —— 例如 `1234` or `1234@500` |
+| <a id="app-queue_dtmf"></a>`queue_dtmf` | 将 DTMF 按键加入队列，待当前音频播放结束后再发送。 | `<dtmf_digits>[@<duration_ms>]` |
+| <a id="app-flush_dtmf"></a>`flush_dtmf` | 丢弃通道输入队列中缓存的所有 DTMF 按键。 | 无 |
+| <a id="app-send_info"></a>`send_info` | 在会话上发送 SIP INFO 消息。 | `<info_data>` |
+| <a id="app-send_display"></a>`send_display` | 通过 SIP INFO 或 re-INVITE 向远端发送更新后的主叫名称和号码。 | `<name>\|<number>` |
+| <a id="app-block_dtmf"></a>`block_dtmf` | 阻止 DTMF 按键穿过通道传递。 | 无 |
+| <a id="app-unblock_dtmf"></a>`unblock_dtmf` | 执行 `block_dtmf` 后重新启用 DTMF 透传。 | 无 |
+| <a id="app-deduplicate_dtmf"></a>`deduplicate_dtmf` | 同时收到带内与 RFC 2833 DTMF 时抑制重复事件。 | `[only_rtp]` |
+| <a id="app-privacy"></a>`privacy` | 设置出站腿的主叫隐私标志。 | `off\|on\|name\|full\|number` |
+| <a id="app-presence"></a>`presence` | 发送通道的 SIP 在线状态更新。 | `<rpid> <status> [<id>]` |
+| <a id="app-bind_digit_action"></a>`bind_digit_action` | 在指定 realm 中将按键序列或正则表达式绑定到拨号计划操作字符串。与 `bind_meta_app` 不同，不要求 `*` 前缀，也可在非桥接状态下工作。 | `<realm>,<digits\|~regex>,<string>[,<value>][,<dtmf_target_leg>][,<event_target_leg>]` |
+| <a id="app-clear_digit_action"></a>`clear_digit_action` | 清除指定 realm 或所有 realm 中的按键操作绑定。 | `<realm>\|all[,target]` |
+| <a id="app-digit_action_set_realm"></a>`digit_action_set_realm` | 切换通道当前使用的按键操作 realm。 | `<realm>[,<target>]` |
+
+---
+
+## 功能应用 {#feature-applications}
+
+这些应用由配套模块注册。必须先在 `modules.conf.xml` 中加载对应模块，应用才能使用。
+
+### 电话会议（`mod_conference`） {#conferencing-mod_conference}
+
+`conference` 应用及其配置详见[电话会议章节](../applications/conferencing.mdx)。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-conference"></a>`conference` | 将通道加入指定会议室。若房间不存在则创建，最后一位参与者离开后删除。 | `<room_name>[@<profile>][+flags{<flag1>\|<flag2>}]` |
+| <a id="app-conference_set_auto_outcall"></a>`conference_set_auto_outcall` | 注册一个出站呼叫 URL，以便会议开始时自动拨打。 | `<channel_url>` |
+
+### 语音信箱（`mod_voicemail`） {#voicemail-mod_voicemail}
+
+`voicemail` 应用及其配置详见[语音信箱章节](../applications/voicemail.mdx)。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-voicemail"></a>`voicemail` | 将呼叫转入语音信箱，或进入邮箱查听菜单。 | `[check] [auth] <profile_name> <domain_name> [<id>] [uuid]` |
+
+### FIFO 队列（`mod_fifo`） {#fifo-queuing-mod_fifo}
+
+`fifo` 应用及其配置详见[队列：FIFO 与呼叫中心章节](../applications/queues-fifo-callcenter.mdx)。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-fifo"></a>`fifo` | 把入站呼叫放入指定 FIFO 队列（`in`），或让坐席连接下一位等待中的主叫方（`out`）。 | `<fifo_name>[!<importance>] [in [<announce>\|undef] [<music>\|undef] [early\|noans] \| out [wait\|nowait] [<announce>\|undef] [<music>\|undef]]` |
+
+### 代客泊线（`mod_valet_parking`） {#valet-parking-mod_valet_parking}
+
+`valet_park` 应用及其配置详见[实用应用程序章节](../applications/utility-applications.mdx)。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-valet_park"></a>`valet_park` | 将呼叫驻留到指定泊线区的特定槽位，或取回已驻留呼叫。支持通过 `ask` 交互选择槽位，或通过 `auto` 自动分配。 | `<lot_name> <extension>\|[ask [<min>] [<max>] [<timeout>] [<prompt>]\|auto [in\|out] [min] [max]]` |
+
+### 内存哈希表（`mod_hash`） {#in-memory-hash-table-mod_hash}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-hash"></a>`hash` | 在共享内存哈希表中插入、条件插入、删除或条件删除键值对。在重新加载模块之前，值可跨呼叫保存。 | `[insert\|insert_ifempty\|delete\|delete_ifmatch]/<realm>/<key>/<val>` |
+
+### SQLite 键值存储（`mod_db`） {#sqlite-key-value-store-mod_db}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-db"></a>`db` | 在基于 SQLite 的持久化键值存储中插入或删除键值对，重启后值仍然存在。 | `[insert\|delete]/<realm>/<key>/<val>` |
+
+### IVR 菜单（`mod_dptools`） {#ivr-menu-mod_dptools}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-ivr"></a>`ivr` | 运行在 `ivr_menus.conf.xml` 中定义的命名 IVR 菜单。 | `<menu_name>` |
+
+### Lua 脚本（`mod_lua`） {#lua-scripting-mod_lua}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-lua"></a>`lua` | 在当前呼叫通道的上下文中执行 Lua 脚本。 | `<script_path> [<args>]` |
+
+### 呼叫数限制（`mod_dptools`） {#call-limiting-mod_dptools}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-limit"></a>`limit` | 通过可插拔后端（`db` 或 `hash`）限制指定 realm/id 的最大并发呼叫数。可在超过限制时转至失败分机规则。 | `<backend> <realm> <id> [<max>[/<interval_sec>]] [<number> [<dialplan> [<context>]]]` |
+| <a id="app-limit_hash"></a>`limit_hash` | 与 `limit` 相同，但直接使用 hash 后端，省略后端参数。 | `<realm> <id> [<max>[/<interval_sec>]] [<number> [<dialplan> [<context>]]]` |
+| <a id="app-limit_execute"></a>`limit_execute` | 只有未超出资源限制时才执行指定拨号计划应用；失败时不转接。支持可插拔后端。 | `<backend> <realm> <id> <max>[/<interval>] <application> [<app_args>]` |
+| <a id="app-limit_hash_execute"></a>`limit_hash_execute` | `limit_execute hash` 的已弃用别名，使用 hash 后端。 | `<realm> <id> <max>[/<interval>] <application> [<app_args>]` |
+
+### 监听（`mod_dptools`） {#eavesdrop-mod_dptools}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-eavesdrop"></a>`eavesdrop` | 按 UUID 监听活动通道。操作员可以听见两条呼叫腿；DTMF `1/2/3` 切换监听哪一腿，`0` 同时监听两条腿，`*` 跳至下一通道。传入 `all` 可轮询全部活动通道。 | `[all\|<uuid>]` |
+| <a id="app-native_eavesdrop"></a>`native_eavesdrop` | 在原生传输层监听通道，针对指定读取或写入流。只需单方向时开销小于 `eavesdrop`。 | `<uuid> [read\|write]` |
+| `intercept` | 将 UUID 指定的振铃或保持通道重定向到当前呼叫，完成应答。 | `[-bleg] <uuid>` |
+
+### 用户通话监听（`mod_spy`） {#user-spy-mod_spy}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-userspy"></a>`userspy` | 持续监听指定目录用户的所有呼叫。当用户发起新呼叫时自动切换。必须加载 `mod_spy`。 | `<user@domain> [uuid]` |
+
+### 组播寻呼（`mod_esf`） {#multicast-paging-mod_esf}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-esf_page_group"></a>`esf_page_group` | 向 `mod_esf` 中配置的组播组所有订阅设备发送 RTP 组播寻呼。必须加载 `mod_esf`。 | 无 (uses channel variables for group config) |
+
+### FSV 视频录制（`mod_fsv`） {#fsv-video-recording-mod_fsv}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-record_fsv"></a>`record_fsv` | 将音视频同时录制到 FSV 容器文件。必须加载 `mod_fsv`。 | `<path>` |
+| <a id="app-play_fsv"></a>`play_fsv` | 将 FSV 容器文件（音频和视频）播放到通道。必须加载 `mod_fsv`。 | `<path>` |
+
+---
+
+## 变量、日志与元按键绑定 {#variables-logging-and-meta-binding}
+
+这些应用可读写通道变量、写入日志，并将 DTMF 按键绑定到通话中的操作。
+
+### 通道变量 {#channel-variables}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-set"></a>`set` | 设置通道变量，变量作用域为当前通道。 | `<varname>=<value>` |
+| <a id="app-multiset"></a>`multiset` | 一次设置多个通道变量。默认以空格分隔；可用 `^^<char>` 指定其他分隔符。 | `[^^<delim>]<var1>=<val1> <var2>=<val2> ...` |
+| <a id="app-unset"></a>`unset` | 删除一个通道变量。 | `<varname>` |
+| <a id="app-multiunset"></a>`multiunset` | 一次删除多个通道变量。 | `[^^<delim>]<var1> <var2> ...` |
+| <a id="app-set_global"></a>`set_global` | 设置对所有通道可见的全局变量，并在当前进程存活期间保持。 | `<varname>=<value>` |
+| <a id="app-set_profile_var"></a>`set_profile_var` | 设置 caller profile 上的字段（例如 `caller_id_name`、`caller_id_number`）。 | `<field>=<value>` |
+| <a id="app-export"></a>`export` | 设置通道变量，并在建立桥接时将其传播到 B-leg。 | `<varname>=<value>` |
+| <a id="app-bridge_export"></a>`bridge_export` | 与 `export` 类似，但只将变量复制到已桥接的呼叫腿，不在当前通道设置。 | `<varname>=<value>` |
+| <a id="app-push"></a>`push` | 向存储冒号分隔列表的通道变量尾部追加一个值。 | `<varname>=<value>` |
+| <a id="app-unshift"></a>`unshift` | 向存储冒号分隔列表的通道变量头部添加一个值。 | `<varname>=<value>` |
+| <a id="app-transfer_vars"></a>`transfer_vars` | 将当前通道符合条件的变量或某一前缀组复制到已桥接对端。名称前加 `~` 可匹配以该字符串开头的全部变量。 | `<~variable_prefix\|variable>` |
+
+### 日志与诊断 {#logging-and-diagnostics}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-log"></a>`log` | 以指定级别向 FreeSWITCH 日志写入字符串。 | `<log_level> <log_string>` —— levels: `DEBUG`, `INFO`, `NOTICE`, `WARNING`, `ERR`, `CRIT`, `ALERT` |
+| <a id="app-info"></a>`info` | 以 INFO 级别将所有通道变量和呼叫元数据输出到日志。 | 无 |
+| <a id="app-event"></a>`event` | 向 FreeSWITCH 事件系统发布自定义事件（可通过事件套接字接收）。 | `<key>=<value> [<key>=<value> ...]` |
+| <a id="app-verbose_events"></a>`verbose_events` | 使该通道之后的所有事件都包含详细信息（全部变量）。 | 无 |
+| <a id="app-session_loglevel"></a>`session_loglevel` | 覆盖当前会话的日志详细级别。 | `<log_level>` |
+
+### DTMF 元按键绑定 {#dtmf-meta-binding}
+
+`bind_meta_app` 允许管理员在已桥接通话中，将用户按下的 DTMF 按键（前面带 `*`）绑定到拨号计划应用，同时不中断媒体流。
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-bind_meta_app"></a>`bind_meta_app` | 将数字键绑定到应用。桥接期间按下 `*<key>` 时触发。 | `<key> [a\|b\|ab] [a\|b\|o\|s\|i\|1] <app>[::args]` |
+| <a id="app-unbind_meta_app"></a>`unbind_meta_app` | 按键移除元应用绑定。 | `[<key>]` |
+
+第二个参数选择哪条呼叫腿检测按键（`a`、`b` 或 `ab`）。第三个参数选择执行范围：`a` = A-leg，`b` = B-leg，`o` = 对侧，`s` = 自身，`i` = 内联，`1` = 只执行一次。
+
+### 其他实用工具 {#miscellaneous-utilities}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| <a id="app-eval"></a>`eval` | 评估表达式但丢弃结果。可作为空操作占位符，也可强制展开变量。 | Any string |
+| <a id="app-stop"></a>`stop` | `eval` 的别名。作为空操作，也可用于终止操作列表。 | 无 |
+| <a id="app-strftime"></a>`strftime` | 使用 `strftime(3)` 格式化时间值，存储或记录结果。 | `[<epoch>\|]<format_string>` |
+| <a id="app-mkdir"></a>`mkdir` | 在文件系统中创建目录。 | `<path>` |
+| <a id="app-rename"></a>`rename` | 重命名文件系统中的文件。 | `<old_path> <new_path>` |
+| <a id="app-mutex"></a>`mutex` | 阻塞当前呼叫流程，直到没有其他通道持有同一互斥锁键。也可传 `on` 或 `off` 显式获取或释放。 | `<keyname> [on\|off]` |
+| <a id="app-capture"></a>`capture` | 将正则匹配的数据捕获到命名通道变量。 | `<varname>=<regex>` |
+| <a id="app-set_user"></a>`set_user` | 将目录用户设置（变量、参数）应用到当前通道。 | `<user>@<domain> [prefix]` |
+| <a id="app-filter_codecs"></a>`filter_codecs` | 从当前 SDP 中删除不符合过滤规则的编解码器。 | See source for full syntax. |
+| <a id="app-jitterbuffer"></a>`jitterbuffer` | 启用或配置当前会话的 RTP 抖动缓冲。 | `<msec>[:max_msec[:max_drift]]` or `off` |
+| <a id="app-novideo"></a>`novideo` | 拒绝或移除会话中的入站视频。 | 无 |
+| <a id="app-video_refresh"></a>`video_refresh` | 请求远端刷新视频关键帧，或切换刷新模式。无参数时立即请求刷新；`manual` 抑制自动刷新，`auto` 恢复自动刷新。 | `[manual\|auto]` |
+| <a id="app-video_decode"></a>`video_decode` | 启用或关闭入站视频的完整解码（叠加画面等媒体挂钩需要此功能）。`on` 启用，`wait` 启用并阻塞至获得输入视频参数，`off` 关闭。 | `[[on\|wait]\|off]` |
+| <a id="app-video_write_overlay"></a>`video_write_overlay` | 向通道的出站视频流叠加静态图片（例如带 alpha 的 PNG），要求先解码视频流。 | `<path> [<pos>] [<alpha>]` —— `<pos>` is an image position keyword (e.g., `left-bot`); `<alpha>` is `1`-`255` |
+| <a id="app-stop_video_write_overlay"></a>`stop_video_write_overlay` | 移除此前由 `video_write_overlay` 添加的视频叠加层。 | `<path>` |
+| <a id="app-set_audio_level"></a>`set_audio_level` | 调整通道读取方向或写入方向的音量级别。 | `[read\|write] <level>` |
+| <a id="app-set_mute"></a>`set_mute` | 静音、取消静音通道的读取或写入方向。 | `[read\|write] [true\|false\|toggle]` |
+| <a id="app-remove_bugs"></a>`remove_bugs` | 从通道移除全部或指定函数对应的媒体挂钩（media bugs）。 | `[<function>]` |
+| <a id="app-three_way"></a>`three_way` | 根据 UUID 把第三方桥接进呼叫，建立三方音频混音。 | `<uuid>` |
+| <a id="app-cng_plc"></a>`cng_plc` | 对远端发送的舒适噪声生成（CNG）帧启用丢包隐藏（PLC）。 | 无 |
+| <a id="app-enable_heartbeat"></a>`enable_heartbeat` | 启用通道周期性的媒体心跳事件，可指定间隔；设为 `0` 关闭。 | `[0\|<seconds>]` |
+| <a id="app-enable_keepalive"></a>`enable_keepalive` | 在通道上启用 RTP keepalive 分组以维持 NAT 映射；设为 `0` 关闭。 | `[0\|<seconds>]` |
+| <a id="app-set_zombie_exec"></a>`set_zombie_exec` | 允许通道在呼叫应答且发起状态机退出后，继续执行拨号计划应用。 | 无 |
+| <a id="app-debug_media"></a>`debug_media` | 针对指定的流方向启用或关闭通道媒体调试输出。 | `<read\|write\|both\|vread\|vwrite\|vboth\|all> <on\|off>` |
+| <a id="app-system"></a>`system` | 同步执行系统 shell 命令；仅当 `disable_system_app_commands` 未设为 `true` 时可用。 | `<command>` |
+| <a id="app-bgsystem"></a>`bgsystem` | 异步执行系统 shell 命令；仅当 `disable_system_app_commands` 未设为 `true` 时可用。 | `<command>` |
+
+---
+
+## 示例 {#examples}
+
+以下示例取自 FreeSWITCH 默认拨号计划（`default.xml` 和 `features.xml`）。
+
+### 应答、桥接并在失败时转入语音信箱 {#answer-bridge-and-fall-back-to-voicemail}
+
+```xml
+<extension name="Local_Extension">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="export" data="dialed_extension=$1"/>
+    <action application="set"    data="call_timeout=30"/>
+    <action application="set"    data="hangup_after_bridge=true"/>
+    <action application="set"    data="continue_on_fail=true"/>
+    <action application="bridge" data="user/${dialed_extension}@${domain_name}"/>
+    <action application="answer"/>
+    <action application="sleep"  data="1000"/>
+    <action application="bridge" data="loopback/app=voicemail:default ${domain_name} ${dialed_extension}"/>
+  </condition>
+</extension>
+```
+
+### 绑定元应用按键以启用通话中功能 {#bind-meta-app-keys-to-mid-call-features}
+
+```xml
+<action application="bind_meta_app" data="1 b s execute_extension::dx XML features"/>
+<action application="bind_meta_app" data="2 b s record_session::${recordings_dir}/${caller_id_number}.wav"/>
+<action application="bind_meta_app" data="3 b s execute_extension::cf XML features"/>
+```
+
+### 根据 UUID 截取振铃通道 {#intercept-a-ringing-channel-by-uuid}
+
+```xml
+<extension name="global-intercept">
+  <condition field="destination_number" expression="^886$">
+    <action application="answer"/>
+    <action application="intercept" data="${hash(select/${domain_name}-last_dial_ext/global)}"/>
+    <action application="sleep" data="2000"/>
+  </condition>
+</extension>
+```
+
+### 将呼叫加入会议室 {#place-a-call-into-a-conference-room}
+
+```xml
+<extension name="nb_conferences">
+  <condition field="destination_number" expression="^(30\d{2})$">
+    <action application="answer"/>
+    <action application="conference" data="$1-${domain_name}@default"/>
+  </condition>
+</extension>
+```
+
+### 将呼叫放入 FIFO 队列并取回 {#park-a-call-in-a-fifo-queue-and-retrieve-it}
+
+```xml
+<!-- Park -->
+<extension name="park">
+  <condition field="destination_number" expression="^5900$">
+    <action application="set"  data="fifo_music=${hold_music}"/>
+    <action application="fifo" data="5900@${domain_name} in"/>
+  </condition>
+</extension>
+
+<!-- Retrieve -->
+<extension name="unpark">
+  <condition field="destination_number" expression="^5901$">
+    <action application="answer"/>
+    <action application="fifo" data="5900@${domain_name} out nowait"/>
+  </condition>
+</extension>
+```
+
+### 读取按键并转接 {#read-digits-and-transfer}
+
+```xml
+<extension name="dx">
+  <condition field="destination_number" expression="^dx$">
+    <action application="answer"/>
+    <action application="read"              data="11 11 'tone_stream://%(10000,0,350,440)' digits 5000 #"/>
+    <action application="execute_extension" data="is_transfer XML features"/>
+  </condition>
+</extension>
+```
+
+### 代客泊线 {#valet-parking}
+
+```xml
+<!-- Park a call interactively -->
+<extension name="valet_park">
+  <condition field="destination_number" expression="^(6000)$">
+    <action application="answer"/>
+    <action application="valet_park" data="valet_parking_lot ask 1 11 10000 ivr/ivr-enter_ext_pound.wav"/>
+  </condition>
+</extension>
+
+<!-- Park or retrieve by slot number (6001-6099) -->
+<extension name="valet_park">
+  <condition field="destination_number" expression="^((?!6000)60\d{2})$">
+    <action application="answer"/>
+    <action application="valet_park" data="valet_parking_lot $1"/>
+  </condition>
+</extension>
+```
+
+### 记录警告并发送自定义 SIP 响应 {#log-a-warning-and-send-a-custom-sip-response}
+
+```xml
+<action application="log"     data="WARNING Call from ${caller_id_number} exceeded limit"/>
+<action application="respond" data="503 Service Unavailable"/>
+```
+
+### 监听全部活动通道 {#eavesdrop-on-all-active-channels}
+
+```xml
+<extension name="eavesdrop">
+  <condition field="destination_number" expression="^779$">
+    <action application="answer"/>
+    <action application="set" data="eavesdrop_indicate_failed=tone_stream://%(500,0,320)"/>
+    <action application="set" data="eavesdrop_indicate_new=tone_stream://%(500,0,620)"/>
+    <action application="set" data="eavesdrop_indicate_idle=tone_stream://%(250,0,920)"/>
+    <action application="eavesdrop" data="all"/>
+  </condition>
+</extension>
+```
+
+---
+
+## 拨号字符串与呼叫发起 {#dial-strings-and-call-origination}
+
+拨号字符串是传给 `bridge`、`originate` 和网关目的地址字段的参数。它使用端点前缀、可选的单腿或全局通道变量，以及多腿分隔符，描述要创建的一条或多条出站腿。解析逻辑位于 `switch_ivr_originate.c`。
+
+### 端点前缀 {#endpoint-prefixes}
+
+拨号字符串中的每条呼叫腿都以端点前缀开头，用于选择通道驱动。前缀与地址之间使用斜杠分隔。
+
+| 前缀 | 含义 | 示例 |
+|---|---|---|
+| `user/<u>@<d>` | 在目录中的域 `<d>` 下查找用户 `<u>`，再按用户 Profile 的 `dial-string` 参数拨号。域可省略，默认使用配置的默认域。 | `user/1001@example.com` |
+| `sofia/<profile>/<uri>` | 通过指定的 Sofia Profile 直接拨打 SIP URI。 | `sofia/internal/1001@192.168.1.10` |
+| `sofia/gateway/<gw>/<number>` | 通过指定网关拨打 `<number>`。该网关必须已在某个加载的 Sofia Profile 下注册。 | `sofia/gateway/mycarrier/15551234567` |
+| `loopback/<exten>[/<context>[/<dialplan>]]` | 在 `<context>`（默认 `default`）中使用 `<dialplan>`（默认 `xml`）重新进入 `<exten>` 的拨号计划。还支持 `loopback/app=<app>[:<arg>]`，用于执行指定应用。 | `loopback/1001/default` |
+| `group/<name>@<domain>` | 使用每位成员的 `dial-string`，同时拨打目录组内所有成员。 | `group/support@example.com` |
+| `error/<cause>` | 不发起呼叫，立即返回指定 Q.850 挂机原因。适合作为失败回退腿。 | `error/USER_BUSY` |
+| `pickup/<key>` | 将发起的呼叫注册到指定代接组并等待。任何执行相同键值 `pickup` 应用的呼叫方都能截取该呼叫。 | `pickup/sales` |
+
+### 多腿分隔符 {#multi-leg-separators}
+
+一个拨号字符串参数可以描述多条呼叫腿，通过以下分隔符控制呼叫发起方式。
+
+| 分隔符 | 行为 | 解析位置 |
+|---|---|---|
+| `,`（逗号） | 同时（并行）发起。同组内通过逗号分隔的所有呼叫腿同时拨打，第一个应答者获胜。 | 在每个竖线分组内，由 `switch_separate_string` 使用 `','` 分割 |
+| `\|`（竖线） | 顺序（故障切换）发起。竖线分隔的分组按顺序尝试；只有当前组全部呼叫腿失败或超时，才尝试下一组。 | 顶层由 `switch_separate_string` 使用 `'\|'` 分割 |
+| `:_:` | 企业级并行发起（`SWITCH_ENT_ORIGINATE_DELIM`）。每条由 `:_:` 分隔的腿都在独立线程中并发执行，具有独立的回铃音和超时跟踪。适合多条腿媒体行为差异明显的情况。 | 其他解析之前先用 `strstr` 检测，进入 `switch_ivr_enterprise_originate` |
+
+**优先级：** 首先检查字符串是否包含 `:_:`，若有则按企业级 originate 路径处理。否则先按竖线拆为顺序分组，再按逗号将每组拆成并发腿。
+
+### 通道变量语法 {#channel-variable-syntax}
+
+拨号字符串支持在两个作用域注入变量。
+
+**全局变量** `{key=val,key2=val2}` —— 放在第一条呼叫腿地址之前，使用大括号包裹。变量会应用于整个拨号字符串中的所有呼叫腿。允许多个大括号组，并按出现顺序合并。由 `switch_event_create_brackets` 使用 `{` 和 `}` 作为分隔符进行解析。
+
+```
+{ignore_early_media=true,origination_caller_id_number=5550000}sofia/internal/1001@pbx.example.com
+```
+
+**单腿变量** `[key=val,key2=val2]` —— 直接放在单条呼叫腿地址之前，使用方括号包裹。这些变量只应用于其后的一条腿，并仅在该腿上覆盖同名全局变量。由 `switch_event_create_brackets` 使用 `[` 和 `]` 解析。
+
+```
+[leg_timeout=10]sofia/internal/1001@pbx.example.com,[leg_timeout=20]sofia/internal/1002@pbx.example.com
+```
+
+单条呼叫腿地址前允许多个 `[...]` 区块，按从左到右顺序合并。
+
+**组合示例：** 全局变量为所有呼叫腿设置呼叫超时，单腿变量则覆盖各自的超时值。
+
+```
+{call_timeout=30}[leg_timeout=10]sofia/internal/1001@pbx,[leg_timeout=20]sofia/internal/1002@pbx
+```
+
+### `bridge` 实例解析 {#worked-bridge-examples}
+
+#### 故障切换：先走网关，再转语音信箱 {#failover-gateway-first-then-voicemail}
+
+先尝试 PSTN 网关 30 秒，失败后通过 loopback 重新进入拨号计划，将主叫方转入语音信箱。拨号计划必须设置 `continue_on_fail=true`，才能在桥接失败后继续执行。
+
+```xml
+<extension name="outbound_with_voicemail_fallback">
+  <condition field="destination_number" expression="^(15551234567)$">
+    <action application="set"    data="continue_on_fail=true"/>
+    <action application="set"    data="call_timeout=30"/>
+    <action application="bridge" data="sofia/gateway/mycarrier/$1"/>
+    <action application="answer"/>
+    <action application="sleep"  data="1000"/>
+    <action application="bridge" data="loopback/app=voicemail:default ${domain_name} 1000"/>
+  </condition>
+</extension>
+```
+
+#### 两个用户同时振铃 {#simultaneous-ring-of-two-users}
+
+同时呼叫 `user/1001` 和 `user/1002`。首先应答的一方建立桥接，另一条腿自动挂机。
+
+```xml
+<action application="bridge" data="user/1001@${domain_name},user/1002@${domain_name}"/>
+```
+
+#### 同时振铃与顺序故障切换结合 {#sequential-failover-with-simultaneous-ring}
+
+先同时呼叫 1001 和 1002；如果两者都失败，再尝试网关。竖线将两组分开。
+
+```xml
+<action application="bridge"
+  data="user/1001@${domain_name},user/1002@${domain_name}|sofia/gateway/mycarrier/15559990000"/>
+```
+
+---
+
+## 呼叫转接与功能码 {#call-transfers-and-feature-codes}
+
+### 盲转：`transfer` 应用 {#blind-transfer-the-transfer-application}
+
+`transfer` 立即将当前通道重定向到新的拨号计划分机，而不事先与目标协商。主叫方被转接，当前拨号计划执行结束。
+
+```
+<action application="transfer" data="<exten> [<dialplan> <context>]"/>
+```
+
+以下可选标志修改转接哪条呼叫腿：
+
+- `-bleg <exten> [<dialplan> <context>]` —— 转接 B-leg（被叫方），而不是 A-leg。
+- `-both <exten> [<dialplan> <context>]` —— 将两条腿分别转接至同一分机规则。
+
+这些标志可在 `mod_dptools.c` 的 `transfer_function` 中核实。
+
+### 咨询转接：`att_xfer` {#attended-transfer-att_xfer}
+
+`att_xfer` 发起咨询转接：先把当前 B-leg 置于软保持，拨打转接目标，将操作员与目标桥接以供咨询，操作员挂机后再完成转接。
+
+```
+<action application="att_xfer" data="<channel_url>"/>
+```
+
+`<channel_url>` 参数支持任意有效的拨号字符串（例如 `user/1002@${domain_name}`）。
+
+**咨询期间的 DTMF 按键。** 以下三个通道变量决定操作员在与转接目标桥接时按下哪些 DTMF 键：
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| <a id="app-attxfer_cancel_key"></a>`attxfer_cancel_key` | `#` | 取消转接，返回原 B-leg。 |
+| <a id="app-attxfer_hangup_key"></a>`attxfer_hangup_key` | `*` | 挂断转接目标，并让原 A-leg 与 B-leg 直接桥接以完成转接。 |
+| <a id="app-attxfer_conf_key"></a>`attxfer_conf_key` | `0` | 将三方并入同一会议，实现三方通话。 |
+
+应在调用 `att_xfer` 前于通道上设置这些变量，也可以使用单腿变量语法将其设置在转接目标腿上。
+
+**结果变量：** `att_xfer` 完成后，通道变量 `att_xfer_result` 将被设为 `success` 或 `failure`（在 `switch_types.h` 中定义为 `SWITCH_ATT_XFER_RESULT_VARIABLE`）。
+
+**默认拨号计划绑定：** `features.xml` 中的 `att_xfer` 分机规则先使用 `read` 收集数字序列，再在 originate 呼叫上设置 `origination_cancel_key`（注意：该变量由 originate 检查，而不是由 `att_xfer` 自身检查；`att_xfer` 的取消键是 `attxfer_cancel_key`），最后调用 `att_xfer`：
+
+```xml
+<extension name="att_xfer">
+  <condition field="destination_number" expression="^att_xfer$">
+    <action application="read" data="3 4 'tone_stream://%(10000,0,350,440)' digits 30000 #"/>
+    <action application="set" data="origination_cancel_key=#"/>
+    <action application="att_xfer" data="user/${digits}@$${domain}"/>
+  </condition>
+</extension>
+```
+
+### 三方通话：`three_way` {#three-way-calling-three_way}
+
+`three_way` 将 UUID 指定的第三方桥接到当前呼叫，结合现有两条桥接腿与第三方通道，形成三方音频混音，三方可以互相听见。
+
+```
+<action application="three_way" data="<uuid>"/>
+```
+
+UUID 必须对应活动会话。该应用在 `mod_dptools.c` 中注册。
+
+### 呼叫代接 {#call-pickup}
+
+**代接组**允许组内任意成员接听正在振铃的呼叫。该机制包括两个部分：
+
+**将呼叫注册到组。** 在 `bridge` 拨号字符串中将 `pickup/<key>` 作为一条呼叫腿。桥接建立时，会使用内存哈希表将该呼叫注册到指定代接组。代接腿静默等待被领取。
+
+```xml
+<action application="bridge"
+  data="user/${dialed_extension}@${domain_name},pickup/${called_party_callgroup}@${domain_name}"/>
+```
+
+**领取正在振铃的呼叫。** `pickup` 应用取得指定键下第一个可用呼叫，并将其桥接到当前通道。
+
+```
+<action application="pickup" data="<key>"/>
+```
+
+**按 UUID 截取。** `intercept` 应用通过 UUID 将任意振铃或保持通道接入当前呼叫。
+
+```
+<action application="intercept" data="[-bleg] <uuid>"/>
+```
+
+`-bleg` 标志表示截取指定会话的 B-leg 而不是 A-leg。`mod_sofia` 在处理带 `Replaces` 头的 SIP REFER 时，也会在内部使用 `intercept:` 前缀，将呼叫路由为 `answer,intercept:<uuid>`。
+
+### 通过 `bind_meta_app` 使用通话中功能码 {#in-call-feature-codes-via-bind_meta_app}
+
+`bind_meta_app` 将单个 DTMF 数字键（桥接期间按 `*<digit>`）绑定到拨号计划应用，而不中断媒体流。绑定在 `bridge` 之前设置，并在桥接持续期间生效。
+
+语法回顾（见第 5 节）：
+
+```
+bind_meta_app <key> [a|b|ab] [a|b|o|s|i|1] <app>[::args]
+```
+
+- 参数 2：哪条呼叫腿检测按键；`a` = 仅 A-leg，`b` = 仅 B-leg，`ab` = 两者。
+- 参数 3：在哪条腿上执行应用；`a` = A-leg，`b` = B-leg，`o` = 对侧腿，`s` = 同一条腿，`i` = 内联（当前线程），`1` = 只执行一次（第一次触发后移除绑定）。
+
+**来自 `default.xml` 的默认绑定：** `Local_Extension` 分机规则在每次 `bridge` 前设置以下四个绑定：
+
+| 按键 | 绑定 | 效果 |
+|---|---|---|
+| `*1` | `execute_extension::dx XML features` | 提示 B-leg 呼叫方输入盲转目的号码。 |
+| `*2` | `record_session::<path>.wav` | 开始录制会话，并按时间戳命名文件。 |
+| `*3` | `execute_extension::cf XML features` | 将两条腿转入会议室。 |
+| `*4` | `execute_extension::att_xfer XML features` | 从 B-leg 发起咨询转接。 |
+
+四个绑定都使用 `b s`（由 B-leg 检测，在同一条腿上执行）。
+
+### 实例：支持功能码的桥接呼叫 {#worked-example-bridged-call-with-feature-codes}
+
+下面的分机规则复现了默认 `Local_Extension` 模式：先绑定四个通话中功能码，再桥接到被叫用户；若失败则转入语音信箱。
+
+```xml
+<extension name="Local_Extension">
+  <condition field="destination_number" expression="^(10[01][0-9])$">
+    <action application="export"       data="dialed_extension=$1"/>
+
+    <!-- Feature code bindings active during the bridge -->
+    <action application="bind_meta_app" data="1 b s execute_extension::dx XML features"/>
+    <action application="bind_meta_app" data="2 b s record_session::${recordings_dir}/${caller_id_number}.wav"/>
+    <action application="bind_meta_app" data="3 b s execute_extension::cf XML features"/>
+    <action application="bind_meta_app" data="4 b s execute_extension::att_xfer XML features"/>
+
+    <action application="set"          data="call_timeout=30"/>
+    <action application="set"          data="hangup_after_bridge=true"/>
+    <action application="set"          data="continue_on_fail=true"/>
+
+    <!-- Primary bridge; includes a pickup group leg for call-pickup by colleagues -->
+    <action application="bridge"       data="user/${dialed_extension}@${domain_name}"/>
+
+    <!-- Fallback: voicemail -->
+    <action application="answer"/>
+    <action application="sleep"        data="1000"/>
+    <action application="bridge"       data="loopback/app=voicemail:default ${domain_name} ${dialed_extension}"/>
+  </condition>
+</extension>
+```
+
+已桥接的 B-leg 用户按下 `*4` 时，会在 `features` 上下文执行 `execute_extension::att_xfer XML features`。该分机规则使用 `read` 收集目标号码，然后调用 `att_xfer` 咨询转接目标。操作员按 `#`（默认 `attxfer_cancel_key`）取消转接，按 `*`（默认 `attxfer_hangup_key`）完成转接，或按 `0`（默认 `attxfer_conf_key`）将三方合并。

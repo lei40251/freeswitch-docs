@@ -1,0 +1,107 @@
+---
+sidebar_position: 33
+id: mod_snapshot
+slug: /module-reference/applications/mod_snapshot
+title: "mod_snapshot — 实时音频快照录制"
+description: "对正在通话的通道持续记录滚动音频缓冲，并按需将 WAV 快照写入磁盘。"
+sidebar_label: "mod_snapshot"
+---
+
+# mod_snapshot — 实时音频快照录制 {#mod_snapshot-—-live-audio-snapshot-recording}
+
+`mod_snapshot` 将一个滑动音频缓冲区附加到正在通话的通道，让管理员随时将缓冲区内容写入 WAV 文件，即最近 N 秒音频的“快照”。模块位于 `src/mod/applications/mod_snapshot`（应用程序类别）。
+
+如果你需要捕获**已经发生**的音频，例如呼叫者按键前的几秒内容，而不想从通话开始就录制整段呼叫，可以使用此模块。启动之后，缓冲区会不断滚动；执行快照动作时，会把当前内容写入 FreeSWITCH 声音目录中带时间戳的 WAV 文件。
+
+## 加载模块 {#loading-the-module}
+
+模块名为 `mod_snapshot`。默认的 `autoload_configs/modules.conf.xml` 中**没有**它，需要手动添加：
+
+```xml
+<load module="mod_snapshot"/>
+```
+
+无须特殊编译标志；模块仅依赖 FreeSWITCH 核心，可通过标准构建流程编译。
+
+## 拨号计划应用 {#dialplan-applications}
+
+| 应用 | 用途 | 参数 |
+|---|---|---|
+| `snapshot` | 启动滚动采集或触发音频快照 | `start <sec> [read\|write] [<base>]` 或 `snap` |
+
+### `snapshot`
+
+向通道附加一个 media bug，持续将音频写入固定大小的环形缓冲区。调用 `snap` 时，将当前缓冲区内容写入 WAV 文件。
+
+**语法：**
+
+```
+snapshot start <sec> [read|write] [<base>]
+snapshot snap
+```
+
+| 参数 | 说明 | 默认值 |
+|---|---|---|
+| `sec` | 采集窗口大小，单位秒（最小为 5） | `5` |
+| `read\|write` | 要采集的音频方向：`read`（入站）、`write`（出站），省略则采集双方 | 双向 |
+| `base` | 输出文件名前缀 | `mod_snapshot` |
+
+输出文件写入 `$${sounds_dir}/<base>_YYYY_MM_DD_HH_MM_SS.wav`。
+
+启动采集后，A 腿的 DTMF 数字 **7** 会绑定为快捷键，自动触发 `snapshot snap`。
+
+**拨号计划示例：**
+
+开始对两个方向进行 30 秒滚动采集：
+
+```xml
+<action application="snapshot" data="start 30"/>
+```
+
+以自定义前缀启动 60 秒、只读方向的采集：
+
+```xml
+<action application="snapshot" data="start 60 read mycall"/>
+```
+
+立即触发快照（例如从另一个 `<extension>` 或 DTMF 处理器触发）：
+
+```xml
+<action application="snapshot" data="snap"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `uuid_snapshot` | 通过 UUID 在现有通道启动采集或生成快照 | `uuid_snapshot <uuid> snap\|start [<sec> read\|write <base>]` |
+
+### `uuid_snapshot`
+
+无需修改拨号计划，就可以从 `fs_cli` 或 ESL API 控制正在运行的通道上的快照缓冲区。
+
+**fs_cli 示例：**
+
+在指定通道上启动 30 秒滚动采集：
+
+```
+uuid_snapshot 1234abcd-... start 30 read mycall
+```
+
+将当前缓冲区写入磁盘：
+
+```
+uuid_snapshot 1234abcd-... snap
+```
+
+成功时命令返回 `+OK Success`，失败时返回 `-ERR Operation Failed`。
+
+## 通道变量 {#channel-variables}
+
+| 变量 | 设置／读取 | 用途 |
+|---|---|---|
+| `file` | 设置（全局） | 通过 `switch_core_set_variable` 设置为最近一次输出的快照 WAV 文件完整路径 |
+
+**注意：** 每次写入快照时，`file` 都被设置为全局 FreeSWITCH 变量，而非每通道变量。
+
+**源码：** `src/mod/applications/mod_snapshot`

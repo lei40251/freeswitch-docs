@@ -1,0 +1,102 @@
+---
+sidebar_position: 4
+id: mod_opusfile
+slug: /module-reference/formats/mod_opusfile
+title: "mod_opusfile — Opus 文件播放与录制"
+description: "注册 OGG/Opus 文件接口与 OPUSSTREAM 编解码接口，实现 .opus 文件和实时 OGG/Opus 音频流的读写。"
+sidebar_label: "mod_opusfile"
+---
+
+# mod_opusfile — Opus 文件播放与录制 {#mod_opusfile-—-opus-file-playback-and-recording}
+
+`mod_opusfile` 是文件格式模块（`src/mod/formats`），注册 OGG/Opus 文件接口，使 FreeSWITCH 可以通过 `libopusfile` 库打开、定位、读取及写入 `.opus` 文件。它还注册名为 `OPUSSTREAM` 的编解码器接口，让核心可以通过编解码回调传递原始 OGG/Opus 页数据；这样就能在没有文件系统中间层的情况下，通过 RTP 等传输方式发送 OGG/Opus 音频流。
+
+如果需要在拨号计划中播放已录制的 `.opus` 音频、直接将呼叫录制为 `.opus` 格式（编译时须有 `libopusenc`），或者通过 FreeSWITCH 编解码器层桥接实时 OGG/Opus 字节流，可以使用此模块。
+
+## 加载模块 {#loading-the-module}
+
+`load` 命令和 `modules.conf.xml` 中的模块名是 `mod_opusfile`。它存在于默认配置中，但**已被注释**：
+
+```xml
+<!--<load module="mod_opusfile"/>-->
+```
+
+要启用，请在 `autoload_configs/modules.conf.xml` 中取消注释，或在运行时通过 `fs_cli` 加载：
+
+```
+load mod_opusfile
+```
+
+## 依赖 {#dependencies}
+
+`mod_opusfile` 需要两个不属于默认 FreeSWITCH 构建的外部库：
+
+| 库 | 用途 | 必需的操作 |
+|---|---|---|
+| `libopusfile >= 0.5` | OGG/Opus 解复用及解码 | 读取（播放） |
+| `libopusenc >= 0.1` | OGG/Opus 编码 | 写入（录制），可选 |
+
+构建系统通过 `pkg-config` 检测这两个库。`libopusfile` 无条件必需：源码对 `#include <opusfile.h>` 没有条件保护，缺少库就无法编译。编码支持（`HAVE_OPUSFILE_ENCODE`）是可选的；若没有 `libopusenc`，写入调用会记录警告并在不编码的情况下返回成功。
+
+## 文件接口 {#file-interface}
+
+模块向 FreeSWITCH 文件接口注册扩展名 `opus`。这意味着所有接受文件路径的核心 API（如 `playback`、`record`、`uuid_play`、`say` 和 file-string 引用）都会自动将 `.opus` 路径路由至本模块。
+
+文件始终以 **48000 Hz**（Opus 全频带）打开并解码，与文件头中声明的原始采样率无关。声道数来自 OGG/Opus 文件头。支持可定位的播放，不支持写入过程中定位。
+
+### 编解码器接口：OPUSSTREAM {#codec-interface-opusstream}
+
+除文件接口外，模块还注册名为 `OPUSSTREAM` 的编解码器，支持 8000、16000、24000、48000 Hz 采样率，以及单声道（1 声道）和立体声（2 声道）。该编解码器封装实时 OGG/Opus 页缓冲区，它并不是标准 RTP 载荷类型，但允许通过编解码流水线编码或解码 OGG/Opus 页数据。
+
+## 在拨号计划中使用模块 {#using-the-module-in-the-dialplan}
+
+因为 `mod_opusfile` 接入了文件接口，所以无须特殊应用语法。标准拨号计划应用可直接处理 `.opus` 路径。
+
+### 播放 {#playback}
+
+```xml
+<action application="playback" data="/sounds/greeting.opus"/>
+```
+
+### 录制 {#record}
+
+录制为 `.opus` 要求模块在编译时启用了 `libopusenc`：
+
+```xml
+<action application="record" data="/recordings/${uuid}.opus"/>
+```
+
+### 文件串接 {#file-string}
+
+可以使用 file-string 语法，将多个文件（包括 `.opus`）组合起来：
+
+```xml
+<action application="playback" data="file_string:///sounds/intro.opus!/sounds/menu.wav"/>
+```
+
+## API 命令 {#api-commands}
+
+| 命令 | 用途 | 语法 |
+|---|---|---|
+| `opusfile_debug` | 启用或禁用模块的详细调试日志 | `opusfile_debug <on\|off>` |
+
+启用调试后，模块在 `DEBUG` 级别记录解码样本数、缓冲区使用情况及定位操作。如果构建时启用了编码支持（`HAVE_OPUSFILE_ENCODE`），启用调试还会将 `libopusenc` 的库版本和 ABI 版本写入 API 响应流。
+
+**fs_cli 示例：**
+
+```
+opusfile_debug on
+opusfile_debug off
+```
+
+## 通道变量 {#channel-variables}
+
+`mod_opusfile` 不读取或设置通道变量。
+
+## 事件 {#events}
+
+`mod_opusfile` 不发出任何自定义事件子类。
+
+---
+
+**源码：** `src/mod/formats/mod_opusfile`

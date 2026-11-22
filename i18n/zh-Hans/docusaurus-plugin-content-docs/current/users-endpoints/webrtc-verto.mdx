@@ -1,0 +1,335 @@
+---
+sidebar_position: 4
+id: webrtc-verto
+slug: /users-and-endpoints/verto
+title: "第 9 章：使用 Verto 的 WebRTC"
+description: "通过 Verto 连接浏览器和 WebRTC 客户端。Verto 是一种基于 WebSocket 的 JSON-RPC 信令协议，客户端无需 SIP 协议栈。"
+sidebar_label: "9. 使用 Verto 的 WebRTC"
+---
+
+# 第 9 章：使用 Verto 的 WebRTC {#chapter-9-webrtc-with-verto}
+
+Verto（VERto Telephone Overlay）是一种通过 WebSocket 传输的 JSON-RPC 信令协议，允许浏览器和其他 WebRTC 端点向 FreeSWITCH 注册、拨打与接听电话，并完全基于标准 HTTPS/WSS 技术栈交换媒体，客户端无需 SIP 协议栈。
+
+<SignalWireCallout
+  title="无需自行运行边缘服务的浏览器通话"
+  href="https://signalwire.com/docs/browser-sdk"
+  page="webrtc-verto"
+  linkText="查看 Browser SDK">
+
+SignalWire Browser SDK 基于同一引擎为网页提供语音和视频通话，并由平台代为运行 TLS、WSS 及 STUN/TURN 边缘基础设施。令牌可限定每位访问者能够访问的资源范围，无需暴露 Verto 端点。
+
+</SignalWireCallout>
+
+## 概览 {#overview}
+
+`mod_verto` 实现 Verto 协议的服务端。浏览器客户端通过 WebSocket（明文 WS 或加密 WSS）连接，使用 FreeSWITCH 用户目录中存储的凭据认证，随后交换 JSON-RPC 消息发起或接收呼叫。实际媒体（音频、视频）通过 SRTP 传输，利用 `mod_rtc` 协调的 ICE 候选协商建立连接。
+
+主要特点：
+
+- 每个 Verto 配置实例可绑定一个或多个 `ip:port`，各绑定可以独立选择明文或安全连接。
+- 配置实例映射到 FreeSWITCH 的 `context` 和 `dialplan`，因此 Verto 呼叫与 SIP 呼叫进入相同的拨号计划路由体系。
+- 认证复用现有的 `directory` XML 用户数据库。
+
+---
+
+## 模块加载 {#module-loading}
+
+在 `autoload_configs/modules.conf.xml` 中同时添加 `mod_verto` 和 `mod_rtc`：
+
+```xml
+<load module="mod_rtc"/>
+<load module="mod_verto"/>
+```
+
+`mod_rtc` 必须先于 `mod_verto` 加载，因此应放在前面。
+
+---
+
+## 配置实例结构 {#profile-structure}
+
+`verto.conf.xml` 包含用于整个模块的顶层 `<settings>` 块，以及容纳一个或多个具名 `<profile>` 元素的 `<profiles>` 块。
+
+```xml
+<configuration name="verto.conf" description="HTML5 Verto Endpoint">
+
+  <settings>
+    <param name="debug" value="0"/>
+    <param name="detach-timeout-sec" value="120"/>
+    <param name="enable-presence" value="true"/>
+    <param name="enable-fs-events" value="false"/>
+  </settings>
+
+  <profiles>
+    <profile name="default-v4">
+      <param name="bind-local" value="$${local_ip_v4}:8081"/>
+      <param name="bind-local" value="$${local_ip_v4}:8082" secure="true"/>
+      <param name="force-register-domain" value="$${domain}"/>
+      <param name="secure-combined" value="$${certs_dir}/wss.pem"/>
+      <param name="secure-chain"    value="$${certs_dir}/wss.pem"/>
+      <param name="userauth" value="true"/>
+      <param name="blind-reg" value="false"/>
+      <param name="mcast-ip"   value="224.1.1.1"/>
+      <param name="mcast-port" value="1337"/>
+      <param name="rtp-ip"     value="$${local_ip_v4}"/>
+      <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+      <param name="local-network" value="localnet.auto"/>
+      <param name="outbound-codec-string" value="opus,h264,vp8"/>
+      <param name="inbound-codec-string"  value="opus,h264,vp8"/>
+      <param name="apply-candidate-acl" value="localnet.auto"/>
+      <param name="apply-candidate-acl" value="wan_v4.auto"/>
+      <param name="apply-candidate-acl" value="rfc1918.auto"/>
+      <param name="apply-candidate-acl" value="any_v4.auto"/>
+      <param name="timer-name" value="soft"/>
+    </profile>
+  </profiles>
+
+</configuration>
+```
+
+不带 `secure="true"` 的 `bind-local` 条目监听明文 WebSocket；带 `secure="true"` 的条目则监听 TLS 加密的 WSS。二者可以出现在同一个配置实例中；TLS 绑定需要设置 `secure-combined`（或者同时设置 `secure-cert` 与 `secure-key`）。
+
+---
+
+## 全局设置 {#global-settings}
+
+以下参数位于 `<settings>` 中，对整个模块生效，而不是只对某个配置实例生效。
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `debug` | 模块级调试日志详细程度。除非配置实例覆盖，否则应用于全部配置实例。 | 整数 `0`–`10` | `0` |
+| `detach-timeout-sec` | 客户端断开后保留通道多少秒再挂断。必须是正整数，非正值将被忽略。 | 正整数 | `120` |
+| `enable-presence` | 将 FreeSWITCH 呈现状态事件广播给已连接的 Verto 客户端。 | `true` / `false` | `true` |
+| `enable-fs-events` | 将所有 FreeSWITCH 事件广播给已连接的 Verto 客户端。 | `true` / `false` | `false` |
+| `send-auth-password` | 登录成功后，将认证用户的密码返回给客户端。模块级生效，也可由配置实例覆盖。 | `true` / `false` | `false` |
+| `kslog` | 启用内部 KS（libks）调试日志。 | `true` / `false` | `false` |
+
+---
+
+## 配置实例参数参考 {#profile-parameter-reference}
+
+以下所有参数都位于 `<profile>` 元素内。
+
+### 监听绑定 {#binding}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `bind-local` | 监听的 IP 地址和端口。可重复设置，每个配置实例最多 25 条。添加属性 `secure="true"` 可将该绑定变为 WSS 监听器。IPv6 地址须放在方括号中，例如 `[$${local_ip_v6}]:8082`。至少需要一条有效的 `bind-local`；否则启动时丢弃此配置实例。 | `ip:port` 字符串 | 无（必填） |
+
+### TLS / WSS {#tls--wss}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `secure-combined` | 同时包含证书和私钥拼接内容的 PEM 文件路径；从单个文件设置证书和密钥。 | 文件路径 | 无 |
+| `secure-cert` | TLS 证书 PEM 文件路径，适用于证书与私钥分开存储的情况。 | 文件路径 | 无 |
+| `secure-key` | TLS 私钥 PEM 文件路径，适用于证书与私钥分开存储的情况。 | 文件路径 | 无 |
+| `secure-chain` | 证书链（CA 证书包）PEM 文件路径。 | 文件路径 | 无 |
+
+### 认证 {#authentication}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `userauth` | 要求客户端通过 FreeSWITCH 用户目录认证。设为 `true` 启用认证；登录用户名会按 `@` 拆分以得到用户 ID 和域名（还受 `chop-domain` 影响）。设为 `@domain`（例如 `@example.com`）时，强制以指定域名查询，并把整个登录字符串作为用户 ID。该参数不存在或为空时会绕过认证，除非配置了 `root-password`。 | `true` / `@domain` 字符串 | 无（缺失时禁用认证） |
+| `blind-reg` | 即使目录中没有匹配用户，也允许任意客户端注册。仅在受控环境中启用。 | `true` / `false` | `false` |
+| `root-password` | 特殊的管理员密码。以 `root` 身份和该密码登录的客户端可绕过用户目录查询。 | 字符串 | 无 |
+| `send-auth-password` | 认证成功后将用户密码返回给客户端。 | `true` / `false` | `false` |
+| `chop-domain` | 查询用户目录前，从用户名中去除域名部分。 | `true` / `false` | `true` |
+
+### 域名与拨号计划 {#domain-and-dialplan}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `force-register-domain` | 不论客户端提交什么域名，都使用此域名进行注册。 | 域名字符串 | 无 |
+| `context` | 入站 Verto 呼叫进入的 FreeSWITCH 拨号计划上下文。 | 上下文名称字符串 | `default` |
+| `dialplan` | 用于路由入站呼叫的拨号计划模块。 | `XML` 或其他拨号计划模块名称 | `XML` |
+
+### 媒体与 ICE {#media-and-ice}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `rtp-ip` | RTP 媒体使用的本地 IP 地址。可重复设置，最多分别列出 25 个 IPv4 地址和 25 个 IPv6 地址。包含 `:` 的值按 IPv6 地址处理并存放在单独地址池中。 | IP 地址字符串 | 无 |
+| `ext-rtp-ip` | SDP 中宣告的外部（NAT）RTP IP 地址。支持字面量 IP、`$${external_rtp_ip}` 等 FreeSWITCH 变量或 STUN URI（例如 `stun:stun.example.com`）。加载时通过 `switch_stun_ip_lookup` 解析。 | IP 地址或 `stun:host` | 无 |
+| `local-network` | 标识本地地址范围的 ACL 名称，用于决定是否宣告 `ext-rtp-ip` 而非 `rtp-ip`。 | ACL 名称字符串 | `localnet.auto` |
+| `apply-candidate-acl` | 用于筛选远端客户端提供的 ICE 候选的 ACL 名称。可重复设置，匹配任一 ACL 的候选会被接受。最大条目数由 `SWITCH_MAX_CAND_ACL` 限制。 | ACL 名称字符串 | 无 |
+| `apply-connection-acl` | 用于按远端 IP 筛选 WebSocket 连接来源的 ACL 名称。可重复设置。最大条目数由 `SWITCH_MAX_CAND_ACL` 限制。 | ACL 名称字符串 | 无 |
+| `mcast-ip` | 用于在 FreeSWITCH 节点集群中分发 Verto 事件的组播 IP 地址。 | 组播 IP 地址字符串 | 无 |
+| `mcast-port` | 组播事件流使用的 UDP 端口。 | 整数端口 | 无 |
+
+### 编解码器与抖动缓冲区 {#codecs-and-jitter-buffer}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `outbound-codec-string` | 出站呼叫时向远端（浏览器）提供的编解码器列表，以逗号分隔。 | 编解码器名称列表 | `opus,vp8` |
+| `inbound-codec-string` | 入站呼叫时接受的远端编解码器列表，以逗号分隔。未指定时默认采用 `outbound-codec-string` 的值。 | 编解码器名称列表 | 同 `outbound-codec-string` |
+| `auto-jitterbuffer-msec` | 传递给 `mod_rtc` 的抖动缓冲区配置字符串，适用于该配置实例的媒体会话。格式是 `min:max`，数值可用毫秒表示（如 `60`），或用带 `p` 后缀的包数表示（如 `1p:20p`）。 | 字符串，例如 `60` 或 `1p:20p` | `1p:20p` |
+
+### 定时器与其他参数 {#timer-and-miscellaneous}
+
+| 参数 | 用途 | 可用值 | 默认值 |
+|-----------|---------|--------|---------|
+| `timer-name` | 此配置实例中控制媒体节奏的 FreeSWITCH 定时器。 | `soft` 或其他已注册定时器名称 | `soft` |
+| `debug` | 配置实例级调试日志详细程度。与全局 `debug` 一起检查；生效级别为其中非零的值。 | 整数 `0`–`10` | `0` |
+| `enable-text` | 为配置实例启用文本通道支持。解析器只要发现该参数存在就启用文本通道，不论其值为何；惯用值是 `true`。 | 任意值（存在即启用） | 未设置时禁用 |
+
+---
+
+## 安全 WebSocket（WSS） {#secure-websocket-wss}
+
+浏览器使用 WebRTC 时需要 WSS；浏览器安全策略会拦截 HTTPS 页面发起的明文 WebSocket 连接。只要某个 Verto 配置实例至少有一条 `bind-local` 携带 `secure="true"`，且配好了 TLS 材料，就可以提供 WSS。
+
+**单个合并的 PEM 文件（推荐）**
+
+将服务器证书、所有中间证书和私钥拼接成一个文件：
+
+```xml
+<param name="secure-combined" value="$${certs_dir}/wss.pem"/>
+<param name="secure-chain"    value="$${certs_dir}/wss.pem"/>
+```
+
+**分离的证书与密钥文件**
+
+```xml
+<param name="secure-cert"  value="/etc/ssl/certs/server.crt"/>
+<param name="secure-key"   value="/etc/ssl/private/server.key"/>
+<param name="secure-chain" value="/etc/ssl/certs/ca-bundle.crt"/>
+```
+
+`$${certs_dir}` 变量展开后是 FreeSWITCH 证书目录，通常为 `/etc/freeswitch/tls`。自签名证书可用于测试，但如果证书没有加入系统信任库，且浏览器也未配置为接受它，浏览器就会显示安全警告。
+
+惯用端口：明文 WS 使用 `8081`，WSS 使用 `8082`。这些是默认配置中的选择，而非协议强制要求。
+
+---
+
+## 用户目录集成 {#user-directory-integration}
+
+当 `userauth` 设置为 `true`（或 `@domain`）时，`mod_verto` 会使用标准 FreeSWITCH 用户目录（与 `mod_sofia` 使用同一棵 `directory` XML 树）对连接的客户端认证，不需要单独的 Verto 用户数据库。
+
+客户端发送 JSON-RPC `login` 请求。FreeSWITCH 从登录字符串解析用户 ID 和域名（参见 `userauth` 与 `chop-domain` 的说明），从目录查找用户，并将提交的密码与 `<user>` 记录中的 `password` 参数比较。
+
+**强制指定域名**
+
+使用 `force-register-domain` 可覆盖客户端提供的域名。客户端可能不知道正确域名，或所有用户都属于同一域名时，这项设置很有用：
+
+```xml
+<param name="force-register-domain" value="$${domain}"/>
+```
+
+**按用户覆盖拨号计划**
+
+以下两个用户级目录参数会影响 Verto 客户端的呼叫路由：
+
+- `verto-context`：覆盖该用户所在配置实例的 `context`。
+- `verto-dialplan`：覆盖该用户所在配置实例的 `dialplan`。
+
+在用户目录的 `<params>` 块中，将其配置为 `<param>` 条目：
+
+```xml
+<user id="1000">
+  <params>
+    <param name="password" value="yourpassword"/>
+    <param name="verto-context" value="public"/>
+    <param name="verto-dialplan" value="XML"/>
+  </params>
+</user>
+```
+
+**root 密码**
+
+`root-password` 参数定义超级用户凭据。客户端使用用户名 `root` 和此密码认证，可以完全绕过用户目录查询。仅应在管理工具中使用，并妥善保护该密码。
+
+---
+
+## mod_rtc 的作用 {#the-role-of-mod_rtc}
+
+`mod_rtc` 是 `mod_verto` 依赖的 WebRTC 媒体引擎，负责 ICE 协商、DTLS-SRTP 密钥交换和 RTP/RTCP 处理。它没有单独的配置文件；全部媒体相关行为都由 Verto 配置实例上的参数（如 `rtp-ip`、`ext-rtp-ip`、`apply-candidate-acl` 和编解码器字符串）决定。
+
+必须先加载 `mod_rtc`，再加载 `mod_verto`。如果缺少 `mod_rtc`，`mod_verto` 将无法处理 WebRTC 呼叫的媒体。
+
+---
+
+## 浏览器媒体的编解码器选择 {#codec-selection-for-browser-media}
+
+浏览器 WebRTC 实现必须支持特定编解码器。`outbound-codec-string` 和 `inbound-codec-string` 配置实例参数用于控制 FreeSWITCH 在与 Verto 客户端进行 SDP 协商时提供和接受哪些编解码器。
+
+**音频**
+
+- `opus` 是 WebRTC（RFC 7874）要求支持的音频编解码器，主流浏览器均支持。将 `opus` 放在编解码器列表首位，以优先选择它。
+
+**视频**
+
+- WebRTC 规范（RFC 7742）要求符合规范的实现支持 `vp8`。
+- `vp9` 的压缩效率优于 VP8，虽然支持广泛，但并不是所有实现都强制支持。
+- `h264`（H.264 Constrained Baseline Profile）被包括 Safari 在内的浏览器广泛支持，部分环境要求必须使用。服务端能否使用它可能取决于是否存在硬件编解码器或获许可的软件编解码器。
+
+为广泛兼容浏览器，推荐以下编解码器字符串：
+
+```xml
+<param name="outbound-codec-string" value="opus,h264,vp8"/>
+<param name="inbound-codec-string"  value="opus,h264,vp8"/>
+```
+
+编解码器列表按顺序评估，选择双方均支持的第一个编解码器。如果 FreeSWITCH 未加载对应模块，协商时会静默跳过该编解码器。请确保在 `modules.conf.xml` 中加载 `mod_opus`、`mod_h264` 和 `mod_vpx`（用于 VP8/VP9）。
+
+---
+
+## IPv4 与 IPv6 配置实例 {#ipv4-and-ipv6-profiles}
+
+默认配置附带两个配置实例：`default-v4`（IPv4）和 `default-v6`（IPv6）。除 IP 地址变量及 ICE 候选 ACL 外，二者结构相同。
+
+IPv6 监听地址须用方括号括起来：
+
+```xml
+<param name="bind-local" value="[$${local_ip_v6}]:8081"/>
+<param name="bind-local" value="[$${local_ip_v6}]:8082" secure="true"/>
+```
+
+默认 IPv6 配置实例未定义 `ext-rtp-ip`，因为外部 IPv6 地址通常可以在全球路由，不需要 NAT 转换。如果服务器处于 IPv6 NAT 或执行地址转换的防火墙后面，可添加此参数。
+
+两个配置实例可以同时运行。连接 IPv6 监听器的客户端使用 IPv6 配置实例的设置，连接 IPv4 监听器的客户端则使用 IPv4 配置实例的设置。
+
+---
+
+## 浏览器媒体：SRTP、DTLS 与 ICE {#browser-media-srtp-dtls-and-ice}
+
+`mod_verto` 与 [SIP-over-WSS](../users-endpoints/webrtc-sip-wss.mdx) 共用相同的核心媒体引擎（`mod_rtc` 加 `switch_core_media`）。浏览器媒体路径相同：DTLS-SRTP 加密，ICE 负责 NAT 穿透。控制该路径的配置实例参数有 `rtp-ip`、`ext-rtp-ip`、`local-network` 和 `apply-candidate-acl`。
+
+### DTLS-SRTP {#dtls-srtp}
+
+当 Verto 客户端的 SDP offer 包含 `a=fingerprint` 时，FreeSWITCH 自动启用 DTLS-SRTP。没有任何 Verto 配置实例参数用于启用或禁用 DTLS-SRTP。FreeSWITCH 读取远端指纹，从 `$${certs_dir}/dtls-srtp.pem` 生成本地指纹（文件不存在时创建自签名证书），并在 SDP answer 中加入 `a=fingerprint` 和 `a=setup`。
+
+Verto 媒体使用的 DTLS 证书（`dtls-srtp.pem`）与 SIP-over-WSS 媒体使用的是同一文件，但不同于 WSS 信令证书（`wss.pem`）。有关 `a=setup` 角色协商和指纹哈希行为的完整说明，请参见[第 10 章：基于 SIP 的 WebRTC（WSS）](../users-endpoints/webrtc-sip-wss.mdx#dtls-srtp)。
+
+### ICE：候选与筛选 {#ice-candidates-and-filtering}
+
+FreeSWITCH 为每个会话生成 ICE 凭据和候选地址。候选地址来自配置实例的 `rtp-ip`（主机候选）及 `ext-rtp-ip`（当已设置且不同于 `rtp-ip` 时产生 srflx 候选）。`local-network` ACL 决定为连接的客户端构造 SDP 时，是否用外部地址替代本地地址。
+
+```xml
+<param name="rtp-ip"     value="$${local_ip_v4}"/>
+<param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+<param name="local-network" value="localnet.auto"/>
+```
+
+浏览器 SDP offer 中的候选由 `apply-candidate-acl` 筛选。只有 IP 至少匹配一个已列出 ACL 的候选才会被接受。该参数可重复设置，最多 25 条（`SWITCH_MAX_CAND_ACL`）。如果所有非 relay 候选都被丢弃，FreeSWITCH 会进一步评估 relay 候选。
+
+```xml
+<param name="apply-candidate-acl" value="localnet.auto"/>
+<param name="apply-candidate-acl" value="wan_v4.auto"/>
+<param name="apply-candidate-acl" value="rfc1918.auto"/>
+<param name="apply-candidate-acl" value="any_v4.auto"/>
+```
+
+仅处理 UDP 候选，忽略浏览器的 TCP 候选。
+
+### STUN 与 TURN {#stun-and-turn}
+
+在 `ext-rtp-ip` 中使用 `stun:` 前缀，可使 FreeSWITCH 在加载配置实例时查询 STUN 服务器，以解析自身公网地址。这是 FreeSWITCH 唯一进行的 STUN 交互：
+
+```xml
+<param name="ext-rtp-ip" value="stun:stun.example.com"/>
+```
+
+`mod_verto` 在加载时通过 `switch_stun_ip_lookup` 解析 `ext-rtp-ip`。解析成功后，地址会保存在配置实例上，并在整个配置实例存续期间使用，不再查询 STUN。
+
+FreeSWITCH 不使用 TURN 中继。TURN 服务器凭据配置在浏览器客户端。当浏览器在 SDP 中宣告 relay 候选时，FreeSWITCH 将其视为普通远端候选地址，并受 `apply-candidate-acl` 约束。对 FreeSWITCH 而言，中继过程是透明的。
+
+关于服务端 NAT 穿透参数（`ext-rtp-ip`、`ext-sip-ip`、`auto-nat`）的完整说明，参见[媒体处理章节的 NAT 穿透部分](../media/media-handling.mdx#nat-traversal)。

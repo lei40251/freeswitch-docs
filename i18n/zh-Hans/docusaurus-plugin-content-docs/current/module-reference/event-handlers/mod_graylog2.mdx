@@ -1,0 +1,97 @@
+---
+sidebar_position: 11
+id: mod_graylog2
+slug: /module-reference/event-handlers/mod_graylog2
+title: "mod_graylog2 — 将 GELF 日志发送到 Graylog"
+description: "通过 UDP 使用 GELF JSON 格式，将 FreeSWITCH 日志发送到 Graylog2 服务器。"
+sidebar_label: "mod_graylog2"
+---
+
+# mod_graylog2 — 将 GELF 日志发送到 Graylog {#mod_graylog2-—-gelf-logging-to-graylog}
+
+`mod_graylog2` 是日志模块（`src/mod/loggers`），通过 UDP、使用 Graylog Extended Log Format（GELF 1.1）将 FreeSWITCH 日志消息转发到 Graylog2 服务器。每条日志被序列化为紧凑的 JSON 对象，并由专用投递线程异步发送，以最大限度降低对 FreeSWITCH 媒体路径的影响。
+
+如果需要将一台或多台 FreeSWITCH 节点的日志集中汇总为结构化数据（发送到 Graylog2 或支持 `gelf.rb` 输入的 Logstash 等兼容接收端），可以使用此模块。会话专用的通道变量还可以自动提升为 GELF 顶层字段，便于在 Graylog 中按呼叫过滤并配置告警。
+
+## 加载模块 {#loading-the-module}
+
+`load`／`unload` 命令的模块名是 `mod_graylog2`。默认的加载配置**没有启用**它，`autoload_configs/modules.conf.xml` 中对应条目被注释：
+
+```xml
+<!-- <load module="mod_graylog2"/> -->
+```
+
+要激活，请取消注释（或添加该行）并重启 FreeSWITCH，也可以在运行时加载：
+
+```
+freeswitch@> load mod_graylog2
+```
+
+无需特殊编译标志，模块使用标准 FreeSWITCH 构建系统。
+
+## 配置：`graylog2.conf.xml` {#configuration-graylog2confxml}
+
+模块在加载时读取 `autoload_configs/graylog2.conf.xml`。所有参数都位于 `<settings>` 元素中。可选的 `<fields>` 子元素把通道变量映射到附加 GELF 字段，这些字段将出现在每条关联会话的日志中。
+
+| 参数 | 用途 | 允许的值 | 默认值 |
+|---|---|---|---|
+| `server-host` | Graylog2 UDP 监听器的主机名或 IP 地址 | 可解析的主机名或 IP | `127.0.0.1` |
+| `server-port` | Graylog2 GELF 输入的 UDP 端口 | `1`～`65535` | `12201` |
+| `loglevel` | 转发到 Graylog 的 FreeSWITCH 最低日志级别 | `debug`、`info`、`notice`、`warning`、`err`、`crit`、`alert`、`emerg` | `warning` |
+| `send-uncompressed-header` | 是否添加某些 Logstash GELF 输入需要的两字节未压缩 GELF 标记（`\037\074`） | `true`／`false` | `false` |
+
+在 `<fields>` 中，每个 `<field>` 将 GELF 字段名（`name` 属性）映射到 FreeSWITCH 通道变量（`variable` 属性）。模块写入日志时，从活动会话读取变量值，按 GELF 自定义字段约定添加 `_` 前缀后写入 GELF 对象。
+
+```xml
+<configuration name="graylog2.conf" description="Graylog2 Logger">
+  <settings>
+    <param name="server-host" value="192.168.0.69"/>
+    <param name="server-port" value="12201"/>
+    <param name="loglevel" value="warning"/>
+    <!-- Uncomment if using logstash w/ gelf.rb -->
+    <!--param name="send-uncompressed-header" value="true"/-->
+
+    <!-- fields to add to every log associated w/ a session -->
+    <fields>
+      <!-- channel variable "customer_account_number" becomes the "_customer" field -->
+      <!--field name="customer" variable="customer_account_number"/-->
+    </fields>
+  </settings>
+</configuration>
+```
+
+### GELF 字段映射 {#gelf-field-mapping}
+
+模块生成 GELF 1.1 对象，固定字段名如下：
+
+| GELF 字段 | 内容 |
+|---|---|
+| `version` | `"1.1"` |
+| `host` | FreeSWITCH 主机名 |
+| `timestamp` | Unix Epoch 秒数形式的日志时间戳（由微秒转换） |
+| `level` | Syslog 严重程度整数（1 表示 alert，7 表示 debug；未映射级别为 8） |
+| `short_message` | 日志消息的第一行 |
+| `full_message` | 完整日志内容 |
+| `_ident` | `"freeswitch"` |
+| `_pid` | FreeSWITCH 进程 ID |
+| `_uuid` | 呼叫 UUID（日志与会话关联时） |
+| `_file` | 生成日志的源码文件 |
+| `_line` | 源码行号 |
+| `_function` | 源码函数名 |
+| `_sequence` | 日志序列号 |
+| `_microtimestamp` | 原始日志时间戳（微秒） |
+| `_<name>` | 在 `<fields>` 中声明的逐会话字段 |
+
+超过 8192 字节的日志消息会被静默丢弃。内部发送队列最多容纳 25 000 条待发消息；无法入队的消息会直接丢弃，不会阻塞调用者。
+
+## 通道变量 {#channel-variables}
+
+模块**读取**配置中 `<fields>` 所声明的通道变量。没有固定写死的变量名称，映射由管理员自行定义。例如：
+
+```xml
+<field name="customer" variable="customer_account_number"/>
+```
+
+模块会读取活动通道的 `customer_account_number`，并在该会话生成的每条日志对应 GELF 对象中添加 `_customer` 字段。
+
+**源码：** `src/mod/loggers/mod_graylog2`、`conf/vanilla/autoload_configs/graylog2.conf.xml`
